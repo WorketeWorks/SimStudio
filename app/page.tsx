@@ -1,0 +1,282 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import * as THREE from "three";
+import RAPIER from "@dimforge/rapier3d-compat";
+import { LDrawLoader } from "three/addons/loaders/LDrawLoader.js";
+import { LDrawConditionalLineMaterial } from "three/addons/materials/LDrawConditionalLineMaterial.js";
+import { makeLDR, parseLDR } from "./ldraw";
+import { approximateCollisionPrimitives, detectConnectorHoles, fallbackBeamConnectors, hybridAxlePinConnectors, objectLocalBounds, rodConnectors, type CollisionPrimitive, type MeshConnector } from "./connectors";
+import { paletteParts } from "./palette";
+
+type PieceKind = "beam" | "wheel" | "motor";
+type CatalogPart = { part:string; name:string; thumb?:string; kind:PieceKind; color:number; family?:string; modelPart?:string; rawThumb?:boolean };
+type Piece = CatalogPart & { id:number; mesh:THREE.Object3D; connectors:MeshConnector[]; colliders:CollisionPrimitive[]; fixed:boolean; pin:boolean; frictionPin:boolean; lockSprite?:THREE.Sprite; body?:RAPIER.RigidBody; physicsBase?:THREE.Quaternion };
+type JointMode="fixed"|"rotation"|"linear"|"rotation-linear";
+type ConnectionProfile="pin-round"|"axle-cross"|"axle-round";
+type Connection={id:string;a:Piece;b:Piece;mode:JointMode;profile:ConnectionProfile;point:THREE.Vector3;axis:THREE.Vector3;travel:number};
+type DebugFlags={colliders:boolean;connectors:boolean;physics:boolean};
+type SimulationLog={startedAt:string;endedAt?:string;duration?:number;connections:{a:string;b:string;type:string;point:number[]}[];samples:{time:number;bodies:{id:number;part:string;fixed:boolean;position:number[];rotation:number[];linearVelocity:number[];angularVelocity:number[]}[]}[];maxLinearSpeed:number;maxAngularSpeed:number;maxSpringForce:number;events:string[]};
+type AppState = {
+  scene:THREE.Scene; renderer:THREE.WebGLRenderer; camera:THREE.PerspectiveCamera; floor:THREE.Mesh; grid:THREE.GridHelper; pieces:Piece[];
+  selected?:Piece; running:boolean; world?:RAPIER.World;
+  connections:Connection[]; snapshot?:{piece:Piece;position:THREE.Vector3;rotation:THREE.Quaternion}[];
+  addPart:(part:CatalogPart,position:THREE.Vector3,rotation?:THREE.Quaternion)=>Promise<Piece|null>;
+  preloadPart:(part:CatalogPart)=>Promise<void>;
+  debug:DebugFlags; refreshDebug:()=>void; updateDebug:()=>void;
+  simLog?:SimulationLog; nextLogSample?:number; simStartedMs?:number;
+};
+
+const LDRAW="https://cdn.jsdelivr.net/gh/pybricks/ldraw@master/";
+const colorHex:Record<number,string>={0:"#1b2a34",1:"#0055bf",4:"#c91a09",14:"#f2cd37",15:"#ffffff",19:"#d6b47c",70:"#582a12",71:"#a0a5a9",72:"#6c6e68"};
+const previewFilter=(color:number)=>color===0?"brightness(.24) contrast(1.25)":color===1?"sepia(1) saturate(7) hue-rotate(170deg) brightness(.72)":color===4?"sepia(1) saturate(8) hue-rotate(315deg) brightness(.72)":color===14?"sepia(1) saturate(7) hue-rotate(2deg) brightness(1.08)":color===19?"sepia(.8) saturate(2) hue-rotate(350deg) brightness(1.05)":color===72?"grayscale(1) brightness(.68)":"grayscale(1)";
+const palettePreviewFilter=(color=71)=>{
+  const shadow=" drop-shadow(0 2px 1px #05060766)";
+  if(color===0)return"grayscale(1) brightness(.35) contrast(1.35)"+shadow;
+  if(color===1)return"sepia(1) saturate(6) hue-rotate(171deg) brightness(.62) contrast(1.2)"+shadow;
+  if(color===4)return"sepia(1) saturate(7) hue-rotate(313deg) brightness(.67) contrast(1.2)"+shadow;
+  if(color===14)return"sepia(1) saturate(6) hue-rotate(2deg) brightness(1.02) contrast(1.12)"+shadow;
+  if(color===15)return"grayscale(1) brightness(1.12) contrast(1.06)"+shadow;
+  if(color===19)return"sepia(.9) saturate(1.9) hue-rotate(350deg) brightness(.96) contrast(1.12)"+shadow;
+  if(color===70)return"sepia(1) saturate(3.2) hue-rotate(334deg) brightness(.45) contrast(1.3)"+shadow;
+  if(color===72)return"grayscale(1) brightness(.56) contrast(1.28)"+shadow;
+  return"grayscale(1) brightness(.78) contrast(1.2)"+shadow;
+};
+const categories=[
+  {id:"beams",label:"Vigas",icon:"━"},
+  {id:"axles",label:"Ejes",icon:"╂"},
+  {id:"pins",label:"Pines",icon:"●"},
+  {id:"connectors",label:"Conectores",icon:"⌘"},
+  {id:"gears",label:"Engranajes",icon:"⚙"},
+  {id:"wheels",label:"Ruedas",icon:"◉"},
+  {id:"imported",label:"Importadas",icon:"↓"},
+] as const;
+
+const kindFor=(category:string,name=""):PieceKind=>category==="motors"||/motor/i.test(name)?"motor":category==="gears"||category==="wheels"||/gear|wheel|tyre|tire/i.test(name)?"wheel":"beam";
+const modelText=(p:CatalogPart)=>`0 FILE ${p.part}.ldr\n1 ${p.color} 0 0 0 1 0 0 0 1 0 0 0 1 ${p.modelPart??p.part}.dat\n0`;
+const frictionPinRefs=new Set(["2780","6558","32054","43093"]);
+const isPinPart=(p:CatalogPart)=>/^Technic (Axle )?Pin/i.test(p.name)||frictionPinRefs.has(p.part);
+const isAxlePart=(p:CatalogPart)=>/^Technic Axle(?! Pin)/i.test(p.name);
+const hasPinFriction=(p:CatalogPart)=>isPinPart(p)&&!/without friction|frictionless/i.test(p.name)&&(/friction/i.test(p.name)||p.color===0||frictionPinRefs.has(p.part));
+const connectorProfile=(shaft:MeshConnector,socket:MeshConnector):ConnectionProfile|undefined=>shaft.role!=="shaft"||socket.role!=="socket"?undefined:shaft.kind==="round"&&socket.kind==="round"?"pin-round":shaft.kind==="axle"&&socket.kind==="axle"?"axle-cross":shaft.kind==="axle"&&socket.kind==="round"?"axle-round":undefined;
+const allowedModes=(profile:ConnectionProfile):JointMode[]=>profile==="pin-round"?["fixed","rotation"]:profile==="axle-cross"?["fixed","linear"]:["fixed","rotation","linear","rotation-linear"];
+const defaultMode=(profile:ConnectionProfile):JointMode=>profile==="pin-round"?"fixed":profile==="axle-cross"?"linear":"rotation-linear";
+const modeLabel:Record<JointMode,string>={fixed:"Fija",rotation:"Rotación libre",linear:"Lineal libre","rotation-linear":"Rotación y lineal libres"};
+const profileLabel:Record<ConnectionProfile,string>={"pin-round":"Naranja ↔ azul","axle-cross":"Morado ↔ verde","axle-round":"Morado ↔ azul"};
+
+export default function Home(){
+  const mountRef=useRef<HTMLDivElement>(null),fileRef=useRef<HTMLInputElement>(null),appRef=useRef<AppState|null>(null);
+  const [running,setRunning]=useState(false),[count,setCount]=useState(0),[selectedId,setSelectedId]=useState<number|null>(null);
+  const [category,setCategory]=useState("beams"),[search,setSearch]=useState(""),[reference,setReference]=useState("");
+  const [results,setResults]=useState<CatalogPart[]>([]),[imported,setImported]=useState<CatalogPart[]>([]);
+  const [catalogBusy,setCatalogBusy]=useState(false),[message,setMessage]=useState("Preparando catálogo LDraw…");
+  const [debugViews,setDebugViews]=useState<DebugFlags>({colliders:false,connectors:false,physics:false}),[lastLog,setLastLog]=useState("");
+  const [,setConnectionRevision]=useState(0);
+  const [theme,setTheme]=useState<"dark"|"light">("dark");
+
+  useEffect(()=>{try{setLastLog(localStorage.getItem("sim-studio:physics-log")??"");setTheme(localStorage.getItem("sim-studio:theme")==="light"?"light":"dark")}catch{}},[]);
+  useEffect(()=>{try{localStorage.setItem("sim-studio:theme",theme)}catch{}},[theme]);
+
+  useEffect(()=>{const source=category==="imported"?imported:paletteParts.filter(p=>p.family===category),query=search.trim().toLowerCase();setCatalogBusy(false);setResults(query?source.filter(p=>(p.part+" "+p.name).toLowerCase().includes(query)):source)},[category,search,imported]);
+
+  useEffect(()=>{results.slice(0,4).forEach(p=>void appRef.current?.preloadPart(p))},[results]);
+
+  useEffect(()=>{
+    const host=mountRef.current;if(!host)return;
+    const darkTheme=theme==="dark",sceneColor=darkTheme?0x202328:0xdfe7ed;
+    const scene=new THREE.Scene();scene.background=new THREE.Color(sceneColor);scene.fog=new THREE.Fog(sceneColor,30,75);
+    const camera=new THREE.PerspectiveCamera(43,host.clientWidth/host.clientHeight,.1,160);camera.position.set(13,12,17);camera.lookAt(0,1.5,0);
+    const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(host.clientWidth,host.clientHeight);renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;host.appendChild(renderer.domElement);
+    scene.add(new THREE.HemisphereLight(0xffffff,0x718090,2.1));const sun=new THREE.DirectionalLight(0xffffff,2.3);sun.position.set(8,16,10);sun.castShadow=true;scene.add(sun);
+    const grid=new THREE.GridHelper(40,40,darkTheme?0x697078:0x8297a5,darkTheme?0x3d4248:0xb3c1ca);scene.add(grid);
+    const floor=new THREE.Mesh(new THREE.BoxGeometry(40,.3,40),new THREE.MeshStandardMaterial({color:darkTheme?0x2b3035:0xcbd6dd,roughness:.86}));floor.position.y=-.2;floor.receiveShadow=true;floor.userData.floor=true;scene.add(floor);
+    const loader=new LDrawLoader();loader.setConditionalLineMaterial(LDrawConditionalLineMaterial);loader.setPartsLibraryPath(LDRAW);void loader.preloadMaterials(LDRAW+"LDConfig.ldr");
+    const preloaded=new Set<string>(),preloading=new Map<string,Promise<void>>(),connectorCache=new Map<string,MeshConnector[]>(),collisionCache=new Map<string,CollisionPrimitive[]>();
+    const prepareModel=(exact:THREE.Group)=>{exact.rotation.x=Math.PI;exact.scale.setScalar(.05);exact.updateMatrixWorld(true)};
+    const cloneConnectors=(connectors:MeshConnector[])=>connectors.map(connector=>({...connector,local:connector.local.clone(),axis:connector.axis.clone()}));
+    const analyzePart=(wrapper:THREE.Object3D,p:CatalogPart)=>{
+      let connectors:MeshConnector[]|undefined;
+      if(isPinPart(p)){const shafts=/^Technic Axle Pin/i.test(p.name)?hybridAxlePinConnectors(wrapper):rodConnectors(wrapper,"round"),sockets=detectConnectorHoles(wrapper);connectors=[...shafts,...sockets.filter(socket=>!shafts.some(shaft=>shaft.local.distanceTo(socket.local)<.12))]}else if(isAxlePart(p)){const shafts=rodConnectors(wrapper,"axle"),sockets=detectConnectorHoles(wrapper);connectors=[...shafts,...sockets.filter(socket=>!shafts.some(shaft=>shaft.local.distanceTo(socket.local)<.12))]}else connectors=connectorCache.get(p.part)&&cloneConnectors(connectorCache.get(p.part)!);
+      if(!connectors){try{const saved=localStorage.getItem(`sim-connectors-v2:${p.part}`);if(saved)connectors=(JSON.parse(saved) as {local:number[];axis:number[];kind:"round"|"axle";role?:"socket"|"shaft";diameter:number;length?:number}[]).map(connector=>({...connector,role:connector.role??"socket",local:new THREE.Vector3().fromArray(connector.local),axis:new THREE.Vector3().fromArray(connector.axis)}))}catch{}}
+      if(!connectors){connectors=detectConnectorHoles(wrapper);if(!connectors.length)connectors=fallbackBeamConnectors(wrapper,p.name);try{localStorage.setItem(`sim-connectors-v2:${p.part}`,JSON.stringify(connectors.map(connector=>({...connector,local:connector.local.toArray(),axis:connector.axis.toArray()}))))}catch{}}
+      connectorCache.set(p.part,cloneConnectors(connectors));
+      let colliders=collisionCache.get(p.part)?.map(primitive=>({...primitive,center:primitive.center.clone(),size:primitive.size?.clone(),rotation:primitive.rotation.clone()}));
+      if(!colliders){colliders=approximateCollisionPrimitives(wrapper,p.name,connectors);collisionCache.set(p.part,colliders.map(primitive=>({...primitive,center:primitive.center.clone(),size:primitive.size?.clone(),rotation:primitive.rotation.clone()})))}
+      return{connectors,colliders};
+    };
+    const preloadPart=async(p:CatalogPart)=>{if(preloaded.has(p.part))return;if(preloading.has(p.part))return preloading.get(p.part);const task=loader.loadAsync(`data:text/plain;charset=utf-8,${encodeURIComponent(modelText(p))}`).then(exact=>{prepareModel(exact);const wrapper=new THREE.Group();wrapper.add(exact);wrapper.updateMatrixWorld(true);analyzePart(wrapper,p);preloaded.add(p.part)}).catch(()=>{}).finally(()=>preloading.delete(p.part));preloading.set(p.part,task);return task};
+    const state={} as AppState,debugRoot=new THREE.Group();debugRoot.name="Sim Studio diagnostics";scene.add(debugRoot);
+    const disposeDebug=()=>{while(debugRoot.children.length){const object=debugRoot.children.pop()!;object.traverse(child=>{if(child instanceof THREE.Mesh||child instanceof THREE.Line){child.geometry.dispose();const materials=Array.isArray(child.material)?child.material:[child.material];materials.forEach(m=>m.dispose())}})}};
+    const updateDebug=()=>{debugRoot.children.forEach(object=>{const data=object.userData,piece=data.piece as Piece|undefined;if((data.debugKind==="collider"||data.debugKind==="connector-volume")&&piece){piece.mesh.updateMatrixWorld(true);object.position.copy(piece.mesh.localToWorld((data.local as THREE.Vector3).clone()));const worldRotation=piece.mesh.getWorldQuaternion(new THREE.Quaternion());object.quaternion.copy(worldRotation.multiply((data.localRotation as THREE.Quaternion).clone()))}else if(data.debugKind==="connector-point"&&piece)object.position.copy(piece.mesh.localToWorld((data.local as THREE.Vector3).clone()));else if(data.debugKind==="connector-axis"&&piece){object.position.copy(piece.mesh.localToWorld((data.local as THREE.Vector3).clone()));(object as THREE.ArrowHelper).setDirection((data.axis as THREE.Vector3).clone().transformDirection(piece.mesh.matrixWorld).normalize())}else if(data.debugKind==="body-axes"&&piece){object.position.copy(piece.mesh.getWorldPosition(new THREE.Vector3()));object.quaternion.copy(piece.mesh.getWorldQuaternion(new THREE.Quaternion()))}else if(data.debugKind==="joint-point"){const connection=data.connection as Connection;object.position.copy(connection.a.mesh.localToWorld((data.local as THREE.Vector3).clone()))}else if(data.debugKind==="joint-axis"){const connection=data.connection as Connection;object.position.copy(connection.a.mesh.localToWorld((data.local as THREE.Vector3).clone()));(object as THREE.ArrowHelper).setDirection((data.axis as THREE.Vector3).clone().transformDirection(connection.a.mesh.matrixWorld).normalize())}else if(data.debugKind==="joint-link"){const connection=data.connection as Connection,a=connection.a.mesh.getWorldPosition(new THREE.Vector3()),b=connection.b.mesh.getWorldPosition(new THREE.Vector3());(object as THREE.Line).geometry.setFromPoints([a,b])}})};
+    const refreshDebug=()=>{
+      disposeDebug();
+      for(const piece of state.pieces){
+        piece.mesh.updateMatrixWorld(true);
+        if(state.debug.colliders){
+          for(const primitive of piece.colliders){
+            const geometry=primitive.shape==="box"?new THREE.BoxGeometry(primitive.size!.x,primitive.size!.y,primitive.size!.z):new THREE.CylinderGeometry(primitive.radius!,primitive.radius!,primitive.halfHeight!*2,12);
+            const helper=new THREE.Mesh(geometry,new THREE.MeshBasicMaterial({color:piece.fixed?0xffc928:0x3dff78,wireframe:true,transparent:true,opacity:.72,depthTest:false}));
+            helper.renderOrder=40;helper.userData={debugKind:"collider",piece,local:primitive.center.clone(),localRotation:primitive.rotation.clone()};debugRoot.add(helper);
+          }
+        }
+        if(state.debug.connectors)for(const connector of piece.connectors){
+          const color=connector.role==="shaft"?(connector.kind==="axle"?0xa855f7:0xff8a1f):(connector.kind==="axle"?0x35d36f:0x26a7ff);
+          if(connector.role==="shaft"&&connector.kind==="axle"){
+            const localRotation=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),connector.axis),volume=new THREE.Mesh(new THREE.CylinderGeometry(.065,.065,connector.length??.5,10),new THREE.MeshBasicMaterial({color,wireframe:true,depthTest:false,transparent:true,opacity:.9}));
+            volume.renderOrder=41;volume.userData={debugKind:"connector-volume",piece,local:connector.local.clone(),localRotation};debugRoot.add(volume);
+          }else{
+            const point=new THREE.Mesh(connector.kind==="axle"?new THREE.OctahedronGeometry(.105):new THREE.SphereGeometry(.085,10,8),new THREE.MeshBasicMaterial({color,depthTest:false}));
+            point.renderOrder=41;point.userData={debugKind:"connector-point",piece,local:connector.local.clone()};debugRoot.add(point);
+          }
+          const arrow=new THREE.ArrowHelper(connector.axis,new THREE.Vector3(),.35,color,.11,.07);arrow.userData={debugKind:"connector-axis",piece,local:connector.local.clone(),axis:connector.axis.clone()};debugRoot.add(arrow);
+        }
+        if(state.debug.physics){const axes=new THREE.AxesHelper(.65);axes.userData={debugKind:"body-axes",piece};axes.renderOrder=42;debugRoot.add(axes)}
+      }
+      if(state.debug.physics)for(const connection of state.connections){
+        connection.a.mesh.updateMatrixWorld(true);
+        const local=connection.a.mesh.worldToLocal(connection.point.clone()),nearest=connection.a.connectors.slice().sort((a,b)=>a.local.distanceTo(local)-b.local.distanceTo(local))[0],axis=nearest?.axis.clone()??new THREE.Vector3(1,0,0);
+        const point=new THREE.Mesh(new THREE.SphereGeometry(.11,12,8),new THREE.MeshBasicMaterial({color:0xff9d20,depthTest:false}));point.userData={debugKind:"joint-point",connection,local:local.clone()};debugRoot.add(point);
+        const arrow=new THREE.ArrowHelper(axis,new THREE.Vector3(),.75,0xff9d20,.16,.1);arrow.userData={debugKind:"joint-axis",connection,local:local.clone(),axis};debugRoot.add(arrow);
+        const link=new THREE.Line(new THREE.BufferGeometry(),new THREE.LineBasicMaterial({color:0xff572d,depthTest:false,transparent:true,opacity:.8}));link.userData={debugKind:"joint-link",connection};debugRoot.add(link);
+      }
+      updateDebug();
+    };
+    const addPart=async(p:CatalogPart,position:THREE.Vector3,rotation?:THREE.Quaternion)=>{
+      setMessage(`Cargando ${p.part}…`);
+      try{
+        const exact=await loader.loadAsync(`data:text/plain;charset=utf-8,${encodeURIComponent(modelText(p))}`);preloaded.add(p.part);prepareModel(exact);
+        exact.traverse(object=>{if(object instanceof THREE.Mesh){object.castShadow=true;object.receiveShadow=true}});
+        const wrapper=new THREE.Group();wrapper.add(exact);wrapper.position.copy(position);if(rotation)wrapper.quaternion.copy(rotation);wrapper.updateMatrixWorld(true);
+        const {connectors,colliders}=analyzePart(wrapper,p),piece:Piece={...p,id:Date.now()+Math.random(),mesh:wrapper,connectors,colliders,fixed:false,pin:isPinPart(p),frictionPin:hasPinFriction(p)};
+        wrapper.userData.piece=piece;state.pieces.push(piece);scene.add(wrapper);if(!rotation){const box=new THREE.Box3().setFromObject(wrapper);wrapper.position.y-=box.min.y}
+        setCount(state.pieces.length);setMessage(`${p.part} · ${connectors.length} conectores · ${colliders.length} formas físicas`);refreshDebug();return piece;
+      }catch{setMessage(`No se encontró ${p.part}.dat`);return null}
+    };
+    Object.assign(state,{scene,renderer,camera,floor,grid,pieces:[],connections:[],running:false,addPart,preloadPart,debug:{colliders:false,connectors:false,physics:false},refreshDebug,updateDebug});appRef.current=state;
+
+    const isRod=(piece:Piece)=>isPinPart(piece)||isAxlePart(piece);
+    const localBounds=(piece:Piece)=>objectLocalBounds(piece.mesh);
+    const shaftOf=(rod:Piece)=>rod.connectors.find(connector=>connector.role==="shaft")!;
+    const rodAxisLocal=(rod:Piece)=>shaftOf(rod)?.axis.clone()??new THREE.Vector3(1,0,0);
+    const rodHalf=(rod:Piece)=>(shaftOf(rod)?.length??localBounds(rod).getSize(new THREE.Vector3()).length())/2;
+    const rodCenterLocal=(rod:Piece)=>shaftOf(rod)?.local.clone()??localBounds(rod).getCenter(new THREE.Vector3());
+    const rodCenterWorld=(rod:Piece)=>rod.mesh.localToWorld(rodCenterLocal(rod));
+    const worldConnector=(host:Piece,connector:MeshConnector)=>{host.mesh.updateMatrixWorld(true);return{point:host.mesh.localToWorld(connector.local.clone()),axis:connector.axis.clone().transformDirection(host.mesh.matrixWorld).normalize()}};
+    const addConnection=(host:Piece,rod:Piece,socket:MeshConnector,shaft:MeshConnector)=>{
+      const profile=connectorProfile(shaft,socket);if(!profile||state.connections.some(connection=>(connection.a===host&&connection.b===rod)||(connection.a===rod&&connection.b===host)))return false;
+      const world=worldConnector(host,socket);state.connections.push({id:`${host.id}:${rod.id}:${state.connections.length}`,a:host,b:rod,mode:defaultMode(profile),profile,point:world.point.clone(),axis:world.axis.clone(),travel:shaft.length??.5});return true;
+    };
+    const attachRod=(rod:Piece)=>{
+      rod.mesh.updateMatrixWorld(true);const rodAxis=rodAxisLocal(rod).transformDirection(rod.mesh.matrixWorld).normalize(),center=rodCenterWorld(rod),half=rodHalf(rod),shafts=rod.connectors.filter(connector=>connector.role==="shaft");let added=0;
+      state.connections=state.connections.filter(connection=>connection.a!==rod&&connection.b!==rod);
+      for(const host of state.pieces.filter(part=>part!==rod&&!isRod(part)))for(const socket of host.connectors.filter(connector=>connector.role==="socket"))for(const shaft of shafts){
+        const profile=connectorProfile(shaft,socket);if(!profile)continue;const socketWorld=worldConnector(host,socket);if(Math.abs(socketWorld.axis.dot(rodAxis))<.965)continue;
+        if(shaft.kind==="round"){const shaftWorld=worldConnector(rod,shaft);if(shaftWorld.point.distanceTo(socketWorld.point)>.18)continue}
+        else{const delta=socketWorld.point.clone().sub(center),along=delta.dot(rodAxis),radial=delta.clone().addScaledVector(rodAxis,-along).length();if(radial>.16||Math.abs(along)>half+.1)continue}
+        if(addConnection(host,rod,socket,shaft)){added++;break}
+      }
+      if(added)setMessage(`Connect: ${added} unión${added===1?"":"es"} compatible${added===1?"":"s"} en ${rod.part}`);
+    };
+    const connect=(piece:Piece)=>{
+      if(isRod(piece)){
+        type Match={host:Piece;socket:MeshConnector;shaft:MeshConnector;score:number};let best:Match|undefined;
+        for(const host of state.pieces.filter(part=>part!==piece&&!isRod(part)))for(const socket of host.connectors.filter(connector=>connector.role==="socket"))for(const shaft of piece.connectors.filter(connector=>connector.role==="shaft")){
+          if(!connectorProfile(shaft,socket))continue;const socketWorld=worldConnector(host,socket),shaftWorld=worldConnector(piece,shaft),axis=rodAxisLocal(piece).transformDirection(piece.mesh.matrixWorld).normalize();let score:number;
+          if(shaft.kind==="round")score=shaftWorld.point.distanceTo(socketWorld.point);else{const delta=socketWorld.point.clone().sub(rodCenterWorld(piece)),along=delta.dot(axis),radial=delta.clone().addScaledVector(axis,-along).length();score=radial+Math.max(0,Math.abs(along)-rodHalf(piece))}
+          if(score<.75&&(!best||score<best.score))best={host,socket,shaft,score};
+        }
+        if(!best)return;let targetAxis=worldConnector(best.host,best.socket).axis,currentAxis=rodAxisLocal(piece).transformDirection(piece.mesh.matrixWorld).normalize();if(currentAxis.dot(targetAxis)<0)targetAxis=targetAxis.clone().negate();piece.mesh.quaternion.setFromUnitVectors(rodAxisLocal(piece),targetAxis);piece.mesh.updateMatrixWorld(true);
+        const socketPoint=worldConnector(best.host,best.socket).point;
+        if(best.shaft.kind==="round"){const rotated=best.shaft.local.clone().applyQuaternion(piece.mesh.quaternion);piece.mesh.position.copy(socketPoint).sub(rotated)}else{const center=rodCenterWorld(piece),along=center.clone().sub(socketPoint).dot(targetAxis),targetCenter=socketPoint.clone().addScaledVector(targetAxis,along),rotated=rodCenterLocal(piece).applyQuaternion(piece.mesh.quaternion);piece.mesh.position.copy(targetCenter).sub(rotated)}
+        piece.mesh.updateMatrixWorld(true);attachRod(piece);return;
+      }
+      type HostMatch={rod:Piece;socket:MeshConnector;shaft:MeshConnector;score:number};let best:HostMatch|undefined;
+      for(const rod of state.pieces.filter(isRod))for(const socket of piece.connectors.filter(connector=>connector.role==="socket"))for(const shaft of rod.connectors.filter(connector=>connector.role==="shaft")){
+        if(!connectorProfile(shaft,socket))continue;const socketWorld=worldConnector(piece,socket),shaftWorld=worldConnector(rod,shaft),axis=rodAxisLocal(rod).transformDirection(rod.mesh.matrixWorld).normalize();let score:number;
+        if(shaft.kind==="round")score=socketWorld.point.distanceTo(shaftWorld.point);else{const delta=socketWorld.point.clone().sub(rodCenterWorld(rod)),along=delta.dot(axis),radial=delta.clone().addScaledVector(axis,-along).length();score=radial+Math.max(0,Math.abs(along)-rodHalf(rod))}
+        if(score<.75&&(!best||score<best.score))best={rod,socket,shaft,score};
+      }
+      if(!best)return;let targetAxis=rodAxisLocal(best.rod).transformDirection(best.rod.mesh.matrixWorld).normalize(),currentAxis=best.socket.axis.clone().transformDirection(piece.mesh.matrixWorld).normalize();if(currentAxis.dot(targetAxis)<0)targetAxis=targetAxis.clone().negate();piece.mesh.quaternion.setFromUnitVectors(best.socket.axis,targetAxis);piece.mesh.updateMatrixWorld(true);
+      const socketPoint=worldConnector(piece,best.socket).point;if(best.shaft.kind==="round")piece.mesh.position.add(worldConnector(best.rod,best.shaft).point.sub(socketPoint));else{const delta=rodCenterWorld(best.rod).sub(socketPoint),perpendicular=delta.clone().addScaledVector(targetAxis,-delta.dot(targetAxis));piece.mesh.position.add(perpendicular)}
+      piece.mesh.updateMatrixWorld(true);state.pieces.filter(isRod).forEach(attachRod);
+    };
+
+    const ray=new THREE.Raycaster(),pointer=new THREE.Vector2();let orbit=false,moved=false,moving:Piece|undefined,altCandidate:Piece|undefined,previous={x:0,y:0},orbitStart={x:0,y:0},moveOffset=new THREE.Vector2();
+    let spring:{piece:Piece;component:Piece[];anchor:THREE.Vector3;target:THREE.Vector3;plane:THREE.Plane;line:THREE.Line}|undefined;
+    const cast=(e:{clientX:number;clientY:number})=>{const r=renderer.domElement.getBoundingClientRect();pointer.set(((e.clientX-r.left)/r.width)*2-1,-((e.clientY-r.top)/r.height)*2+1);ray.setFromCamera(pointer,camera)};
+    const pieceFrom=(object:THREE.Object3D)=>{let o:THREE.Object3D|null=object;while(o){if(o.userData.piece)return o.userData.piece as Piece;o=o.parent}return undefined};
+    const springPoints=(a:THREE.Vector3,b:THREE.Vector3)=>{const direction=b.clone().sub(a),length=direction.length();if(length<.001)return[a,b];const forward=direction.normalize(),view=camera.getWorldDirection(new THREE.Vector3()),side=new THREE.Vector3().crossVectors(forward,view);if(side.lengthSq()<.01)side.crossVectors(forward,new THREE.Vector3(0,1,0));side.normalize();return Array.from({length:25},(_,i)=>{const t=i/24,offset=i===0||i===24?0:(i%2?1:-1)*Math.min(.12,length*.08);return a.clone().lerp(b,t).addScaledVector(side,offset)})};
+    const updateSpring=()=>{if(!spring)return;const anchor=spring.piece.mesh.localToWorld(spring.anchor.clone());spring.line.geometry.setFromPoints(springPoints(anchor,spring.target));spring.line.geometry.attributes.position.needsUpdate=true};
+    const connectedPieces=(start:Piece)=>{const found=new Set<Piece>([start]),queue=[start];while(queue.length){const current=queue.shift()!;for(const connection of state.connections){const next=connection.a===current?connection.b:connection.b===current?connection.a:undefined;if(next&&!found.has(next)){found.add(next);queue.push(next)}}}return[...found]};
+    const clampMotion=(piece:Piece,linearLimit:number,angularLimit:number)=>{if(!piece.body||piece.fixed)return;const v=piece.body.linvel(),w=piece.body.angvel(),linear=Math.hypot(v.x,v.y,v.z),angular=Math.hypot(w.x,w.y,w.z);if(linear>linearLimit){const scale=linearLimit/linear;piece.body.setLinvel({x:v.x*scale,y:v.y*scale,z:v.z*scale},true)}if(angular>angularLimit){const scale=angularLimit/angular;piece.body.setAngvel({x:w.x*scale,y:w.y*scale,z:w.z*scale},true)}};
+    const makeLock=()=>{const c=document.createElement("canvas");c.width=c.height=96;const x=c.getContext("2d")!;x.fillStyle="#fff";x.beginPath();x.arc(48,48,42,0,Math.PI*2);x.fill();x.strokeStyle="#f1b900";x.lineWidth=7;x.stroke();x.font="48px 'Segoe UI Emoji'";x.textAlign="center";x.textBaseline="middle";x.fillText("🔒",48,50);const texture=new THREE.CanvasTexture(c),sprite=new THREE.Sprite(new THREE.SpriteMaterial({map:texture,depthTest:false,transparent:true}));sprite.scale.set(.72,.72,1);sprite.renderOrder=20;return sprite};
+    const toggleFixed=(piece:Piece)=>{piece.fixed=!piece.fixed;if(piece.fixed){piece.lockSprite=makeLock();scene.add(piece.lockSprite)}else if(piece.lockSprite){scene.remove(piece.lockSprite);piece.lockSprite.material.map?.dispose();piece.lockSprite.material.dispose();piece.lockSprite=undefined}if(piece.body)piece.body.setBodyType(piece.fixed?RAPIER.RigidBodyType.Fixed:RAPIER.RigidBodyType.Dynamic,true);setMessage(piece.fixed?`${piece.part} fijada al espacio`:`${piece.part} liberada`)};
+    const down=(e:PointerEvent)=>{canvas.setPointerCapture(e.pointerId);previous=orbitStart={x:e.clientX,y:e.clientY};moved=false;cast(e);const hit=ray.intersectObjects(state.pieces.map(p=>p.mesh),true)[0],hitPiece=hit?pieceFrom(hit.object):undefined;orbit=e.button===2||e.altKey;altCandidate=e.altKey&&e.button===0?hitPiece:undefined;if(orbit)return;if(state.running){if(hit&&hitPiece&&!hitPiece.fixed&&hitPiece.body){state.selected=hitPiece;setSelectedId(hitPiece.id);const line=new THREE.Line(new THREE.BufferGeometry(),new THREE.LineBasicMaterial({color:0xffa51f,depthTest:false,linewidth:2})),component=connectedPieces(hitPiece);line.renderOrder=30;scene.add(line);component.forEach(p=>{if(p.body&&!p.fixed){p.body.setLinearDamping(1.2);p.body.setAngularDamping(1.8)}});spring={piece:hitPiece,component,anchor:hitPiece.mesh.worldToLocal(hit.point.clone()),target:hit.point.clone(),plane:new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()),hit.point),line};if(state.simLog)state.simLog.events.push(`[${((Date.now()-Date.parse(state.simLog.startedAt))/1000).toFixed(3)}s] drag-start ${hitPiece.part}; componente ${component.map(p=>p.part).join(",")}`);updateSpring()}return}if(hit&&hitPiece){moving=hitPiece;state.selected=moving;setSelectedId(moving.id);state.connections=state.connections.filter(c=>c.a!==moving&&c.b!==moving);const ground=ray.intersectObject(floor)[0];if(ground)moveOffset.set(moving.mesh.position.x-ground.point.x,moving.mesh.position.z-ground.point.z)}else{state.selected=undefined;setSelectedId(null)}};
+    const move=(e:PointerEvent)=>{if(spring){moved=true;cast(e);const candidate=new THREE.Vector3();if(ray.ray.intersectPlane(spring.plane,candidate))spring.target.copy(candidate);updateSpring();return}if(orbit){const distance=Math.hypot(e.clientX-orbitStart.x,e.clientY-orbitStart.y),dx=e.clientX-previous.x,dy=e.clientY-previous.y;previous={x:e.clientX,y:e.clientY};if(distance<=5)return;moved=true;const target=new THREE.Vector3(0,2,0),s=new THREE.Spherical().setFromVector3(camera.position.clone().sub(target));s.theta-=dx*.006;s.phi=THREE.MathUtils.clamp(s.phi-dy*.006,.25,1.45);camera.position.copy(target.add(new THREE.Vector3().setFromSpherical(s)));camera.lookAt(0,2,0);return}if(moving){moved=true;if(e.shiftKey)moving.mesh.position.y=Math.round((moving.mesh.position.y-(e.clientY-previous.y)*.0125)/.2)*.2;else{cast(e);const ground=ray.intersectObject(floor)[0];if(ground){moving.mesh.position.x=Math.round((ground.point.x+moveOffset.x)/.4)*.4;moving.mesh.position.z=Math.round((ground.point.z+moveOffset.y)/.4)*.4}}previous={x:e.clientX,y:e.clientY}}};
+    const up=(e:PointerEvent)=>{if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);if(spring){const released=spring;released.component.forEach(p=>{if(p.body&&!p.fixed){p.body.resetForces(true);p.body.resetTorques(true);clampMotion(p,3.5,4.5);p.body.setLinearDamping(.35);p.body.setAngularDamping(.65)}});if(state.simLog)state.simLog.events.push(`[${((Date.now()-Date.parse(state.simLog.startedAt))/1000).toFixed(3)}s] drag-end ${released.piece.part}; fuerza y par eliminados, velocidades limitadas`);scene.remove(released.line);released.line.geometry.dispose();(released.line.material as THREE.Material).dispose();spring=undefined}if(orbit&&!moved&&altCandidate)toggleFixed(altCandidate);orbit=false;altCandidate=undefined;if(moving&&moved)connect(moving);moving=undefined;refreshDebug()};
+    const drop=(e:DragEvent)=>{e.preventDefault();if(state.running)return;try{const p=JSON.parse(e.dataTransfer?.getData("application/x-ldraw-part")||"") as CatalogPart;cast(e);const ground=ray.intersectObject(floor)[0];if(ground){void addPart(p,new THREE.Vector3(Math.round(ground.point.x/.4)*.4,0,Math.round(ground.point.z/.4)*.4));setImported(old=>old.some(x=>x.part===p.part)?old:[p,...old])}}catch{setMessage("No se pudo soltar esa pieza")}};
+    const wheel=(e:WheelEvent)=>{e.preventDefault();camera.position.multiplyScalar(e.deltaY>0?1.08:.92)};
+    const resize=()=>{camera.aspect=host.clientWidth/host.clientHeight;camera.updateProjectionMatrix();renderer.setSize(host.clientWidth,host.clientHeight)};
+    const canvas=renderer.domElement;canvas.addEventListener("pointerdown",down);canvas.addEventListener("pointermove",move);canvas.addEventListener("pointerup",up);canvas.addEventListener("pointercancel",up);canvas.addEventListener("wheel",wheel,{passive:false});canvas.addEventListener("dragover",e=>e.preventDefault());canvas.addEventListener("drop",drop);canvas.addEventListener("contextmenu",e=>e.preventDefault());window.addEventListener("resize",resize);
+    let frame=0;const clock=new THREE.Clock();const animate=()=>{frame=requestAnimationFrame(animate);if(state.running&&state.world){state.pieces.forEach(p=>{if(p.body&&!p.fixed){p.body.resetForces(false);p.body.resetTorques(false)}});
+      if(spring?.piece.body&&!spring.piece.fixed){const anchor=spring.piece.mesh.localToWorld(spring.anchor.clone()),delta=spring.target.clone().sub(anchor);if(delta.length()>3.5)delta.setLength(3.5);const dynamic=spring.component.filter(p=>p.body&&!p.fixed),averageVelocity=dynamic.reduce((sum,p)=>{const v=p.body!.linvel();return sum.add(new THREE.Vector3(v.x,v.y,v.z))},new THREE.Vector3()).multiplyScalar(1/Math.max(1,dynamic.length)),acceleration=delta.multiplyScalar(16).addScaledVector(averageVelocity,-5);if(acceleration.length()>30)acceleration.setLength(30);dynamic.forEach(p=>{const mass=Math.max(.25,p.body!.mass()),force=acceleration.clone().multiplyScalar(mass),w=p.body!.angvel();p.body!.addForce(force,true);p.body!.addTorque({x:-w.x*mass*1.5,y:-w.y*mass*1.5,z:-w.z*mass*1.5},true);if(state.simLog)state.simLog.maxSpringForce=Math.max(state.simLog.maxSpringForce,force.length())});updateSpring()}
+      state.world.timestep=Math.min(clock.getDelta(),1/60);state.world.step();const startup=performance.now()-(state.simStartedMs??0)<350;state.pieces.forEach(p=>clampMotion(p,startup?2:12,startup?3:14));state.pieces.forEach(p=>{if(p.body){const t=p.body.translation(),q=p.body.rotation(),bodyRotation=new THREE.Quaternion(q.x,q.y,q.z,q.w);p.mesh.position.set(t.x,t.y,t.z);p.mesh.quaternion.copy(bodyRotation.multiply(p.physicsBase??new THREE.Quaternion()))}});if(state.simLog){const time=(Date.now()-Date.parse(state.simLog.startedAt))/1000;if(time>=(state.nextLogSample??0)){const bodies=state.pieces.flatMap(p=>{if(!p.body)return[];const t=p.body.translation(),q=p.body.rotation(),v=p.body.linvel(),w=p.body.angvel(),linear=Math.hypot(v.x,v.y,v.z),angular=Math.hypot(w.x,w.y,w.z);state.simLog!.maxLinearSpeed=Math.max(state.simLog!.maxLinearSpeed,linear);state.simLog!.maxAngularSpeed=Math.max(state.simLog!.maxAngularSpeed,angular);return[{id:p.id,part:p.part,fixed:p.fixed,position:[t.x,t.y,t.z],rotation:[q.x,q.y,q.z,q.w],linearVelocity:[v.x,v.y,v.z],angularVelocity:[w.x,w.y,w.z]}]});state.simLog.samples.push({time,bodies});state.nextLogSample=time+.2}}}else clock.getDelta();state.updateDebug();state.pieces.forEach(p=>{if(p.fixed&&p.lockSprite){const box=new THREE.Box3().setFromObject(p.mesh),center=box.getCenter(new THREE.Vector3());p.lockSprite.position.set(center.x,box.max.y+.55,center.z)}});renderer.render(scene,camera)};animate();
+    return()=>{cancelAnimationFrame(frame);window.removeEventListener("resize",resize);renderer.dispose();host.removeChild(canvas);appRef.current=null};
+  },[]);
+
+  useEffect(()=>{
+    const state=appRef.current;if(!state)return;
+    const dark=theme==="dark",background=new THREE.Color(dark?0x202328:0xdfe7ed);
+    state.scene.background=background;
+    if(state.scene.fog instanceof THREE.Fog)state.scene.fog.color.copy(background);
+    (state.floor.material as THREE.MeshStandardMaterial).color.setHex(dark?0x2b3035:0xcbd6dd);
+    state.scene.remove(state.grid);state.grid.geometry.dispose();
+    const materials=Array.isArray(state.grid.material)?state.grid.material:[state.grid.material];materials.forEach(material=>material.dispose());
+    state.grid=new THREE.GridHelper(40,40,dark?0x697078:0x8297a5,dark?0x3d4248:0xb3c1ca);state.scene.add(state.grid);
+    state.renderer.setClearColor(background);
+  },[theme]);
+
+  const visible=useMemo(()=>category==="imported"&&search?results.filter(p=>(p.part+" "+p.name).toLowerCase().includes(search.toLowerCase())):results,[category,results,search]);
+  const dragPart=(e:React.DragEvent,p:CatalogPart)=>{e.dataTransfer.setData("application/x-ldraw-part",JSON.stringify(p));e.dataTransfer.effectAllowed="copy"};
+  const addReference=async()=>{const part=reference.trim().replace(/\.dat$/i,"");if(!part)return;setCatalogBusy(true);let found:CatalogPart={part,name:`Pieza LDraw ${part}`,kind:"beam",color:71};try{const d=await fetch(`/api/parts?q=${encodeURIComponent(part)}`).then(r=>r.json());const exact=d.items?.find((x:{part:string})=>x.part.toLowerCase()===part.toLowerCase());if(exact)found={...exact,kind:kindFor("",exact.name),color:exact.color??71}}catch{}setImported(old=>old.some(x=>x.part===found.part)?old:[found,...old]);setCategory("imported");setReference("");setCatalogBusy(false);void appRef.current?.preloadPart(found)};
+  const rotate=(axis:"x"|"y"|"z",dir=1)=>{const s=appRef.current,p=s?.selected;if(!s||!p||running)return;if(axis==="x")p.mesh.rotateX(dir*Math.PI/2);else if(axis==="y")p.mesh.rotateY(dir*Math.PI/2);else p.mesh.rotateZ(dir*Math.PI/2);s.refreshDebug();setSelectedId(p.id)};
+  const nudge=(axis:"x"|"y"|"z",amount:number)=>{const s=appRef.current,p=s?.selected;if(!s||!p||running)return;p.mesh.position[axis]+=amount;s.refreshDebug();setSelectedId(p.id)};
+  const remove=()=>{const s=appRef.current,p=s?.selected;if(!s||!p||running)return;s.scene.remove(p.mesh);if(p.lockSprite)s.scene.remove(p.lockSprite);s.pieces=s.pieces.filter(x=>x!==p);s.connections=s.connections.filter(c=>c.a!==p&&c.b!==p);s.selected=undefined;s.refreshDebug();setSelectedId(null);setCount(s.pieces.length)};
+  const reset=()=>{const s=appRef.current;if(!s)return;s.running=false;s.pieces.forEach(p=>{s.scene.remove(p.mesh);if(p.lockSprite)s.scene.remove(p.lockSprite)});s.pieces=[];s.connections=[];s.snapshot=undefined;s.world=undefined;s.selected=undefined;s.refreshDebug();setRunning(false);setSelectedId(null);setCount(0)};
+  const physics=async()=>{const s=appRef.current;if(!s)return;if(!s.running){
+    await RAPIER.init();
+    s.snapshot=s.pieces.map(piece=>({piece,position:piece.mesh.position.clone(),rotation:piece.mesh.quaternion.clone()}));
+    s.simLog={startedAt:new Date().toISOString(),connections:s.connections.map(c=>({a:c.a.part,b:c.b.part,type:`${c.profile}:${c.mode}`,point:c.point.toArray()})),samples:[],maxLinearSpeed:0,maxAngularSpeed:0,maxSpringForce:0,events:[`Inicio con ${s.pieces.length} cuerpos y ${s.connections.length} uniones`,`Estabilización inicial activa durante 0.35 s`]};s.nextLogSample=0;s.simStartedMs=performance.now();
+    const world=new RAPIER.World({x:0,y:-9.81,z:0});world.integrationParameters.numSolverIterations=8;world.integrationParameters.maxCcdSubsteps=2;world.integrationParameters.contact_natural_frequency=18;world.integrationParameters.normalizedAllowedLinearError=.01;
+    world.createCollider(RAPIER.ColliderDesc.cuboid(20,.15,20).setTranslation(0,-.2,0).setFriction(.9));
+    s.pieces.forEach(p=>{
+      p.physicsBase=p.mesh.quaternion.clone();
+      const desc=p.fixed?RAPIER.RigidBodyDesc.fixed():RAPIER.RigidBodyDesc.dynamic().setLinearDamping(.35).setAngularDamping(.65).setCcdEnabled(true).setSoftCcdPrediction(.1).setAdditionalMass(p.kind==="motor"?2:.65);
+      desc.setTranslation(p.mesh.position.x,p.mesh.position.y,p.mesh.position.z);
+      const rb=world.createRigidBody(desc);
+      for(const primitive of p.colliders){
+        const collider=primitive.shape==="box"?RAPIER.ColliderDesc.cuboid(primitive.size!.x/2,primitive.size!.y/2,primitive.size!.z/2):RAPIER.ColliderDesc.cylinder(primitive.halfHeight!,primitive.radius!);
+        const center=primitive.center.clone().applyQuaternion(p.physicsBase),rotation=p.physicsBase.clone().multiply(primitive.rotation);
+        collider.setTranslation(center.x,center.y,center.z).setRotation(rotation).setFriction(p.kind==="wheel"?1.6:.75).setRestitution(0).setDensity((p.kind==="motor"?1.7:1)/Math.max(1,p.colliders.length));world.createCollider(collider,rb);
+      }
+      p.body=rb;
+    });
+    s.connections.forEach(c=>{if(!c.a.body||!c.b.body)return;const a=c.point.clone().sub(c.a.mesh.position),b=c.point.clone().sub(c.b.mesh.position),axis=c.axis.clone().normalize();let joint:RAPIER.JointData;if(c.mode==="rotation")joint=RAPIER.JointData.revolute(a,b,axis);else if(c.mode==="linear")joint=RAPIER.JointData.prismatic(a,b,axis);else if(c.mode==="rotation-linear")joint=RAPIER.JointData.generic(a,b,axis,RAPIER.JointAxesMask.LinY|RAPIER.JointAxesMask.LinZ|RAPIER.JointAxesMask.AngY|RAPIER.JointAxesMask.AngZ);else joint=RAPIER.JointData.fixed(a,{x:0,y:0,z:0,w:1},b,{x:0,y:0,z:0,w:1});const created=world.createImpulseJoint(joint,c.a.body,c.b.body,true);created.setContactsEnabled(false);if(c.mode==="rotation"&&c.b.frictionPin)(created as RAPIER.RevoluteImpulseJoint).configureMotorVelocity(0,3.5);if(c.mode==="linear"){const limit=Math.max(.15,c.travel/2);(created as RAPIER.PrismaticImpulseJoint).setLimits(-limit,limit)}});
+    s.world=world;s.running=true;setRunning(true);setMessage(`${s.connections.length} conexiones físicas activas · colisión pin/pieza desactivada`)
+  }else{s.running=false;if(s.simLog){s.simLog.endedAt=new Date().toISOString();s.simLog.duration=(Date.parse(s.simLog.endedAt)-Date.parse(s.simLog.startedAt))/1000;s.simLog.events.push(`Fin: velocidad lineal máxima ${s.simLog.maxLinearSpeed.toFixed(3)}, angular ${s.simLog.maxAngularSpeed.toFixed(3)}, fuerza de resorte ${s.simLog.maxSpringForce.toFixed(3)}`);const encoded=JSON.stringify(s.simLog,null,2);try{localStorage.setItem("sim-studio:physics-log",encoded)}catch{}setLastLog(encoded)}s.snapshot?.forEach(x=>{x.piece.mesh.position.copy(x.position);x.piece.mesh.quaternion.copy(x.rotation);x.piece.body=undefined;x.piece.physicsBase=undefined});s.snapshot=undefined;s.world=undefined;s.simStartedMs=undefined;s.refreshDebug();setRunning(false);setMessage("Simulación detenida · estado restaurado · log actualizado")}};
+  const importModel=async(file:File)=>{const s=appRef.current;if(!s)return;reset();const rows=parseLDR(await file.text());for(const r of rows){const [a,b,c,d,e,f,g,h,i]=r.matrix,m=new THREE.Matrix4().set(a,b,c,0,d,e,f,0,g,h,i,0,0,0,0,1),flip=new THREE.Matrix4().makeScale(1,-1,1);m.premultiply(flip).multiply(flip);const p={part:r.part,name:`LDraw ${r.part}`,kind:kindFor("",r.part),color:r.color};await s.addPart(p,new THREE.Vector3(r.position[0]/20,-r.position[1]/20,r.position[2]/20),new THREE.Quaternion().setFromRotationMatrix(m))}setMessage(`${rows.length} piezas importadas`)};
+  const exportModel=()=>{const s=appRef.current;if(!s)return;const flip=new THREE.Matrix4().makeScale(1,-1,1);const lines=s.pieces.map(p=>{const r=new THREE.Matrix4().makeRotationFromQuaternion(p.mesh.quaternion);r.premultiply(flip).multiply(flip);const e=r.elements,n=(v:number)=>Math.abs(v)<1e-8?0:+v.toFixed(5);return`1 ${p.color} ${n(p.mesh.position.x*20)} ${n(-p.mesh.position.y*20)} ${n(p.mesh.position.z*20)} ${n(e[0])} ${n(e[4])} ${n(e[8])} ${n(e[1])} ${n(e[5])} ${n(e[9])} ${n(e[2])} ${n(e[6])} ${n(e[10])} ${p.modelPart??p.part}.dat`});const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([makeLDR(lines)]));a.download="sim-studio-model.ldr";a.click()};
+  const selected=appRef.current?.selected;
+  const selectedConnections=selected?appRef.current?.connections.filter(connection=>connection.a===selected||connection.b===selected)??[]:[];
+  const toggleDebug=(key:keyof DebugFlags)=>setDebugViews(current=>{const next={...current,[key]:!current[key]},s=appRef.current;if(s){s.debug=next;s.refreshDebug()}return next});
+  const setConnectionMode=(id:string,mode:JointMode)=>{const state=appRef.current,connection=state?.connections.find(item=>item.id===id);if(!state||!connection||running||!allowedModes(connection.profile).includes(mode))return;connection.mode=mode;state.refreshDebug();setConnectionRevision(value=>value+1);setMessage(`${profileLabel[connection.profile]} · ${modeLabel[mode]}`)};
+  const downloadPhysicsLog=()=>{if(!lastLog)return;const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([lastLog],{type:"application/json"}));a.download="sim-studio-physics-log.json";a.click();URL.revokeObjectURL(a.href)};
+
+  return <main className={`studio ${theme}`}>
+    <header><div className="brand"><span className="mark">S</span><div><strong>SIM STUDIO</strong><small>PHYSICS BUILD LAB</small></div></div><button className="theme-toggle" onClick={()=>setTheme(value=>value==="dark"?"light":"dark")} aria-label={`Cambiar a tema ${theme==="dark"?"claro":"oscuro"}`} title={`Tema ${theme==="dark"?"claro":"oscuro"}`}><span>{theme==="dark"?"☀":"◐"}</span>{theme==="dark"?"Claro":"Oscuro"}</button><div className="project"><span>Proyecto</span><b>Mi mecanismo</b></div><div className="header-actions"><input ref={fileRef} type="file" hidden accept=".ldr,.mpd" onChange={e=>e.target.files?.[0]&&void importModel(e.target.files[0])}/><button className="ghost" onClick={()=>fileRef.current?.click()}>Importar</button><button className="ghost" onClick={exportModel}>Exportar</button><button className={running?"stop":"play"} onClick={physics}>{running?"■ Detener":"▶ Simular"}</button></div></header>
+    <aside className="library"><div className="panel-title"><span>PALETA STUDIO</span><b>{count}</b></div><div className="part-search"><span>⌕</span><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Nombre o referencia…"/></div><div className="category-tabs">{categories.map(c=><button key={c.id} className={category===c.id?"active":""} onClick={()=>{setCategory(c.id);setSearch("")}}><i>{c.icon}</i>{c.label}</button>)}</div><div className="reference-box"><b>Añadir referencia externa</b><div><input value={reference} onChange={e=>setReference(e.target.value)} onKeyDown={e=>e.key==="Enter"&&void addReference()} placeholder="Ej. 32524"/><button onClick={()=>void addReference()}>+</button></div></div><div className="catalog-head"><b>{categories.find(c=>c.id===category)?.label}</b><span>{`${visible.length} piezas`}</span></div><div className="parts-grid">{visible.map(p=><article key={`${p.part}-${p.color}`} draggable onDragStart={e=>dragPart(e,p)} onClick={()=>{setImported(old=>old.some(x=>x.part===p.part&&x.color===p.color)?old:[p,...old]);setMessage(`Arrastra ${p.part} a la mesa`)}}><div className="thumb">{p.thumb?<img src={p.thumb} alt={p.name} style={{filter:p.rawThumb?palettePreviewFilter(p.color):previewFilter(p.color)}}/>:<span>⚙</span>}<i className="color-dot" style={{background:colorHex[p.color]??colorHex[71]}} title={`Color LDraw ${p.color}`}/></div><b>{p.part}</b><small title={p.name}>{p.name}</small><em>⋮</em></article>)}</div>{!visible.length&&<div className="no-results">No hay piezas de la paleta que coincidan con la búsqueda.</div>}<div className="drag-help">Sólo se muestran las piezas incluidas en Palette_fav.</div></aside>
+    <section className="viewport" ref={mountRef}><div className="view-label"><span className={running?"live":""}/>{running?"SIMULACIÓN: arrastra una pieza para aplicarle fuerza":message}</div><div className="camera-help">Arrastrar: mover X/Z · Shift+arrastrar: mover Y · Alt+clic: fijar · Alt+arrastrar/botón derecho: orbitar</div></section>
+    <aside className="inspector"><div className="panel-title"><span>PROPIEDADES</span></div>{selectedId&&selected?<><div className="selected-card"><div className="cube">◆</div><div><small>PIEZA {selected.part}</small><b>{selected.name}</b></div></div><label>DESPLAZAR</label><div className="control-grid"><button onClick={()=>nudge("x",-.4)}>X−</button><button onClick={()=>nudge("y",.4)}>Y+</button><button onClick={()=>nudge("z",-.4)}>Z−</button><button onClick={()=>nudge("x",.4)}>X+</button><button onClick={()=>nudge("y",-.4)}>Y−</button><button onClick={()=>nudge("z",.4)}>Z+</button></div><label>ROTAR 90°</label><div className="control-grid rotate"><button onClick={()=>rotate("x")}>↻ X</button><button onClick={()=>rotate("y")}>↻ Y</button><button onClick={()=>rotate("z")}>↻ Z</button></div>{(selected.pin||isAxlePart(selected))&&<div className="connection-editor"><label>UNIONES DE ESTA PIEZA</label>{selectedConnections.length?selectedConnections.map((connection,index)=>{const other=connection.a===selected?connection.b:connection.a;return <div className="connection-card" key={connection.id}><div><b>Unión {index+1} · {other.part}</b><span>{profileLabel[connection.profile]}</span></div><select value={connection.mode} disabled={running} onChange={event=>setConnectionMode(connection.id,event.target.value as JointMode)}>{allowedModes(connection.profile).map(mode=><option value={mode} key={mode}>{modeLabel[mode]}</option>)}</select></div>}):<p className="no-connections">Acerca la pieza a un conector compatible para crear una unión.</p>}</div>}<div className="data-row"><span>Mapa Connect</span><b>{selected.connectors.length} puntos</b></div><div className="data-row"><span>Uniones activas</span><b>{appRef.current?.connections.filter(c=>c.a===selected||c.b===selected).length??0}</b></div><div className="data-row"><span>Modelo</span><b>{selected.part}.dat</b></div><button className="danger" onClick={remove}>Eliminar pieza</button></>:<div className="empty"><span>◇</span><b>Nada seleccionado</b><p>Selecciona una pieza colocada para moverla o rotarla.</p></div>}<div className="debug-tools"><label>VISUALIZACIÓN TÉCNICA</label><button className={debugViews.colliders?"active":""} aria-pressed={debugViews.colliders} onClick={()=>toggleDebug("colliders")}><i className="green"/>Mallas de colisión</button><button className={debugViews.connectors?"active":""} aria-pressed={debugViews.connectors} onClick={()=>toggleDebug("connectors")}><i className="cyan"/>Mapa de conexiones</button><div className="connect-legend"><span><i className="socket-round"/>Azul: hueco de pin</span><span><i className="shaft-round"/>Naranja: pin</span><span><i className="socket-axle"/>Verde: hueco de eje</span><span><i className="shaft-axle"/>Morado: recorrido de eje</span></div><button className={debugViews.physics?"active":""} aria-pressed={debugViews.physics} onClick={()=>toggleDebug("physics")}><i className="orange"/>Cuerpos, uniones y pivotes</button></div><div className="log-tools"><label>REGISTRO DE FÍSICA</label><button disabled={!lastLog} onClick={downloadPhysicsLog}>{lastLog?"Descargar último log JSON":"Detén una simulación para generar el log"}</button>{lastLog&&<details><summary>Leer último log</summary><pre>{lastLog}</pre></details>}</div><div className="physics"><b>MOTOR DE FÍSICA</b><span><i/> Rapier + LDraw Connect</span><p>Cada unión de pin o eje puede configurarse según sus grados de libertad compatibles.</p></div></aside>
+    <footer><span>● Cuadrícula 0.4 u</span><span>Y ↑</span><span>{count} piezas · caché activa</span></footer>
+  </main>;
+}
