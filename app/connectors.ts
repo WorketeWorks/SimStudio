@@ -52,7 +52,7 @@ export function rodConnectors(root:THREE.Object3D,kind:"round"|"axle"):MeshConne
   const bounds=objectLocalBounds(root),size=bounds.getSize(new THREE.Vector3()),center=bounds.getCenter(new THREE.Vector3()),dimensions=[size.x,size.y,size.z],axisIndex=dimensions.indexOf(Math.max(...dimensions)),axis=new THREE.Vector3();axis.setComponent(axisIndex,1);
   const length=dimensions[axisIndex]*.94,diameter=Math.max(...dimensions.filter((_,index)=>index!==axisIndex));
   if(kind==="axle")return[{local:center,axis,kind,role:"shaft",diameter,length}];
-  const offset=Math.max(.12,length*.25);
+  const studs=Math.max(2,Math.round(length)),offset=(studs-1)/2;
   return[-1,1].map(direction=>({local:center.clone().addScaledVector(axis,direction*offset),axis:axis.clone(),kind,role:"shaft" as const,diameter,length:length/2}));
 }
 
