@@ -1,0 +1,293 @@
+export type StoredConnector = {
+  local: [number, number, number];
+  axis: [number, number, number];
+  kind: "round" | "axle";
+  role: "socket" | "shaft";
+  diameter: number;
+  length?: number;
+};
+
+// Mapas revisados exportados desde el editor de Sim Studio. Las medidas están
+// expresadas en unidades Studio: un tramo Technic (1L) equivale a 1 unidad.
+export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
+  "11214": [
+    {
+      local: [-1, 0, 0],
+      axis: [1, 0, 0],
+      kind: "round",
+      role: "shaft",
+      diameter: 0.8,
+      length: 2,
+    },
+    {
+      local: [1, 0, 0],
+      axis: [1, 0, 0],
+      kind: "axle",
+      role: "shaft",
+      diameter: 0.8,
+      length: 1,
+    },
+  ],
+  "15100": [
+    {
+      local: [0.025, 0, 0],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+      length: 1,
+    },
+    {
+      local: [1.025, 0, 0],
+      axis: [1, 0, 0],
+      kind: "round",
+      role: "shaft",
+      diameter: 0.8,
+      length: 1,
+    },
+  ],
+  "18651": [
+    {
+      local: [-1, 0, 0],
+      axis: [1, 0, 0],
+      kind: "round",
+      role: "shaft",
+      diameter: 0.8,
+      length: 1,
+    },
+    {
+      local: [0.5, 0, 0],
+      axis: [1, 0, 0],
+      kind: "axle",
+      role: "shaft",
+      diameter: 0.8,
+      length: 2,
+    },
+  ],
+  "2825": [
+    {
+      local: [0, -0.25, -1],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+      length: 0.5,
+    },
+    {
+      local: [0, -0.25, -2],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+      length: 0.5,
+    },
+    {
+      local: [0, -0.25, 0],
+      axis: [0, 1, 0],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.8,
+      length: 0.5,
+    },
+    {
+      local: [0, -0.25, -3],
+      axis: [0, 1, 0],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.8,
+      length: 0.5,
+    },
+  ],
+  "32054": [
+    {
+      local: [1, 0, 0],
+      axis: [1, 0, 0],
+      kind: "round",
+      role: "shaft",
+      diameter: 0.8,
+      length: 1,
+    },
+    {
+      local: [-1, 0, 0],
+      axis: [1, 0, 0],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.8,
+      length: 1,
+    },
+    {
+      local: [0, 0, 0],
+      axis: [1, 0, 0],
+      kind: "round",
+      role: "shaft",
+      diameter: 0.8,
+      length: 1,
+    },
+  ],
+  "32449": [
+    {
+      local: [0, 0, 0.5],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+      length: 0.5,
+    },
+    {
+      local: [0, 0, -0.5],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+      length: 0.5,
+    },
+    {
+      local: [0, 0, -1.5],
+      axis: [0, 1, 0],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.8,
+      length: 0.5,
+    },
+    {
+      local: [0, 0, 1.5],
+      axis: [0, 1, 0],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.8,
+      length: 0.5,
+    },
+  ],
+  "3673": [
+    {
+      local: [-0.5, 0, 0],
+      axis: [1, 0, 0],
+      kind: "round",
+      role: "shaft",
+      diameter: 0.8,
+      length: 1,
+    },
+    {
+      local: [0.5, 0, 0],
+      axis: [1, 0, 0],
+      kind: "round",
+      role: "shaft",
+      diameter: 0.8,
+      length: 1,
+    },
+  ],
+  "41677": [
+    {
+      local: [0, 0, -1],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+      length: 0.5,
+    },
+    {
+      local: [0, 0, 0],
+      axis: [0, 1, 0],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.8,
+      length: 0.5,
+    },
+  ],
+  "60483": [
+    {
+      local: [0, 0, -1],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+      length: 1,
+    },
+    {
+      local: [0, 0, 0],
+      axis: [0, 1, 0],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.8,
+      length: 1,
+    },
+  ],
+  "6558": [
+    {
+      local: [-1, 0, 0],
+      axis: [1, 0, 0],
+      kind: "round",
+      role: "shaft",
+      diameter: 0.8,
+      length: 1,
+    },
+    {
+      local: [1, 0, 0],
+      axis: [1, 0, 0],
+      kind: "round",
+      role: "shaft",
+      diameter: 0.8,
+      length: 1,
+    },
+    {
+      local: [0, 0, 0],
+      axis: [1, 0, 0],
+      kind: "round",
+      role: "shaft",
+      diameter: 0.8,
+      length: 1,
+    },
+  ],
+  "6632": [
+    {
+      local: [0, 0, -1],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+      length: 0.5,
+    },
+    {
+      local: [0, 0, 0],
+      axis: [0, 1, 0],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.8,
+      length: 0.5,
+    },
+    {
+      local: [0, 0, -2],
+      axis: [0, 1, 0],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.8,
+      length: 0.5,
+    },
+  ],
+  "87082": [
+    {
+      local: [-1, 0, 0],
+      axis: [1, 0, 0],
+      kind: "round",
+      role: "shaft",
+      diameter: 0.8,
+      length: 1,
+    },
+    {
+      local: [1, 0, 0],
+      axis: [1, 0, 0],
+      kind: "round",
+      role: "shaft",
+      diameter: 0.8,
+      length: 1,
+    },
+    {
+      local: [0, 0, 0],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+      length: 1,
+    },
+  ],
+};
