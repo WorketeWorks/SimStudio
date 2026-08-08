@@ -16689,3 +16689,29 @@ Detected multiple renderers concurrently rendering the same context provider. Th
 [2m19:31:28[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.WebGLShadowMap: PCFSoftShadowMap has been deprecated. Using PCFShadowMap instead.
 [2m19:31:28[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.Clock: This module has been deprecated. Please use THREE.Timer instead.
 [2m19:31:28[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.WebGLShadowMap: PCFSoftShadowMap has been deprecated. Using PCFShadowMap instead.
+[2m19:37:48[22m [31m[1m[vite][22m[39m [31mInternal server error: [postcss] ENOENT: no such file or directory, open 'C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\tailwindcss\index.css'[39m
+  Plugin: [35mvite:css[39m
+  File: [36mC:/Users/Usuario/Documentos/GitHub/Sim Studio/app/globals.css[39m:undefined:NaN
+      at async open (node:internal/fs/promises:642:25)
+      at async Object.readFile (node:internal/fs/promises:1279:14)
+      at async Object.load (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/node.js:21000:17)
+      at async loadImportContent (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/postcss-import.js:392:19)
+      at async Promise.all (index 0)
+      at async resolveImportId (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/postcss-import.js:378:20)
+      at async parseStyles (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/postcss-import.js:331:4)
+      at async Object.Once (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/postcss-import.js:455:20)
+      at async LazyResult.runAsync (C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\postcss\lib\lazy-result.js:293:11)
+      at async runPostCSS (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/node.js:21054:19)
+[2m19:37:48[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [2m[console.error] [22m[vite] Failed to reload /app/globals.css. This could be due to syntax errors or importing non-existent modules. (see errors above)
+[2m19:37:48[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [2m[console.error] [22m[vite] Internal Server Error
+[postcss] ENOENT: no such file or directory, open 'C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\tailwindcss\index.css'
+    at async open (node:internal/fs/promises:642:25)
+    at async Object.readFile (node:internal/fs/promises:1279:14)
+    at async Object.load (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/node.js:21000:17)
+    at async loadImportContent (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/postcss-import.js:392:19)
+    at async Promise.all (index 0)
+    at async resolveImportId (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/postcss-import.js:378:20)
+    at async parseStyles (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/postcss-import.js:331:4)
+    at async Object.Once (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/postcss-import.js:455:20)
+    at async LazyResult.runAsync (C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\postcss\lib\lazy-result.js:293:11)
+    at async runPostCSS (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/node.js:21054:19)
