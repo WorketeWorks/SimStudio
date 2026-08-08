@@ -67,8 +67,8 @@ const canonicalDirection=(direction:THREE.Vector3)=>{const result=direction.clon
 export function approximateCollisionPrimitives(root:THREE.Object3D,name:string,connectors:MeshConnector[]):CollisionPrimitive[]{
   const bounds=objectLocalBounds(root),size=bounds.getSize(new THREE.Vector3()),center=bounds.getCenter(new THREE.Vector3()),dimensions=[size.x,size.y,size.z],axisIndex=dimensions.indexOf(Math.max(...dimensions)),longAxis=new THREE.Vector3();longAxis.setComponent(axisIndex,1);
   if(/^Technic (Axle|Pin)/i.test(name)){
-    const others=dimensions.filter((_,index)=>index!==axisIndex),radius=Math.max(.12,Math.max(...others)*.38),length=dimensions[axisIndex]*.92,rotation=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),longAxis),result:CollisionPrimitive[]=[{shape:"cylinder",center:center.clone(),radius,halfHeight:length/2,rotation}];
-    if(/stop|bush|flange/i.test(name)){const stopCenter=center.clone().addScaledVector(longAxis,length*.28);result.push({shape:"cylinder",center:stopCenter,radius:radius*1.35,halfHeight:Math.max(.08,length*.09),rotation:rotation.clone()})}
+    const others=dimensions.filter((_,index)=>index!==axisIndex),actualRadius=Math.min(...others)/2,radius=Math.max(.12,actualRadius*.82),length=dimensions[axisIndex]*.94,rotation=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),longAxis),result:CollisionPrimitive[]=[{shape:"cylinder",center:center.clone(),radius,halfHeight:length/2,rotation}];
+    if(/stop|bush|flange/i.test(name)){const stopCenter=center.clone().addScaledVector(longAxis,length*.28),flangeRadius=Math.min(Math.max(...others)/2*.92,radius*1.55);result.push({shape:"cylinder",center:stopCenter,radius:flangeRadius,halfHeight:Math.max(.06,Math.min(.14,length*.07)),rotation:rotation.clone()})}
     return result;
   }
   if(/wheel|tyre|tire|gear|bush/i.test(name)){
@@ -86,10 +86,10 @@ export function approximateCollisionPrimitives(root:THREE.Object3D,name:string,c
     candidates.sort((a,b)=>b.indices.length-a.indices.length||a.span-b.span);const chosen:Candidate[]=[],covered=new Set<number>();
     for(const candidate of candidates){if(candidate.indices.some(index=>!covered.has(index))||chosen.length===0){chosen.push(candidate);candidate.indices.forEach(index=>covered.add(index))}if(covered.size===points.length||chosen.length===6)break}
     if(chosen.length){
-      const crossSection=Math.max(.42,Math.min(.72,[...dimensions].sort((a,b)=>a-b)[1]*.72)),result:CollisionPrimitive[]=[],keyIndices=new Set<number>();
+      const sorted=[...dimensions].sort((a,b)=>a-b),crossSection=Math.max(.38,Math.min(.58,(sorted[0]+sorted[1])*.43)),result:CollisionPrimitive[]=[],keyIndices=new Set<number>();
       for(const line of chosen){const projections=line.indices.map(index=>({index,value:points[index].dot(line.direction)})).sort((a,b)=>a.value-b.value),first=projections[0],last=projections[projections.length-1];keyIndices.add(first.index);keyIndices.add(last.index);result.push({shape:"box",center:line.origin.clone(),size:new THREE.Vector3(line.span+crossSection*.35,crossSection,crossSection),rotation:new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1,0,0),line.direction)})}
       for(let index=0;index<points.length;index++){const memberships=chosen.filter(line=>line.indices.includes(index));if(memberships.length>1)keyIndices.add(index)}
-      for(const index of keyIndices){const connector=sockets[index],rotation=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),connector.axis);result.push({shape:"cylinder",center:connector.local.clone(),radius:crossSection*.58,halfHeight:crossSection*.48,rotation})}
+      for(const index of keyIndices){const connector=sockets[index],rotation=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),connector.axis);result.push({shape:"cylinder",center:connector.local.clone(),radius:crossSection*.5,halfHeight:crossSection*.48,rotation})}
       return result;
     }
   }
