@@ -16715,3 +16715,56 @@ Detected multiple renderers concurrently rendering the same context provider. Th
     at async Object.Once (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/postcss-import.js:455:20)
     at async LazyResult.runAsync (C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\postcss\lib\lazy-result.js:293:11)
     at async runPostCSS (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/node.js:21054:19)
+[2m1:43:36[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: [postcss] ENOENT: no such file or directory, open 'C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\tailwindcss\index.css'
+  Plugin: [35mvite:css[39m
+  File: [36mC:/Users/Usuario/Documentos/GitHub/Sim Studio/app/globals.css[39m:undefined:NaN
+[2m1:43:36[22m [31m[1m[vite][22m[39m [31mInternal server error: [postcss] ENOENT: no such file or directory, open 'C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\tailwindcss\index.css'[39m
+  Plugin: [35mvite:css[39m
+  File: [36mC:/Users/Usuario/Documentos/GitHub/Sim Studio/app/globals.css[39m:undefined:NaN
+      at async open (node:internal/fs/promises:642:25)
+      at async Object.readFile (node:internal/fs/promises:1279:14)
+      at async Object.load (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/node.js:21000:17)
+      at async loadImportContent (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/postcss-import.js:392:19)
+      at async Promise.all (index 0)
+      at async resolveImportId (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/postcss-import.js:378:20)
+      at async parseStyles (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/postcss-import.js:331:4)
+      at async Object.Once (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/postcss-import.js:455:20)
+      at async LazyResult.runAsync (C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\postcss\lib\lazy-result.js:293:11)
+      at async runPostCSS (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/node.js:21054:19)
+[2m1:43:36[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [2m[console.error] [22m[vite] Internal Server Error
+[postcss] ENOENT: no such file or directory, open 'C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\tailwindcss\index.css'
+    at async open (node:internal/fs/promises:642:25)
+    at async Object.readFile (node:internal/fs/promises:1279:14)
+    at async Object.load (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/node.js:21000:17)
+    at async loadImportContent (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/postcss-import.js:392:19)
+    at async Promise.all (index 0)
+    at async resolveImportId (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/postcss-import.js:378:20)
+    at async parseStyles (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/postcss-import.js:331:4)
+    at async Object.Once (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/postcss-import.js:455:20)
+    at async LazyResult.runAsync (C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\postcss\lib\lazy-result.js:293:11)
+    at async runPostCSS (file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/vite/dist/node/chunks/node.js:21054:19)
+[2m1:43:36[22m [31m[1m[vite][22m[39m [31mInternal server error: Cannot find module '@cspotcode/source-map-support'
+Require stack:
+- C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\miniflare\dist\src\index.js[39m
+      at Module._resolveFilename (node:internal/modules/cjs/loader:1421:15)
+      at require.resolve (node:internal/modules/helpers:163:19)
+      at getFreshSourceMapSupport (C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\miniflare\dist\src\index.js:77432:39)
+      at getSourceMapper (C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\miniflare\dist\src\index.js:77464:19)
+      at getSourceMappedStack (C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\miniflare\dist\src\index.js:77564:10)
+      at reviveError (C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\miniflare\dist\src\index.js:77598:5)
+      at _Miniflare.dispatchFetch (C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\miniflare\dist\src\index.js:89446:13)
+      at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+      at async file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/@cloudflare/vite-plugin/dist/index.mjs:34226:19
+[2m1:43:36[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [2m[console.error] [22m[vite] Internal Server Error
+Cannot find module '@cspotcode/source-map-support'
+Require stack:
+- C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\miniflare\dist\src\index.js
+    at Module._resolveFilename (node:internal/modules/cjs/loader:1421:15)
+    at require.resolve (node:internal/modules/helpers:163:19)
+    at getFreshSourceMapSupport (C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\miniflare\dist\src\index.js:77432:39)
+    at getSourceMapper (C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\miniflare\dist\src\index.js:77464:19)
+    at getSourceMappedStack (C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\miniflare\dist\src\index.js:77564:10)
+    at reviveError (C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\miniflare\dist\src\index.js:77598:5)
+    at _Miniflare.dispatchFetch (C:\Users\Usuario\Documentos\GitHub\Sim Studio\node_modules\miniflare\dist\src\index.js:89446:13)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async file:///C:/Users/Usuario/Documentos/GitHub/Sim%20Studio/node_modules/@cloudflare/vite-plugin/dist/index.mjs:34226:19

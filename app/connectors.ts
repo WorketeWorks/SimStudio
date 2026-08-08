@@ -401,12 +401,7 @@ export function approximateCollisionPrimitives(
       if (covered.size === points.length || chosen.length === 6) break;
     }
     if (chosen.length) {
-      const sorted = [...dimensions].sort((a, b) => a - b),
-        crossSection = Math.max(
-          0.38,
-          Math.min(0.58, (sorted[0] + sorted[1]) * 0.43),
-        ),
-        result: CollisionPrimitive[] = [],
+      const result: CollisionPrimitive[] = [],
         keyIndices = new Set<number>();
       for (const line of chosen) {
         const projections = line.indices
@@ -419,18 +414,25 @@ export function approximateCollisionPrimitives(
           last = projections[projections.length - 1];
         keyIndices.add(first.index);
         keyIndices.add(last.index);
+        const connector = sockets[first.index],
+          xAxis = line.direction.clone().normalize(),
+          yAxis = connector.axis
+            .clone()
+            .addScaledVector(xAxis, -connector.axis.dot(xAxis))
+            .normalize(),
+          zAxis = new THREE.Vector3().crossVectors(xAxis, yAxis).normalize(),
+          rotation = new THREE.Quaternion().setFromRotationMatrix(
+            new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis),
+          ),
+          depth =
+            Math.abs(connector.axis.x) * size.x +
+            Math.abs(connector.axis.y) * size.y +
+            Math.abs(connector.axis.z) * size.z;
         result.push({
           shape: "box",
           center: line.origin.clone(),
-          size: new THREE.Vector3(
-            line.span + crossSection * 0.35,
-            crossSection,
-            crossSection,
-          ),
-          rotation: new THREE.Quaternion().setFromUnitVectors(
-            new THREE.Vector3(1, 0, 0),
-            line.direction,
-          ),
+          size: new THREE.Vector3(line.span, Math.max(0.25, depth * 0.96), 1),
+          rotation,
         });
       }
       for (let index = 0; index < points.length; index++) {

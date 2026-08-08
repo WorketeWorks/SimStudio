@@ -52,9 +52,18 @@ type Connection = {
   profile: ConnectionProfile;
   point: THREE.Vector3;
   axis: THREE.Vector3;
+  localAxisA: THREE.Vector3;
   travel: number;
   motorSpeed: number;
   motorForce: number;
+  userConfigured: boolean;
+};
+type ManualConnectDraft = {
+  piece: Piece;
+  connector: MeshConnector;
+  cursor: THREE.Vector3;
+  plane: THREE.Plane;
+  line: THREE.Line;
 };
 type DebugFlags = { colliders: boolean; connectors: boolean; physics: boolean };
 type SimulationLog = {
@@ -90,6 +99,7 @@ type AppState = {
   running: boolean;
   world?: RAPIER.World;
   connections: Connection[];
+  manualConnect?: ManualConnectDraft;
   snapshot?: {
     piece: Piece;
     position: THREE.Vector3;
@@ -97,7 +107,12 @@ type AppState = {
   }[];
   connectionModes: Map<
     string,
-    { mode: JointMode; motorSpeed: number; motorForce: number }
+    {
+      mode: JointMode;
+      motorSpeed: number;
+      motorForce: number;
+      userConfigured: boolean;
+    }
   >;
   addPart: (
     part: CatalogPart,
@@ -215,18 +230,73 @@ const connectorProfile = (
         : shaft.kind === "axle" && socket.kind === "round"
           ? "axle-round"
           : undefined;
+const pairProfile = (a: MeshConnector, b: MeshConnector) =>
+  a.role === "shaft" && b.role === "socket"
+    ? connectorProfile(a, b)
+    : b.role === "shaft" && a.role === "socket"
+      ? connectorProfile(b, a)
+      : undefined;
 const allowedModes = (profile: ConnectionProfile): JointMode[] =>
   profile === "pin-round"
     ? ["fixed", "rotation", "motor"]
     : profile === "axle-cross"
       ? ["fixed", "linear"]
-      : ["fixed", "rotation", "linear", "rotation-linear", "motor"];
+      : ["rotation", "linear", "rotation-linear", "motor"];
 const defaultMode = (profile: ConnectionProfile): JointMode =>
   profile === "pin-round"
     ? "fixed"
     : profile === "axle-cross"
       ? "linear"
       : "rotation-linear";
+const freestAutomaticMode = (profile: ConnectionProfile): JointMode =>
+  profile === "pin-round"
+    ? "rotation"
+    : profile === "axle-round"
+      ? "rotation-linear"
+      : "fixed";
+const rebalanceSmartDefaults = (state: AppState, shaftPiece: Piece) => {
+  const connections = state.connections.filter(
+    (connection) => connection.b === shaftPiece,
+  );
+  if (!connections.length) return;
+  connections.forEach((connection) => {
+    if (!allowedModes(connection.profile).includes(connection.mode)) {
+      connection.mode = defaultMode(connection.profile);
+      connection.userConfigured = false;
+      state.connectionModes.delete(connection.id);
+    }
+  });
+  connections.forEach((connection) => {
+    if (connection.userConfigured) return;
+    if (connection.profile === "axle-cross") connection.mode = "fixed";
+    else if (connection.profile === "axle-round")
+      connection.mode = "rotation-linear";
+    else if (shaftPiece.frictionPin) connection.mode = "fixed";
+  });
+  let anchored = connections.some(
+    (connection) =>
+      connection.mode === "fixed" &&
+      (connection.userConfigured || connection.profile === "axle-cross"),
+  );
+  connections.forEach((connection) => {
+    if (
+      connection.userConfigured ||
+      connection.profile === "axle-cross" ||
+      connection.profile === "axle-round" ||
+      shaftPiece.frictionPin
+    )
+      return;
+    if (!anchored) {
+      connection.mode = "fixed";
+      anchored = true;
+    } else connection.mode = freestAutomaticMode(connection.profile);
+  });
+};
+const rebalanceAllSmartDefaults = (state: AppState) => {
+  new Set(state.connections.map((connection) => connection.b)).forEach(
+    (piece) => rebalanceSmartDefaults(state, piece),
+  );
+};
 const modeLabel: Record<JointMode, string> = {
   fixed: "Fija",
   rotation: "Rotación libre",
@@ -481,14 +551,12 @@ export default function Home() {
         } catch {}
       }
       connectorCache.set(p.part, cloneConnectors(connectors));
-      let colliders = collisionCache
-        .get(p.part)
-        ?.map((primitive) => ({
-          ...primitive,
-          center: primitive.center.clone(),
-          size: primitive.size?.clone(),
-          rotation: primitive.rotation.clone(),
-        }));
+      let colliders = collisionCache.get(p.part)?.map((primitive) => ({
+        ...primitive,
+        center: primitive.center.clone(),
+        size: primitive.size?.clone(),
+        rotation: primitive.rotation.clone(),
+      }));
       if (!colliders) {
         colliders = approximateCollisionPrimitives(wrapper, p.name, connectors);
         collisionCache.set(
@@ -652,8 +720,19 @@ export default function Home() {
         }
         if (state.debug.connectors)
           for (const connector of piece.connectors) {
-            const color =
-              connector.role === "shaft"
+            const manual = state.manualConnect,
+              selectedNode =
+                manual?.piece === piece && manual.connector === connector;
+            if (
+              manual &&
+              ((piece === manual.piece && !selectedNode) ||
+                (piece !== manual.piece &&
+                  !pairProfile(manual.connector, connector)))
+            )
+              continue;
+            const color = selectedNode
+              ? 0xffee38
+              : connector.role === "shaft"
                 ? connector.kind === "axle"
                   ? 0xa855f7
                   : 0xff8a1f
@@ -667,8 +746,8 @@ export default function Home() {
                 ),
                 volume = new THREE.Mesh(
                   new THREE.CylinderGeometry(
-                    0.065,
-                    0.065,
+                    selectedNode ? 0.13 : 0.065,
+                    selectedNode ? 0.13 : 0.065,
                     connector.length ?? 0.5,
                     10,
                   ),
@@ -691,8 +770,12 @@ export default function Home() {
             } else {
               const point = new THREE.Mesh(
                 connector.kind === "axle"
-                  ? new THREE.OctahedronGeometry(0.105)
-                  : new THREE.SphereGeometry(0.085, 10, 8),
+                  ? new THREE.OctahedronGeometry(selectedNode ? 0.19 : 0.105)
+                  : new THREE.SphereGeometry(
+                      selectedNode ? 0.16 : 0.085,
+                      10,
+                      8,
+                    ),
                 new THREE.MeshBasicMaterial({ color, depthTest: false }),
               );
               point.renderOrder = 41;
@@ -706,7 +789,7 @@ export default function Home() {
             const arrow = new THREE.ArrowHelper(
               connector.axis,
               new THREE.Vector3(),
-              0.35,
+              selectedNode ? 0.7 : 0.35,
               color,
               0.11,
               0.07,
@@ -839,7 +922,12 @@ export default function Home() {
       connections: [],
       connectionModes: new Map<
         string,
-        { mode: JointMode; motorSpeed: number; motorForce: number }
+        {
+          mode: JointMode;
+          motorSpeed: number;
+          motorForce: number;
+          userConfigured: boolean;
+        }
       >(),
       running: false,
       addPart,
@@ -891,6 +979,9 @@ export default function Home() {
       )
         return false;
       const world = worldConnector(host, socket),
+        hostWorldRotation = host.mesh.getWorldQuaternion(
+          new THREE.Quaternion(),
+        ),
         id = `${host.id}:${rod.id}:${profile}`,
         saved = state.connectionModes.get(id),
         mode =
@@ -898,7 +989,8 @@ export default function Home() {
             ? saved.mode
             : defaultMode(profile),
         motorSpeed = saved?.motorSpeed ?? 3,
-        motorForce = saved?.motorForce ?? 80;
+        motorForce = saved?.motorForce ?? 80,
+        userConfigured = saved?.userConfigured ?? false;
       state.connections.push({
         id,
         a: host,
@@ -907,11 +999,56 @@ export default function Home() {
         profile,
         point: world.point.clone(),
         axis: world.axis.clone(),
+        localAxisA: world.axis
+          .clone()
+          .applyQuaternion(hostWorldRotation.invert())
+          .normalize(),
         travel: shaft.length ?? 0.5,
         motorSpeed,
         motorForce,
+        userConfigured,
       });
+      rebalanceSmartDefaults(state, rod);
       return true;
+    };
+    const connectManual = (
+      sourcePiece: Piece,
+      sourceConnector: MeshConnector,
+      targetPiece: Piece,
+      targetConnector: MeshConnector,
+    ) => {
+      const profile = pairProfile(sourceConnector, targetConnector);
+      if (!profile) return false;
+      const sourceWorld = worldConnector(sourcePiece, sourceConnector),
+        targetWorld = worldConnector(targetPiece, targetConnector);
+      let targetAxis = targetWorld.axis.clone();
+      if (sourceWorld.axis.dot(targetAxis) < 0) targetAxis.negate();
+      const alignment = new THREE.Quaternion().setFromUnitVectors(
+        sourceWorld.axis,
+        targetAxis,
+      );
+      sourcePiece.mesh.quaternion.premultiply(alignment).normalize();
+      sourcePiece.mesh.updateMatrixWorld(true);
+      sourcePiece.mesh.position.add(
+        targetWorld.point
+          .clone()
+          .sub(worldConnector(sourcePiece, sourceConnector).point),
+      );
+      sourcePiece.mesh.updateMatrixWorld(true);
+      state.connections = state.connections.filter(
+        (connection) =>
+          connection.a !== sourcePiece && connection.b !== sourcePiece,
+      );
+      rebalanceAllSmartDefaults(state);
+      const socketPiece =
+          sourceConnector.role === "socket" ? sourcePiece : targetPiece,
+        socket =
+          sourceConnector.role === "socket" ? sourceConnector : targetConnector,
+        shaftPiece =
+          sourceConnector.role === "shaft" ? sourcePiece : targetPiece,
+        shaft =
+          sourceConnector.role === "shaft" ? sourceConnector : targetConnector;
+      return addConnection(socketPiece, shaftPiece, socket, shaft);
     };
     const attachRod = (rod: Piece) => {
       rod.mesh.updateMatrixWorld(true);
@@ -927,6 +1064,7 @@ export default function Home() {
       state.connections = state.connections.filter(
         (connection) => connection.a !== rod && connection.b !== rod,
       );
+      rebalanceAllSmartDefaults(state);
       for (const host of state.pieces.filter(
         (part) => part !== rod && !isRod(part),
       ))
@@ -1114,6 +1252,8 @@ export default function Home() {
           target: THREE.Vector3;
           plane: THREE.Plane;
           line: THREE.Line;
+          label: THREE.Sprite;
+          force: number;
         }
       | undefined;
     const cast = (e: { clientX: number; clientY: number }) => {
@@ -1123,6 +1263,25 @@ export default function Home() {
         -((e.clientY - r.top) / r.height) * 2 + 1,
       );
       ray.setFromCamera(pointer, camera);
+    };
+    const nearestScreenConnector = (
+      piece: Piece,
+      e: { clientX: number; clientY: number },
+    ) => {
+      const bounds = renderer.domElement.getBoundingClientRect();
+      return piece.connectors
+        .map((connector) => {
+          const projected = worldConnector(piece, connector)
+              .point.clone()
+              .project(camera),
+            x = bounds.left + ((projected.x + 1) * bounds.width) / 2,
+            y = bounds.top + ((1 - projected.y) * bounds.height) / 2;
+          return {
+            connector,
+            distance: Math.hypot(x - e.clientX, y - e.clientY),
+          };
+        })
+        .sort((a, b) => a.distance - b.distance)[0]?.connector;
     };
     const pieceFrom = (object: THREE.Object3D) => {
       let o: THREE.Object3D | null = object;
@@ -1151,11 +1310,55 @@ export default function Home() {
         return a.clone().lerp(b, t).addScaledVector(side, offset);
       });
     };
+    const makeForceLabel = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 256;
+      canvas.height = 64;
+      const texture = new THREE.CanvasTexture(canvas),
+        label = new THREE.Sprite(
+          new THREE.SpriteMaterial({
+            map: texture,
+            transparent: true,
+            depthTest: false,
+          }),
+        );
+      label.scale.set(1.55, 0.39, 1);
+      label.renderOrder = 61;
+      label.userData = { canvas, texture, lastText: "" };
+      return label;
+    };
+    const paintForceLabel = (label: THREE.Sprite, force: number) => {
+      const text = `${force.toFixed(1)} N`;
+      if (label.userData.lastText === text) return;
+      const canvas = label.userData.canvas as HTMLCanvasElement,
+        texture = label.userData.texture as THREE.CanvasTexture,
+        context = canvas.getContext("2d")!;
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.fillStyle = "rgba(20, 25, 30, .88)";
+      context.beginPath();
+      context.roundRect(4, 4, 248, 56, 18);
+      context.fill();
+      context.strokeStyle = "#ffb327";
+      context.lineWidth = 4;
+      context.stroke();
+      context.fillStyle = "#ffffff";
+      context.font = "700 29px Arial";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText(text, 128, 33);
+      texture.needsUpdate = true;
+      label.userData.lastText = text;
+    };
     const updateSpring = () => {
       if (!spring) return;
       const anchor = spring.piece.mesh.localToWorld(spring.anchor.clone());
       spring.line.geometry.setFromPoints(springPoints(anchor, spring.target));
       spring.line.geometry.attributes.position.needsUpdate = true;
+      spring.label.position
+        .copy(anchor)
+        .lerp(spring.target, 0.5)
+        .add(new THREE.Vector3(0, 0.28, 0));
+      paintForceLabel(spring.label, spring.force);
     };
     const connectedPieces = (start: Piece) => {
       const found = new Set<Piece>([start]),
@@ -1266,6 +1469,44 @@ export default function Home() {
       orbit = e.button === 2 || e.altKey;
       altCandidate = e.altKey && e.button === 0 ? hitPiece : undefined;
       if (orbit) return;
+      if (!state.running && e.ctrlKey && e.button === 0 && hitPiece) {
+        const connector = nearestScreenConnector(hitPiece, e);
+        if (!connector) {
+          setMessage(`${hitPiece.part} no tiene puntos de conexión`);
+          return;
+        }
+        const origin = worldConnector(hitPiece, connector).point,
+          line = new THREE.Line(
+            new THREE.BufferGeometry().setFromPoints([origin, origin]),
+            new THREE.LineBasicMaterial({
+              color: 0xffee38,
+              depthTest: false,
+              transparent: true,
+              opacity: 0.95,
+            }),
+          );
+        line.renderOrder = 60;
+        scene.add(line);
+        state.manualConnect = {
+          piece: hitPiece,
+          connector,
+          cursor: origin.clone(),
+          plane: new THREE.Plane().setFromNormalAndCoplanarPoint(
+            camera.getWorldDirection(new THREE.Vector3()),
+            origin,
+          ),
+          line,
+        };
+        state.selected = hitPiece;
+        state.debug.connectors = true;
+        setSelectedId(hitPiece.id);
+        setDebugViews((current) => ({ ...current, connectors: true }));
+        setMessage(
+          `Connect manual: ${hitPiece.part} · suelta cerca de un punto compatible`,
+        );
+        refreshDebug();
+        return;
+      }
       if (state.running) {
         if (hit && hitPiece && !hitPiece.fixed && hitPiece.body) {
           state.selected = hitPiece;
@@ -1278,9 +1519,11 @@ export default function Home() {
                 linewidth: 2,
               }),
             ),
-            component = connectedPieces(hitPiece);
+            component = connectedPieces(hitPiece),
+            label = makeForceLabel();
           line.renderOrder = 30;
           scene.add(line);
+          scene.add(label);
           component.forEach((p) => {
             if (p.body && !p.fixed) {
               p.body.setLinearDamping(1.2);
@@ -1297,6 +1540,8 @@ export default function Home() {
               hit.point,
             ),
             line,
+            label,
+            force: 0,
           };
           if (state.simLog)
             state.simLog.events.push(
@@ -1313,6 +1558,7 @@ export default function Home() {
         state.connections = state.connections.filter(
           (c) => c.a !== moving && c.b !== moving,
         );
+        rebalanceAllSmartDefaults(state);
         setConnectionRevision((value) => value + 1);
         const ground = ray.intersectObject(floor)[0];
         if (ground)
@@ -1326,12 +1572,29 @@ export default function Home() {
       }
     };
     const move = (e: PointerEvent) => {
+      if (state.manualConnect) {
+        moved = true;
+        cast(e);
+        const origin = worldConnector(
+            state.manualConnect.piece,
+            state.manualConnect.connector,
+          ).point,
+          candidate = ray.ray.at(
+            camera.position.distanceTo(origin),
+            new THREE.Vector3(),
+          );
+        state.manualConnect.cursor.copy(candidate);
+        state.manualConnect.line.geometry.setFromPoints([origin, candidate]);
+        state.manualConnect.line.geometry.attributes.position.needsUpdate = true;
+        return;
+      }
       if (spring) {
         moved = true;
         cast(e);
-        const candidate = new THREE.Vector3();
-        if (ray.ray.intersectPlane(spring.plane, candidate))
-          spring.target.copy(candidate);
+        const anchor = spring.piece.mesh.localToWorld(spring.anchor.clone());
+        spring.target.copy(
+          ray.ray.at(camera.position.distanceTo(anchor), new THREE.Vector3()),
+        );
         updateSpring();
         return;
       }
@@ -1381,6 +1644,45 @@ export default function Home() {
     const up = (e: PointerEvent) => {
       if (canvas.hasPointerCapture(e.pointerId))
         canvas.releasePointerCapture(e.pointerId);
+      if (state.manualConnect) {
+        const draft = state.manualConnect;
+        cast(e);
+        let best:
+          | { piece: Piece; connector: MeshConnector; distance: number }
+          | undefined;
+        for (const piece of state.pieces) {
+          if (piece === draft.piece) continue;
+          for (const connector of piece.connectors) {
+            if (!pairProfile(draft.connector, connector)) continue;
+            const distance = ray.ray.distanceToPoint(
+              worldConnector(piece, connector).point,
+            );
+            if (!best || distance < best.distance)
+              best = { piece, connector, distance };
+          }
+        }
+        const connected =
+          !!best &&
+          best.distance <= 2 &&
+          connectManual(
+            draft.piece,
+            draft.connector,
+            best.piece,
+            best.connector,
+          );
+        scene.remove(draft.line);
+        draft.line.geometry.dispose();
+        (draft.line.material as THREE.Material).dispose();
+        state.manualConnect = undefined;
+        setConnectionRevision((value) => value + 1);
+        setMessage(
+          connected && best
+            ? `Connect manual: ${draft.piece.part} ↔ ${best.piece.part}`
+            : "Connect manual cancelado: no hay un punto compatible a menos de 2 unidades",
+        );
+        refreshDebug();
+        return;
+      }
       if (spring) {
         const released = spring;
         released.component.forEach((p) => {
@@ -1399,6 +1701,9 @@ export default function Home() {
         scene.remove(released.line);
         released.line.geometry.dispose();
         (released.line.material as THREE.Material).dispose();
+        scene.remove(released.label);
+        released.label.material.map?.dispose();
+        released.label.material.dispose();
         spring = undefined;
       }
       if (orbit && !moved && altCandidate) toggleFixed(altCandidate);
@@ -1457,6 +1762,7 @@ export default function Home() {
       state.connections = state.connections.filter(
         (connection) => connection.a !== piece && connection.b !== piece,
       );
+      rebalanceAllSmartDefaults(state);
       state.selected = undefined;
       refreshDebug();
       setSelectedId(null);
@@ -1498,14 +1804,16 @@ export default function Home() {
               }, new THREE.Vector3())
               .multiplyScalar(1 / Math.max(1, dynamic.length)),
             acceleration = delta
-              .multiplyScalar(16)
-              .addScaledVector(averageVelocity, -5);
-          if (acceleration.length() > 30) acceleration.setLength(30);
+              .multiplyScalar(36)
+              .addScaledVector(averageVelocity, -6);
+          if (acceleration.length() > 70) acceleration.setLength(70);
+          let totalForce = 0;
           dynamic.forEach((p) => {
             const mass = Math.max(0.25, p.body!.mass()),
               force = acceleration.clone().multiplyScalar(mass),
               w = p.body!.angvel();
             p.body!.addForce(force, true);
+            totalForce += force.length();
             p.body!.addTorque(
               {
                 x: -w.x * mass * 1.5,
@@ -1520,7 +1828,57 @@ export default function Home() {
                 force.length(),
               );
           });
+          spring.force = totalForce;
+          if (state.simLog)
+            state.simLog.maxSpringForce = Math.max(
+              state.simLog.maxSpringForce,
+              totalForce,
+            );
           updateSpring();
+        }
+        for (const connection of state.connections) {
+          if (
+            (connection.mode !== "linear" &&
+              connection.mode !== "rotation-linear") ||
+            !connection.a.body ||
+            !connection.b.body
+          )
+            continue;
+          const axis = connection.localAxisA
+              .clone()
+              .transformDirection(connection.a.mesh.matrixWorld)
+              .normalize(),
+            velocityA = connection.a.body.linvel(),
+            velocityB = connection.b.body.linvel(),
+            relativeSpeed =
+              (velocityB.x - velocityA.x) * axis.x +
+              (velocityB.y - velocityA.y) * axis.y +
+              (velocityB.z - velocityA.z) * axis.z,
+            damping = connection.mode === "linear" ? 0.42 : 0.18,
+            forceMagnitude = THREE.MathUtils.clamp(
+              relativeSpeed * damping,
+              -1.5,
+              1.5,
+            ),
+            frictionForce = axis.multiplyScalar(forceMagnitude);
+          if (!connection.b.fixed)
+            connection.b.body.addForce(
+              {
+                x: -frictionForce.x,
+                y: -frictionForce.y,
+                z: -frictionForce.z,
+              },
+              true,
+            );
+          if (!connection.a.fixed)
+            connection.a.body.addForce(
+              {
+                x: frictionForce.x,
+                y: frictionForce.y,
+                z: frictionForce.z,
+              },
+              true,
+            );
         }
         state.world.timestep = Math.min(clock.getDelta(), 1 / 60);
         state.world.step();
@@ -1697,6 +2055,7 @@ export default function Home() {
     if (p.lockSprite) s.scene.remove(p.lockSprite);
     s.pieces = s.pieces.filter((x) => x !== p);
     s.connections = s.connections.filter((c) => c.a !== p && c.b !== p);
+    rebalanceAllSmartDefaults(s);
     s.selected = undefined;
     s.refreshDebug();
     setSelectedId(null);
@@ -1979,11 +2338,14 @@ export default function Home() {
     )
       return;
     connection.mode = mode;
+    connection.userConfigured = true;
     state.connectionModes.set(id, {
       mode,
       motorSpeed: connection.motorSpeed,
       motorForce: connection.motorForce,
+      userConfigured: true,
     });
+    rebalanceSmartDefaults(state, connection.b);
     state.refreshDebug();
     setConnectionRevision((value) => value + 1);
     setMessage(`${profileLabel[connection.profile]} · ${modeLabel[mode]}`);
@@ -1997,6 +2359,7 @@ export default function Home() {
       mode: connection.mode,
       motorSpeed,
       motorForce: connection.motorForce,
+      userConfigured: connection.userConfigured,
     });
     setConnectionRevision((value) => value + 1);
     setMessage(`Motor ${motorSpeed.toFixed(1)} rad/s`);
@@ -2010,6 +2373,7 @@ export default function Home() {
       mode: connection.mode,
       motorSpeed: connection.motorSpeed,
       motorForce,
+      userConfigured: connection.userConfigured,
     });
     setConnectionRevision((value) => value + 1);
     setMessage(`Fuerza del motor ${motorForce.toFixed(0)}`);
@@ -2050,6 +2414,7 @@ export default function Home() {
       (connection) =>
         connection.a.part !== piece.part && connection.b.part !== piece.part,
     );
+    rebalanceAllSmartDefaults(state);
     try {
       localStorage.setItem(
         `sim-connectors-v3:${piece.part}`,
@@ -2341,8 +2706,8 @@ export default function Home() {
             : message}
         </div>
         <div className="camera-help">
-          Arrastrar: mover X/Z · Shift+arrastrar: mover Y · Alt+clic: fijar ·
-          Alt+arrastrar/botón derecho: orbitar
+          Arrastrar: mover · Ctrl+arrastrar: Connect manual · Shift: mover Y ·
+          Alt+clic: fijar · Alt+arrastrar/botón derecho: orbitar
         </div>
       </section>
       <aside className="inspector">
