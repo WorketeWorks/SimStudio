@@ -16658,3 +16658,26 @@ Detected multiple renderers concurrently rendering the same context provider. Th
 [2m19:05:44[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.WebGLShadowMap: PCFSoftShadowMap has been deprecated. Using PCFShadowMap instead.
 [2m19:05:44[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.Clock: This module has been deprecated. Please use THREE.Timer instead.
 [2m19:05:44[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.WebGLShadowMap: PCFSoftShadowMap has been deprecated. Using PCFShadowMap instead.
+[2m19:10:16[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:16[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:16[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:16[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:16[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:16[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:16[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:16[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:16[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:16[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:16[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:16[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:16[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:16[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:17[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:17[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:17[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:17[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:17[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:17[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:17[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:17[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
+[2m19:10:17[22m [33m[1m[vite][22m[39m [33m[2m(client)[22m[39m [2m[console.warn] [22mTHREE.BufferGeometry: Buffer size too small for points data. Use .dispose() and create a new geometry.
