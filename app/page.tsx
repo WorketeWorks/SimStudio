@@ -6,7 +6,13 @@ import RAPIER from "@dimforge/rapier3d-compat";
 import { LDrawLoader } from "three/addons/loaders/LDrawLoader.js";
 import { LDrawConditionalLineMaterial } from "three/addons/materials/LDrawConditionalLineMaterial.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { makeLDR, parseLDR, type LDrawPlacement } from "./ldraw";
+import {
+  ldrawToScenePlacement,
+  makeLDR,
+  parseLDR,
+  type LDrawPlacement,
+} from "./ldraw";
+import { extractStudioLDraw } from "./studio-io";
 import {
   approximateCollisionPrimitives,
   detectConnectorHoles,
@@ -189,6 +195,7 @@ type AppState = {
     rotation?: THREE.Quaternion,
   ) => Promise<Piece | null>;
   preloadPart: (part: CatalogPart) => Promise<void>;
+  recolorPart: (piece: Piece, color: number) => Promise<boolean>;
   renderImportPreview: (parts: PreparedImportPlacement[]) => Promise<string>;
   verifyConnections: () => number;
   verifyConnectionsAsync: () => Promise<number>;
@@ -252,16 +259,126 @@ const packagedParts = preloadedCatalog.parts as Record<
   }
 >;
 const colorHex: Record<number, string> = {
-  0: "#1b2a34",
+  0: "#05131d",
   1: "#0055bf",
+  2: "#257a3e",
+  3: "#00838f",
   4: "#c91a09",
+  5: "#c870a0",
+  6: "#583927",
+  7: "#9ba19d",
+  8: "#6d6e5c",
+  9: "#b4d2e3",
+  10: "#4b9f4a",
+  11: "#55a5af",
+  12: "#f2705e",
+  13: "#fc97ac",
   14: "#f2cd37",
   15: "#ffffff",
-  19: "#d6b47c",
+  17: "#c2dab8",
+  18: "#fbe696",
+  19: "#e4cd9e",
+  20: "#c9cae2",
+  22: "#81007b",
+  23: "#2032b0",
+  25: "#fe8a18",
+  26: "#923978",
+  27: "#bbe90b",
+  28: "#958a73",
+  29: "#e4adc8",
+  68: "#f3cf9b",
   70: "#582a12",
   71: "#a0a5a9",
   72: "#6c6e68",
+  73: "#5a93db",
+  74: "#73dca1",
+  77: "#fecccf",
+  78: "#f6d7b3",
+  84: "#cc702a",
+  85: "#3f3691",
+  86: "#7c503a",
+  89: "#4c61db",
+  92: "#d09168",
+  110: "#4354a3",
+  118: "#b3d7d1",
+  191: "#f8bb3d",
+  212: "#86c1e1",
+  216: "#b31004",
+  226: "#fff03a",
+  272: "#0a3463",
+  288: "#184632",
+  308: "#352100",
+  320: "#720e0f",
+  321: "#1498d7",
+  322: "#3ec2dd",
+  323: "#bddcd8",
+  326: "#d9e4a7",
+  330: "#9b9a5a",
+  353: "#ff6d77",
+  379: "#6074a1",
 };
+const ldrawColorNames: Record<number, { es: string; en: string }> = {
+  0: { es: "Negro", en: "Black" },
+  1: { es: "Azul", en: "Blue" },
+  2: { es: "Verde", en: "Green" },
+  3: { es: "Turquesa oscuro", en: "Dark turquoise" },
+  4: { es: "Rojo", en: "Red" },
+  5: { es: "Rosa oscuro", en: "Dark pink" },
+  6: { es: "Marrón", en: "Brown" },
+  7: { es: "Gris claro", en: "Light gray" },
+  8: { es: "Gris oscuro", en: "Dark gray" },
+  9: { es: "Azul claro", en: "Light blue" },
+  10: { es: "Verde brillante", en: "Bright green" },
+  11: { es: "Turquesa claro", en: "Light turquoise" },
+  12: { es: "Salmón", en: "Salmon" },
+  13: { es: "Rosa", en: "Pink" },
+  14: { es: "Amarillo", en: "Yellow" },
+  15: { es: "Blanco", en: "White" },
+  17: { es: "Verde claro", en: "Light green" },
+  18: { es: "Amarillo claro", en: "Light yellow" },
+  19: { es: "Arena", en: "Tan" },
+  20: { es: "Violeta claro", en: "Light violet" },
+  22: { es: "Púrpura", en: "Purple" },
+  23: { es: "Azul violeta", en: "Blue violet" },
+  25: { es: "Naranja", en: "Orange" },
+  26: { es: "Magenta", en: "Magenta" },
+  27: { es: "Lima", en: "Lime" },
+  28: { es: "Arena oscuro", en: "Dark tan" },
+  29: { es: "Rosa brillante", en: "Bright pink" },
+  68: { es: "Naranja muy claro", en: "Very light orange" },
+  70: { es: "Marrón rojizo", en: "Reddish brown" },
+  71: { es: "Gris azulado claro", en: "Light bluish gray" },
+  72: { es: "Gris azulado oscuro", en: "Dark bluish gray" },
+  73: { es: "Azul medio", en: "Medium blue" },
+  74: { es: "Verde medio", en: "Medium green" },
+  77: { es: "Rosa claro", en: "Light pink" },
+  78: { es: "Carne claro", en: "Light flesh" },
+  84: { es: "Carne medio oscuro", en: "Medium dark flesh" },
+  85: { es: "Púrpura oscuro", en: "Dark purple" },
+  86: { es: "Carne oscuro", en: "Dark flesh" },
+  89: { es: "Azul violeta", en: "Blue violet" },
+  92: { es: "Carne", en: "Flesh" },
+  110: { es: "Violeta", en: "Violet" },
+  118: { es: "Aguamarina", en: "Aqua" },
+  191: { es: "Naranja claro brillante", en: "Bright light orange" },
+  212: { es: "Azul claro brillante", en: "Bright light blue" },
+  216: { es: "Óxido", en: "Rust" },
+  226: { es: "Amarillo claro brillante", en: "Bright light yellow" },
+  272: { es: "Azul oscuro", en: "Dark blue" },
+  288: { es: "Verde oscuro", en: "Dark green" },
+  308: { es: "Marrón oscuro", en: "Dark brown" },
+  320: { es: "Rojo oscuro", en: "Dark red" },
+  321: { es: "Azul celeste oscuro", en: "Dark azure" },
+  322: { es: "Azul celeste medio", en: "Medium azure" },
+  323: { es: "Aguamarina claro", en: "Light aqua" },
+  326: { es: "Verde amarillento", en: "Yellowish green" },
+  330: { es: "Verde oliva", en: "Olive green" },
+  353: { es: "Coral", en: "Coral" },
+  379: { es: "Azul arena", en: "Sand blue" },
+};
+const ldrawColorOptions = Object.keys(colorHex)
+  .map(Number)
+  .sort((a, b) => a - b);
 const previewFilter = (color: number) =>
   color === 0
     ? "brightness(.24) contrast(1.25)"
@@ -331,7 +448,7 @@ const translations = {
     mechanism: "Mi mecanismo",
     import: "Importar",
     export: "Exportar",
-    importTitle: "Importar modelo LDraw",
+    importTitle: "Importar modelo LDraw / Studio",
     importReading: "Analizando referencias del archivo…",
     importPalette: "Cargando piezas de la paleta local…",
     importExternal: "Consultando y cargando piezas externas…",
@@ -357,6 +474,10 @@ const translations = {
       "Arrastrar: mover · Ctrl+arrastrar: Connect manual · Shift: mover Y · WASD/flechas: rotar 90° · Alt+clic: fijar · Alt/botón derecho: orbitar",
     properties: "PROPIEDADES",
     piece: "PIEZA",
+    color: "COLOR",
+    changingColor: "Cambiando color de la pieza…",
+    colorChanged: "Color de la pieza actualizado",
+    colorError: "No se pudo cargar ese color para la pieza",
     move: "DESPLAZAR",
     rotateAny: "ROTAR CUALQUIER ÁNGULO",
     pieceJoints: "UNIONES DE ESTA PIEZA",
@@ -427,7 +548,7 @@ const translations = {
     mechanism: "My mechanism",
     import: "Import",
     export: "Export",
-    importTitle: "Import LDraw model",
+    importTitle: "Import LDraw / Studio model",
     importReading: "Analyzing file references…",
     importPalette: "Loading local palette parts…",
     importExternal: "Looking up and loading external parts…",
@@ -453,6 +574,10 @@ const translations = {
       "Drag: move · Ctrl+drag: manual Connect · Shift: move Y · WASD/arrows: rotate 90° · Alt+click: fix · Alt/right button: orbit",
     properties: "PROPERTIES",
     piece: "PART",
+    color: "COLOR",
+    changingColor: "Changing part color…",
+    colorChanged: "Part color updated",
+    colorError: "That color could not be loaded for this part",
     move: "MOVE",
     rotateAny: "ROTATE ANY ANGLE",
     pieceJoints: "JOINTS ON THIS PART",
@@ -920,20 +1045,42 @@ export default function Home() {
       }
       if (sourceColor !== p.color) {
         await primary.materials;
-        const replacement =
-          primary.instance.getMaterial(String(p.color)) ??
-          legacy.instance.getMaterial(String(p.color));
-        if (replacement)
+        const primaryReplacement = primary.instance.getMaterial(String(p.color)),
+          replacement =
+            primaryReplacement ?? legacy.instance.getMaterial(String(p.color)),
+          materialLoader = primaryReplacement ? primary.instance : legacy.instance,
+          materialCaches = materialLoader as LDrawLoader & {
+            edgeMaterialCache: WeakMap<THREE.Material, THREE.Material>;
+            conditionalEdgeMaterialCache: WeakMap<THREE.Material, THREE.Material>;
+          },
+          edgeReplacement = replacement
+            ? materialCaches.edgeMaterialCache.get(replacement)
+            : undefined,
+          conditionalReplacement = edgeReplacement
+            ? materialCaches.conditionalEdgeMaterialCache.get(edgeReplacement)
+            : undefined;
+        if (replacement) {
           exact.traverse((child) => {
-            if (!(child instanceof THREE.Mesh)) return;
-            const replace = (material: THREE.Material) =>
-              String(material.userData.code) === String(sourceColor)
-                ? replacement
-                : material;
+            if (!(child instanceof THREE.Mesh) && !(child instanceof THREE.Line))
+              return;
+            const replace = (material: THREE.Material) => {
+              if (String(material.userData.code) !== String(sourceColor))
+                return material;
+              if (child instanceof THREE.Mesh) return replacement;
+              const conditional = !!(
+                material as THREE.Material & {
+                  isLDrawConditionalLineMaterial?: boolean;
+                }
+              ).isLDrawConditionalLineMaterial;
+              return conditional
+                ? conditionalReplacement ?? edgeReplacement ?? material
+                : edgeReplacement ?? material;
+            };
             child.material = Array.isArray(child.material)
               ? child.material.map(replace)
               : replace(child.material);
           });
+        }
       }
       modelCache.set(key, exact.clone(true));
       return exact;
@@ -1961,6 +2108,36 @@ export default function Home() {
         if (!state.bulkLoading && !state.running) state.rebuildRenderBatches();
       });
     };
+    const recolorPart = async (piece: Piece, color: number) => {
+      if (piece.color === color) return true;
+      const sourceColor = piece.sourceColor ?? piece.color;
+      try {
+        const exact = await loadPartModel({
+          ...piece,
+          color,
+          sourceColor,
+        });
+        prepareModel(exact);
+        exact.traverse((object) => {
+          if (object instanceof THREE.Mesh) {
+            object.castShadow = true;
+            object.receiveShadow = true;
+          }
+        });
+        state.disposeRenderBatches();
+        piece.mesh.clear();
+        piece.mesh.add(exact);
+        piece.color = color;
+        piece.sourceColor = sourceColor;
+        piece.mesh.updateMatrixWorld(true);
+        state.rebuildRenderBatches();
+        state.refreshDebug();
+        return true;
+      } catch {
+        state.rebuildRenderBatches();
+        return false;
+      }
+    };
     const addPart = async (
       p: CatalogPart,
       position: THREE.Vector3,
@@ -2057,6 +2234,7 @@ export default function Home() {
       renderBatchesDirty: false,
       addPart,
       preloadPart,
+      recolorPart,
       renderImportPreview,
       rebuildRenderBatches,
       updateRenderBatches,
@@ -3585,6 +3763,19 @@ export default function Home() {
     s.refreshDebug();
     setSelectedId(p.id);
   };
+  const changeSelectedColor = async (color: number) => {
+    const s = appRef.current,
+      piece = s?.selected;
+    if (!s || !piece || running || piece.color === color) return;
+    setMessage(t.changingColor);
+    const changed = await s.recolorPart(piece, color);
+    setMessage(
+      changed
+        ? `${t.colorChanged} · LDraw ${color}`
+        : `${t.colorError} · LDraw ${color}`,
+    );
+    setSelectedId(piece.id);
+  };
   const remove = () => {
     const s = appRef.current,
       p = s?.selected;
@@ -3813,7 +4004,10 @@ export default function Home() {
       stillActive = () => importTokenRef.current === token;
     setImportDraft(empty);
     try {
-      const rows = parseLDR(await file.text());
+      const source = file.name.toLowerCase().endsWith(".io")
+          ? extractStudioLDraw(await file.arrayBuffer())
+          : await file.text(),
+        rows = parseLDR(source);
       if (!stillActive()) return;
       if (!rows.length) throw new Error("El archivo no contiene piezas LDraw");
       const references = [
@@ -3936,7 +4130,8 @@ export default function Home() {
       );
       if (!stillActive()) return;
       const placements = rows.map((row) => {
-        const [a, b, c, d, e, f, g, h, i] = row.matrix,
+        const converted = ldrawToScenePlacement(row),
+          [a, b, c, d, e, f, g, h, i] = converted.matrix,
           matrix = new THREE.Matrix4().set(
             a,
             b,
@@ -3954,17 +4149,11 @@ export default function Home() {
             0,
             0,
             1,
-          ),
-          flip = new THREE.Matrix4().makeScale(1, -1, 1);
-        matrix.premultiply(flip).multiply(flip);
+          );
         return {
           catalog: catalogFor(row),
           source: row,
-          position: new THREE.Vector3(
-            row.position[0] / 20,
-            -row.position[1] / 20,
-            row.position[2] / 20,
-          ),
+          position: new THREE.Vector3().fromArray(converted.position),
           rotation: new THREE.Quaternion().setFromRotationMatrix(matrix),
         };
       });
@@ -4056,15 +4245,15 @@ export default function Home() {
   const exportModel = () => {
     const s = appRef.current;
     if (!s) return;
-    const flip = new THREE.Matrix4().makeScale(1, -1, 1);
+    const ldrawBasis = new THREE.Matrix4().makeScale(1, -1, -1);
     const lines = s.pieces.map((p) => {
       const r = new THREE.Matrix4().makeRotationFromQuaternion(
         p.mesh.quaternion,
       );
-      r.premultiply(flip).multiply(flip);
+      r.premultiply(ldrawBasis).multiply(ldrawBasis);
       const e = r.elements,
         n = (v: number) => (Math.abs(v) < 1e-8 ? 0 : +v.toFixed(5));
-      return `1 ${p.color} ${n(p.mesh.position.x * 20)} ${n(-p.mesh.position.y * 20)} ${n(p.mesh.position.z * 20)} ${n(e[0])} ${n(e[4])} ${n(e[8])} ${n(e[1])} ${n(e[5])} ${n(e[9])} ${n(e[2])} ${n(e[6])} ${n(e[10])} ${p.modelPart ?? p.part}.dat`;
+      return `1 ${p.color} ${n(p.mesh.position.x * 20)} ${n(-p.mesh.position.y * 20)} ${n(-p.mesh.position.z * 20)} ${n(e[0])} ${n(e[4])} ${n(e[8])} ${n(e[1])} ${n(e[5])} ${n(e[9])} ${n(e[2])} ${n(e[6])} ${n(e[10])} ${p.modelPart ?? p.part}.dat`;
     });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([makeLDR(lines)]));
@@ -4518,7 +4707,7 @@ export default function Home() {
             ref={fileRef}
             type="file"
             hidden
-            accept=".ldr,.mpd"
+            accept=".ldr,.mpd,.io"
             onChange={(e) => {
               const file = e.target.files?.[0];
               e.currentTarget.value = "";
@@ -4546,7 +4735,7 @@ export default function Home() {
           >
             <div className="import-dialog-head">
               <div>
-                <small>LDR / MPD</small>
+                <small>LDR / MPD / IO</small>
                 <h2 id="import-title">{t.importTitle}</h2>
               </div>
               <b>{importDraft.fileName}</b>
@@ -4721,6 +4910,33 @@ export default function Home() {
                 <small>{t.piece} {selected.part}</small>
                 <b>{selected.name}</b>
               </div>
+            </div>
+            <label>{t.color}</label>
+            <div className="piece-color-control">
+              <i
+                style={{
+                  background: colorHex[selected.color] ?? colorHex[71],
+                }}
+              />
+              <select
+                aria-label={t.color}
+                value={selected.color}
+                disabled={running}
+                onChange={(event) =>
+                  void changeSelectedColor(+event.target.value)
+                }
+              >
+                {!ldrawColorOptions.includes(selected.color) && (
+                  <option value={selected.color}>
+                    LDraw {selected.color}
+                  </option>
+                )}
+                {ldrawColorOptions.map((color) => (
+                  <option value={color} key={color}>
+                    {color} · {ldrawColorNames[color]?.[language] ?? `LDraw ${color}`}
+                  </option>
+                ))}
+              </select>
             </div>
             <label>{t.move}</label>
             <div className="control-grid">

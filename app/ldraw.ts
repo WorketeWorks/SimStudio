@@ -5,6 +5,11 @@ export type LDrawPlacement = {
   matrix: [number, number, number, number, number, number, number, number, number];
 };
 
+export type ScenePlacement = {
+  position: [number, number, number];
+  matrix: LDrawPlacement["matrix"];
+};
+
 type ParsedReference = LDrawPlacement & { reference: string };
 
 const identity: LDrawPlacement["matrix"] = [1, 0, 0, 0, 1, 0, 0, 0, 1];
@@ -107,6 +112,39 @@ export function parseLDR(source: string): LDrawPlacement[] {
   };
   expand(firstSection, [0, 0, 0], identity, 16, new Set());
   return result;
+}
+
+/**
+ * LDraw uses Y down. Sim Studio uses Three.js' Y-up, right-handed space and
+ * prepares each part with the equivalent of a 180 degree rotation around X.
+ * Positions and parent rotations must therefore use the same basis change:
+ * C = diag(1, -1, -1), Rscene = C * Rldraw * C.
+ */
+export function ldrawToScenePlacement(
+  placement: LDrawPlacement,
+  unitsPerStud = 20,
+): ScenePlacement {
+  const [x, y, z] = placement.position,
+    [a, b, c, d, e, f, g, h, i] = placement.matrix,
+    clean = (value: number) => (value === 0 ? 0 : value);
+  return {
+    position: [
+      clean(x / unitsPerStud),
+      clean(-y / unitsPerStud),
+      clean(-z / unitsPerStud),
+    ],
+    matrix: [
+      clean(a),
+      clean(-b),
+      clean(-c),
+      clean(-d),
+      clean(e),
+      clean(f),
+      clean(-g),
+      clean(h),
+      clean(i),
+    ],
+  };
 }
 
 export const makeLDR = (lines:string[]) => ["0 FILE sim-studio-model.ldr","0 Sim Studio Physics Build Lab","0 Name: sim-studio-model.ldr","0 !LDRAW_ORG Model",...lines,"0"].join("\r\n");

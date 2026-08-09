@@ -10,7 +10,8 @@
     "build": "vinext build",
     "build:pages": "vite build --config vite.pages.config.ts",
     "start": "vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs",
+    "test": "npm run build && node --test tests/rendered-html.test.mjs && npm run test:import",
+    "test:import": "node --experimental-strip-types --test tests/ldraw-import.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "catalog:precache": "node scripts/precache-default-palette.mjs",
     "db:generate": "drizzle-kit generate"
@@ -18,6 +19,7 @@
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.19.3",
     "drizzle-orm": "0.45.2",
+    "fflate": "^0.7.4",
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "three": "^0.185.1"
