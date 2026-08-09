@@ -98,6 +98,22 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
       length: 0.5,
     },
   ],
+  "32013": [
+    {
+      local: [0, 0, 0],
+      axis: [1, 0, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+    },
+    {
+      local: [0, 0, 1],
+      axis: [0, 0, 1],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.6,
+    },
+  ],
   "32054": [
     {
       local: [1, 0, 0],

@@ -476,7 +476,7 @@ export default function Home() {
     const analyzePart = (wrapper: THREE.Object3D, p: CatalogPart) => {
       let connectors: MeshConnector[] | undefined;
       try {
-        const saved = localStorage.getItem(`sim-connectors-v3:${p.part}`);
+        const saved = localStorage.getItem(`sim-connectors-v4:${p.part}`);
         if (saved)
           connectors = (
             JSON.parse(saved) as {
@@ -539,7 +539,7 @@ export default function Home() {
           connectors = fallbackBeamConnectors(wrapper, p.name);
         try {
           localStorage.setItem(
-            `sim-connectors-v3:${p.part}`,
+            `sim-connectors-v4:${p.part}`,
             JSON.stringify(
               connectors.map((connector) => ({
                 ...connector,
@@ -939,19 +939,6 @@ export default function Home() {
     appRef.current = state;
 
     const isRod = (piece: Piece) => isPinPart(piece) || isAxlePart(piece);
-    const localBounds = (piece: Piece) => objectLocalBounds(piece.mesh);
-    const shaftOf = (rod: Piece) =>
-      rod.connectors.find((connector) => connector.role === "shaft")!;
-    const rodAxisLocal = (rod: Piece) =>
-      shaftOf(rod)?.axis.clone() ?? new THREE.Vector3(1, 0, 0);
-    const rodHalf = (rod: Piece) =>
-      (shaftOf(rod)?.length ??
-        localBounds(rod).getSize(new THREE.Vector3()).length()) / 2;
-    const rodCenterLocal = (rod: Piece) =>
-      shaftOf(rod)?.local.clone() ??
-      localBounds(rod).getCenter(new THREE.Vector3());
-    const rodCenterWorld = (rod: Piece) =>
-      rod.mesh.localToWorld(rodCenterLocal(rod));
     const worldConnector = (host: Piece, connector: MeshConnector) => {
       host.mesh.updateMatrixWorld(true);
       return {
@@ -1052,17 +1039,12 @@ export default function Home() {
     };
     const attachRod = (rod: Piece) => {
       rod.mesh.updateMatrixWorld(true);
-      const rodAxis = rodAxisLocal(rod)
-          .transformDirection(rod.mesh.matrixWorld)
-          .normalize(),
-        center = rodCenterWorld(rod),
-        half = rodHalf(rod),
-        shafts = rod.connectors.filter(
+      const shafts = rod.connectors.filter(
           (connector) => connector.role === "shaft",
         );
       let added = 0;
       state.connections = state.connections.filter(
-        (connection) => connection.a !== rod && connection.b !== rod,
+        (connection) => connection.b !== rod,
       );
       rebalanceAllSmartDefaults(state);
       for (const host of state.pieces.filter((part) => part !== rod))
@@ -1072,18 +1054,20 @@ export default function Home() {
           for (const shaft of shafts) {
             const profile = connectorProfile(shaft, socket);
             if (!profile) continue;
-            const socketWorld = worldConnector(host, socket);
-            if (Math.abs(socketWorld.axis.dot(rodAxis)) < 0.965) continue;
+            const socketWorld = worldConnector(host, socket),
+              shaftWorld = worldConnector(rod, shaft),
+              shaftAxis = shaftWorld.axis;
+            if (Math.abs(socketWorld.axis.dot(shaftAxis)) < 0.965) continue;
             if (shaft.kind === "round") {
-              const shaftWorld = worldConnector(rod, shaft);
               if (shaftWorld.point.distanceTo(socketWorld.point) > 0.18)
                 continue;
             } else {
-              const delta = socketWorld.point.clone().sub(center),
-                along = delta.dot(rodAxis),
+              const half = (shaft.length ?? 0.5) / 2,
+                delta = socketWorld.point.clone().sub(shaftWorld.point),
+                along = delta.dot(shaftAxis),
                 radial = delta
                   .clone()
-                  .addScaledVector(rodAxis, -along)
+                  .addScaledVector(shaftAxis, -along)
                   .length();
               if (radial > 0.16 || Math.abs(along) > half + 0.1) continue;
             }
@@ -1116,28 +1100,26 @@ export default function Home() {
               if (!connectorProfile(shaft, socket)) continue;
               const socketWorld = worldConnector(host, socket),
                 shaftWorld = worldConnector(piece, shaft),
-                axis = rodAxisLocal(piece)
-                  .transformDirection(piece.mesh.matrixWorld)
-                  .normalize();
+                axis = shaftWorld.axis;
               let score: number;
               if (shaft.kind === "round")
                 score = shaftWorld.point.distanceTo(socketWorld.point);
               else {
                 const delta = socketWorld.point
                     .clone()
-                    .sub(rodCenterWorld(piece)),
+                    .sub(shaftWorld.point),
                   along = delta.dot(axis),
                   radial = delta.clone().addScaledVector(axis, -along).length();
-                score = radial + Math.max(0, Math.abs(along) - rodHalf(piece));
+                score =
+                  radial +
+                  Math.max(0, Math.abs(along) - (shaft.length ?? 0.5) / 2);
               }
               if (score < 0.75 && (!best || score < best.score))
                 best = { host, socket, shaft, score };
             }
         if (best) {
           let targetAxis = worldConnector(best.host, best.socket).axis,
-            currentAxis = rodAxisLocal(piece)
-              .transformDirection(piece.mesh.matrixWorld)
-              .normalize();
+            currentAxis = worldConnector(piece, best.shaft).axis;
           if (currentAxis.dot(targetAxis) < 0)
             targetAxis = targetAxis.clone().negate();
           const alignment = new THREE.Quaternion().setFromUnitVectors(
@@ -1148,20 +1130,19 @@ export default function Home() {
           piece.mesh.updateMatrixWorld(true);
           const socketPoint = worldConnector(best.host, best.socket).point;
           if (best.shaft.kind === "round") {
-            const rotated = best.shaft.local
-              .clone()
-              .applyQuaternion(piece.mesh.quaternion);
-            piece.mesh.position.copy(socketPoint).sub(rotated);
+            piece.mesh.position.add(
+              socketPoint.sub(worldConnector(piece, best.shaft).point),
+            );
           } else {
-            const center = rodCenterWorld(piece),
-              along = center.clone().sub(socketPoint).dot(targetAxis),
-              targetCenter = socketPoint
+            const shaftPoint = worldConnector(piece, best.shaft).point,
+              along = shaftPoint.clone().sub(socketPoint).dot(targetAxis),
+              targetShaftPoint = socketPoint
                 .clone()
                 .addScaledVector(targetAxis, along),
-              rotated = rodCenterLocal(piece).applyQuaternion(
+              rotated = best.shaft.local.clone().applyQuaternion(
                 piece.mesh.quaternion,
               );
-            piece.mesh.position.copy(targetCenter).sub(rotated);
+            piece.mesh.position.copy(targetShaftPoint).sub(rotated);
           }
           piece.mesh.updateMatrixWorld(true);
           attachRod(piece);
@@ -1187,25 +1168,23 @@ export default function Home() {
             if (!connectorProfile(shaft, socket)) continue;
             const socketWorld = worldConnector(piece, socket),
               shaftWorld = worldConnector(rod, shaft),
-              axis = rodAxisLocal(rod)
-                .transformDirection(rod.mesh.matrixWorld)
-                .normalize();
+              axis = shaftWorld.axis;
             let score: number;
             if (shaft.kind === "round")
               score = socketWorld.point.distanceTo(shaftWorld.point);
             else {
-              const delta = socketWorld.point.clone().sub(rodCenterWorld(rod)),
+              const delta = socketWorld.point.clone().sub(shaftWorld.point),
                 along = delta.dot(axis),
                 radial = delta.clone().addScaledVector(axis, -along).length();
-              score = radial + Math.max(0, Math.abs(along) - rodHalf(rod));
+              score =
+                radial +
+                Math.max(0, Math.abs(along) - (shaft.length ?? 0.5) / 2);
             }
             if (score < 0.75 && (!best || score < best.score))
               best = { rod, socket, shaft, score };
           }
       if (!best) return;
-      let targetAxis = rodAxisLocal(best.rod)
-          .transformDirection(best.rod.mesh.matrixWorld)
-          .normalize(),
+      let targetAxis = worldConnector(best.rod, best.shaft).axis,
         currentAxis = best.socket.axis
           .clone()
           .transformDirection(piece.mesh.matrixWorld)
@@ -1224,7 +1203,7 @@ export default function Home() {
           worldConnector(best.rod, best.shaft).point.sub(socketPoint),
         );
       else {
-        const delta = rodCenterWorld(best.rod).sub(socketPoint),
+        const delta = worldConnector(best.rod, best.shaft).point.sub(socketPoint),
           perpendicular = delta
             .clone()
             .addScaledVector(targetAxis, -delta.dot(targetAxis));
@@ -1424,6 +1403,7 @@ export default function Home() {
       );
     };
     const down = (e: PointerEvent) => {
+      canvas.focus({ preventScroll: true });
       canvas.setPointerCapture(e.pointerId);
       previous = orbitStart = { x: e.clientX, y: e.clientY };
       moved = false;
@@ -1776,8 +1756,8 @@ export default function Home() {
         return;
       if (state.running || !state.selected) return;
       const piece = state.selected,
-        key = e.key.toLowerCase();
-      if (e.key === "Delete") {
+        code = e.code;
+      if (code === "Delete") {
         e.preventDefault();
         scene.remove(piece.mesh);
         if (piece.lockSprite) scene.remove(piece.lockSprite);
@@ -1794,14 +1774,15 @@ export default function Home() {
         setMessage(`${piece.part} eliminada`);
         return;
       }
+      if (e.repeat) return;
       const rotation =
-        key === "w" || key === "arrowup"
+        code === "KeyW" || code === "ArrowUp"
           ? { axis: "x" as const, angle: -Math.PI / 2 }
-          : key === "s" || key === "arrowdown"
+          : code === "KeyS" || code === "ArrowDown"
             ? { axis: "x" as const, angle: Math.PI / 2 }
-            : key === "a" || key === "arrowleft"
+            : code === "KeyA" || code === "ArrowLeft"
               ? { axis: "y" as const, angle: -Math.PI / 2 }
-              : key === "d" || key === "arrowright"
+              : code === "KeyD" || code === "ArrowRight"
                 ? { axis: "y" as const, angle: Math.PI / 2 }
                 : undefined;
       if (!rotation) return;
@@ -1814,6 +1795,8 @@ export default function Home() {
       setMessage(`${piece.part} rotada 90° · ${rotation.axis.toUpperCase()}`);
     };
     const canvas = renderer.domElement;
+    canvas.tabIndex = 0;
+    canvas.style.outline = "none";
     canvas.addEventListener("pointerdown", down);
     canvas.addEventListener("pointermove", move);
     canvas.addEventListener("pointerup", up);
@@ -1823,7 +1806,7 @@ export default function Home() {
     canvas.addEventListener("drop", drop);
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     window.addEventListener("resize", resize);
-    window.addEventListener("keydown", keydown);
+    window.addEventListener("keydown", keydown, true);
     let frame = 0;
     const clock = new THREE.Clock();
     const animate = () => {
@@ -1978,7 +1961,7 @@ export default function Home() {
     return () => {
       cancelAnimationFrame(frame);
       window.removeEventListener("resize", resize);
-      window.removeEventListener("keydown", keydown);
+      window.removeEventListener("keydown", keydown, true);
       renderer.dispose();
       host.removeChild(canvas);
       appRef.current = null;
@@ -2345,7 +2328,7 @@ export default function Home() {
   const selected = appRef.current?.selected;
   const selectedConnections = selected
     ? (appRef.current?.connections.filter(
-        (connection) => connection.a === selected || connection.b === selected,
+        (connection) => connection.b === selected,
       ) ?? [])
     : [];
   const toggleDebug = (key: keyof DebugFlags) =>
@@ -2448,7 +2431,7 @@ export default function Home() {
     rebalanceAllSmartDefaults(state);
     try {
       localStorage.setItem(
-        `sim-connectors-v3:${piece.part}`,
+        `sim-connectors-v4:${piece.part}`,
         JSON.stringify(connectorData({ ...piece, connectors: normalized })),
       );
     } catch {}
@@ -2788,13 +2771,14 @@ export default function Home() {
               <button onClick={() => rotate("y", -1)}>↺ Y</button>
               <button onClick={() => rotate("z", -1)}>↺ Z</button>
             </div>
-            {(selected.pin || isAxlePart(selected)) && (
+            {selected.connectors.some(
+              (connector) => connector.role === "shaft",
+            ) && (
               <div className="connection-editor">
                 <label>UNIONES DE ESTA PIEZA</label>
                 {selectedConnections.length ? (
                   selectedConnections.map((connection, index) => {
-                    const other =
-                      connection.a === selected ? connection.b : connection.a;
+                    const other = connection.a;
                     return (
                       <div className="connection-card" key={connection.id}>
                         <div>
