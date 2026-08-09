@@ -31,6 +31,7 @@ type CatalogPart = {
   modelPart?: string;
   rawThumb?: boolean;
   geometry?: string;
+  sourceColor?: number;
 };
 type Piece = CatalogPart & {
   id: number;
@@ -155,7 +156,12 @@ type AppState = {
   simStartedMs?: number;
 };
 
-const LDRAW = "https://cdn.jsdelivr.net/gh/pybricks/ldraw@master/";
+// The older pybricks mirror does not contain newer official parts such as
+// 71708. Keep it as a fallback, but use the actively updated mirror first.
+const LDRAW =
+    "https://cdn.jsdelivr.net/gh/remig/ldraw_parts@master/",
+  LEGACY_LDRAW = "https://cdn.jsdelivr.net/gh/pybricks/ldraw@master/",
+  MODEL_LOAD_TIMEOUT = 20_000;
 const packagedParts = preloadedCatalog.parts as Record<
   string,
   {
@@ -720,13 +726,40 @@ export default function Home() {
     floor.receiveShadow = true;
     floor.userData.floor = true;
     scene.add(floor);
-    const loader = new LDrawLoader();
-    loader.setConditionalLineMaterial(LDrawConditionalLineMaterial);
-    loader.setPartsLibraryPath(LDRAW);
-    void loader.preloadMaterials(LDRAW + "LDConfig.ldr");
+    const withTimeout = <T,>(promise: Promise<T>, ms: number, label: string) =>
+        new Promise<T>((resolve, reject) => {
+          const timer = window.setTimeout(
+            () => reject(new Error(`${label} superó ${Math.round(ms / 1000)} s`)),
+            ms,
+          );
+          promise.then(
+            (value) => {
+              window.clearTimeout(timer);
+              resolve(value);
+            },
+            (error) => {
+              window.clearTimeout(timer);
+              reject(error);
+            },
+          );
+        }),
+      makeLoader = (base: string) => {
+        const instance = new LDrawLoader();
+        instance.setConditionalLineMaterial(LDrawConditionalLineMaterial);
+        instance.setPartsLibraryPath(base);
+        const materials = withTimeout(
+          instance.preloadMaterials(base + "LDConfig.ldr"),
+          10_000,
+          "La paleta de materiales LDraw",
+        ).catch(() => undefined);
+        return { instance, materials };
+      },
+      primary = makeLoader(LDRAW),
+      legacy = makeLoader(LEGACY_LDRAW);
     const preloaded = new Set<string>(),
       preloading = new Map<string, Promise<void>>(),
       modelCache = new Map<string, THREE.Object3D>(),
+      sourceModelCache = new Map<string, THREE.Object3D>(),
       connectorCache = new Map<string, MeshConnector[]>(),
       collisionCache = new Map<string, CollisionPrimitive[]>();
     const assetUrl = (path: string) => new URL(path, document.baseURI).href;
@@ -734,14 +767,59 @@ export default function Home() {
       const key = `${p.part}:${p.color}`,
         cached = modelCache.get(key);
       if (cached) return cached.clone(true);
-      let exact: THREE.Object3D | undefined;
-      if (p.geometry)
-        try {
-          exact = await new THREE.ObjectLoader().loadAsync(assetUrl(p.geometry));
-        } catch {}
-      exact ??= await loader.loadAsync(
-        `data:text/plain;charset=utf-8,${encodeURIComponent(modelText(p))}`,
-      );
+      const sourceColor = p.sourceColor ?? p.color,
+        sourceKey = p.geometry
+          ? `asset:${p.geometry}`
+          : `ldraw:${p.modelPart ?? p.part}`;
+      let exact = sourceModelCache.get(sourceKey)?.clone(true);
+      if (!exact) {
+        if (p.geometry)
+          try {
+            exact = await new THREE.ObjectLoader().loadAsync(assetUrl(p.geometry));
+          } catch {}
+        if (!exact) {
+          const source = `data:text/plain;charset=utf-8,${encodeURIComponent(
+            modelText({ ...p, color: sourceColor }),
+          )}`;
+          try {
+            await primary.materials;
+            exact = await withTimeout(
+              primary.instance.loadAsync(source),
+              MODEL_LOAD_TIMEOUT,
+              `La pieza ${p.part}`,
+            );
+          } catch (primaryError) {
+            try {
+              await legacy.materials;
+              exact = await withTimeout(
+                legacy.instance.loadAsync(source),
+                MODEL_LOAD_TIMEOUT,
+                `La pieza ${p.part}`,
+              );
+            } catch {
+              throw primaryError;
+            }
+          }
+        }
+        sourceModelCache.set(sourceKey, exact.clone(true));
+      }
+      if (sourceColor !== p.color) {
+        await primary.materials;
+        const replacement =
+          primary.instance.getMaterial(String(p.color)) ??
+          legacy.instance.getMaterial(String(p.color));
+        if (replacement)
+          exact.traverse((child) => {
+            if (!(child instanceof THREE.Mesh)) return;
+            const replace = (material: THREE.Material) =>
+              String(material.userData.code) === String(sourceColor)
+                ? replacement
+                : material;
+            child.material = Array.isArray(child.material)
+              ? child.material.map(replace)
+              : replace(child.material);
+          });
+      }
       modelCache.set(key, exact.clone(true));
       return exact;
     };
@@ -896,15 +974,91 @@ export default function Home() {
       previewScene.add(light);
       const root = new THREE.Group();
       previewScene.add(root);
-      for (const placement of parts) {
-        const exact = await loadPartModel(placement.catalog);
-        prepareModel(exact);
+      const uniqueCatalogs = [
+          ...new Map(
+            parts.map((placement) => [
+              `${placement.catalog.part}:${placement.catalog.color}`,
+              placement.catalog,
+            ]),
+          ).entries(),
+        ],
+        previewModels = new Map<string, THREE.Object3D>();
+      let previewCursor = 0;
+      await Promise.all(
+        Array.from(
+          { length: Math.min(4, uniqueCatalogs.length) },
+          async () => {
+            while (previewCursor < uniqueCatalogs.length) {
+              const [key, catalog] = uniqueCatalogs[previewCursor++];
+              try {
+                previewModels.set(key, await loadPartModel(catalog));
+              } catch {
+                // A missing part must not keep the entire preview open forever.
+              }
+            }
+          },
+        ),
+      );
+      const detailedPreview = parts.length <= 180,
+        proxyTemplates = new Map<
+          string,
+          {
+            geometry: THREE.BoxGeometry;
+            material: THREE.MeshStandardMaterial;
+            center: THREE.Vector3;
+          }
+        >();
+      if (!detailedPreview)
+        for (const [key, catalog] of uniqueCatalogs) {
+          const source = previewModels.get(key);
+          if (!source) continue;
+          const measured = source.clone(true);
+          prepareModel(measured);
+          const bounds = new THREE.Box3().setFromObject(measured),
+            size = bounds.getSize(new THREE.Vector3()),
+            center = bounds.getCenter(new THREE.Vector3());
+          size.set(
+            Math.max(size.x, 0.08),
+            Math.max(size.y, 0.08),
+            Math.max(size.z, 0.08),
+          );
+          proxyTemplates.set(key, {
+            geometry: new THREE.BoxGeometry(size.x, size.y, size.z),
+            material: new THREE.MeshStandardMaterial({
+              color: colorHex[catalog.color] ?? colorHex[71],
+              roughness: 0.78,
+              metalness: 0,
+            }),
+            center,
+          });
+        }
+      for (let index = 0; index < parts.length; index++) {
+        const placement = parts[index],
+          key = `${placement.catalog.part}:${placement.catalog.color}`,
+          source = previewModels.get(key);
+        if (!source) continue;
         const wrapper = new THREE.Group();
-        wrapper.add(exact);
+        if (detailedPreview) {
+          const exact = source.clone(true);
+          prepareModel(exact);
+          wrapper.add(exact);
+        } else {
+          const template = proxyTemplates.get(key);
+          if (!template) continue;
+          const proxy = new THREE.Mesh(template.geometry, template.material);
+          proxy.position.copy(template.center);
+          wrapper.add(proxy);
+        }
         wrapper.position.copy(placement.position);
         wrapper.quaternion.copy(placement.rotation);
         root.add(wrapper);
+        if (index % 80 === 79)
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => resolve()),
+          );
       }
+      if (!root.children.length)
+        throw new Error("No se pudo cargar ninguna geometría para la vista previa");
       root.updateMatrixWorld(true);
       const box = new THREE.Box3().setFromObject(root),
         center = box.getCenter(new THREE.Vector3()),
@@ -926,6 +1080,10 @@ export default function Home() {
       previewRenderer.render(previewScene, previewCamera);
       const image = previewRenderer.domElement.toDataURL("image/png");
       previewRenderer.dispose();
+      proxyTemplates.forEach((template) => {
+        template.geometry.dispose();
+        template.material.dispose();
+      });
       return image;
     };
     const state = {} as AppState,
@@ -2732,6 +2890,7 @@ export default function Home() {
         try {
           const response = await fetch(
             `/api/parts?refs=${encodeURIComponent(externalReferences.join(","))}`,
+            { signal: AbortSignal.timeout(15_000) },
           );
           if (response.ok) {
             const data = (await response.json()) as { items?: CatalogPart[] };
@@ -2753,7 +2912,8 @@ export default function Home() {
             return {
               ...palette,
               color: row.color,
-              geometry: exactPalette?.geometry,
+              geometry: exactPalette?.geometry ?? palette.geometry,
+              sourceColor: exactPalette?.color ?? palette.color,
             };
           return {
             ...(external ?? {}),
@@ -2761,6 +2921,7 @@ export default function Home() {
             name: external?.name ?? `LDraw ${row.part}`,
             kind: kindFor("", external?.name ?? row.part),
             color: row.color,
+            sourceColor: external?.color ?? 71,
           };
         },
         externalToLoad = externalReferences.map((reference) => {
@@ -2771,6 +2932,7 @@ export default function Home() {
             name: item?.name ?? `LDraw ${reference}`,
             kind: kindFor("", item?.name ?? reference),
             color: item?.color ?? 71,
+            sourceColor: item?.color ?? 71,
           } as CatalogPart;
         });
       await Promise.all(
