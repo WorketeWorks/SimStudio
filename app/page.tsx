@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { LDrawLoader } from "three/addons/loaders/LDrawLoader.js";
@@ -492,9 +499,24 @@ const translations = {
     mapHelp:
       "Las coordenadas son locales a la pieza. Al editar se muestra el mapa y se eliminan las uniones antiguas de esta referencia.",
     addPoint: "+ Punto",
+    duplicateConnector: "Duplicar conector",
+    deleteConnector: "Eliminar conector",
     regenerateMap: "Regenerar automáticamente",
     exportJson: "Exportar JSON",
     importJson: "Importar JSON",
+    collisionMapEditor: "Mapa de colisiones",
+    editCollisionMap: "Editar mapa de colisiones",
+    closeCollisionMap: "Cerrar editor de colisiones",
+    collisionMapHelp:
+      "Las formas usan coordenadas locales. Los cilindros están orientados sobre Y antes de aplicar su rotación.",
+    addBox: "+ Caja",
+    addCylinder: "+ Cilindro",
+    box: "Caja",
+    cylinder: "Cilindro",
+    size: "TAMAÑO X / Y / Z",
+    rotation: "ROTACIÓN X / Y / Z (GRADOS)",
+    radius: "RADIO",
+    halfHeight: "SEMIALTURA",
     hole: "Hueco",
     shaft: "Saliente",
     round: "Redondo",
@@ -593,9 +615,24 @@ const translations = {
     mapHelp:
       "Coordinates are local to the part. Editing displays the map and removes old joints for this part number.",
     addPoint: "+ Point",
+    duplicateConnector: "Duplicate connector",
+    deleteConnector: "Delete connector",
     regenerateMap: "Regenerate automatically",
     exportJson: "Export JSON",
     importJson: "Import JSON",
+    collisionMapEditor: "Collision map",
+    editCollisionMap: "Edit collision map",
+    closeCollisionMap: "Close collision editor",
+    collisionMapHelp:
+      "Shapes use local coordinates. Cylinders are aligned to Y before their rotation is applied.",
+    addBox: "+ Box",
+    addCylinder: "+ Cylinder",
+    box: "Box",
+    cylinder: "Cylinder",
+    size: "SIZE X / Y / Z",
+    rotation: "ROTATION X / Y / Z (DEGREES)",
+    radius: "RADIUS",
+    halfHeight: "HALF HEIGHT",
     hole: "Socket",
     shaft: "Shaft",
     round: "Round",
@@ -793,10 +830,12 @@ function DeferredNumberInput({
 }
 
 export default function Home() {
-  const mountRef = useRef<HTMLDivElement>(null),
+  const studioRef = useRef<HTMLElement>(null),
+    mountRef = useRef<HTMLDivElement>(null),
     fpsRef = useRef<HTMLDivElement>(null),
     fileRef = useRef<HTMLInputElement>(null),
     connectorFileRef = useRef<HTMLInputElement>(null),
+    colliderFileRef = useRef<HTMLInputElement>(null),
     importTokenRef = useRef(0),
     appRef = useRef<AppState | null>(null);
   const [running, setRunning] = useState(false),
@@ -818,10 +857,13 @@ export default function Home() {
   const [, setConnectionRevision] = useState(0);
   const [rotationAngle, setRotationAngle] = useState(15),
     [, setConnectorRevision] = useState(0),
+    [, setColliderRevision] = useState(0),
     [connectionMapOpen, setConnectionMapOpen] = useState(false),
+    [collisionMapOpen, setCollisionMapOpen] = useState(false),
     [importDraft, setImportDraft] = useState<ImportDraft | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">("dark"),
-    [language, setLanguage] = useState<Language>("es");
+    [language, setLanguage] = useState<Language>("es"),
+    [inspectorWidth, setInspectorWidth] = useState(270);
   const t = translations[language],
     modeLabels: Record<JointMode, string> =
       language === "es"
@@ -1179,12 +1221,53 @@ export default function Home() {
         } catch {}
       }
       connectorCache.set(p.part, cloneConnectors(connectors));
-      let colliders = collisionCache.get(p.part)?.map((primitive) => ({
-        ...primitive,
-        center: primitive.center.clone(),
-        size: primitive.size?.clone(),
-        rotation: primitive.rotation.clone(),
-      }));
+      let colliders: CollisionPrimitive[] | undefined;
+      try {
+        const saved = localStorage.getItem(`sim-colliders-v1:${p.part}`);
+        if (saved) {
+          const stored = JSON.parse(saved) as {
+            shape: "box" | "cylinder";
+            center: number[];
+            size?: number[];
+            radius?: number;
+            halfHeight?: number;
+            rotation: number[];
+          }[];
+          if (Array.isArray(stored))
+            colliders = stored
+              .filter(
+                (primitive) =>
+                  (primitive.shape === "box" ||
+                    primitive.shape === "cylinder") &&
+                  primitive.center?.length >= 3 &&
+                  primitive.rotation?.length >= 4,
+              )
+              .map((primitive) => ({
+                shape: primitive.shape,
+                center: new THREE.Vector3().fromArray(primitive.center),
+                size:
+                  primitive.shape === "box" && primitive.size?.length === 3
+                    ? new THREE.Vector3().fromArray(primitive.size)
+                    : undefined,
+                radius:
+                  primitive.shape === "cylinder"
+                    ? Math.max(0.01, primitive.radius ?? 0.5)
+                    : undefined,
+                halfHeight:
+                  primitive.shape === "cylinder"
+                    ? Math.max(0.01, primitive.halfHeight ?? 0.5)
+                    : undefined,
+                rotation: new THREE.Quaternion().fromArray(primitive.rotation),
+              }));
+        }
+      } catch {}
+      if (!colliders)
+        colliders = collisionCache.get(p.part)?.map((primitive) => ({
+          ...primitive,
+          center: primitive.center.clone(),
+          size: primitive.size?.clone(),
+          rotation: primitive.rotation.clone(),
+        }));
       // Corrected connection maps can change the topology used by the compound
       // collider generator (notably small L beams). Do not reuse a collider that
       // was packaged before that corrected map existed.
@@ -3147,6 +3230,8 @@ export default function Home() {
     canvas.addEventListener("drop", drop);
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     window.addEventListener("resize", resize);
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(host);
     window.addEventListener("keydown", keydown, true);
     const maximumFps = 60,
       minimumFrameIntervalMs = 1000 / maximumFps;
@@ -3468,6 +3553,7 @@ export default function Home() {
         cancelAnimationFrame(renderBatchRebuildFrame);
       pendingGpuTimers.forEach(({ query }) => gl.deleteQuery(query));
       window.removeEventListener("resize", resize);
+      resizeObserver.disconnect();
       window.removeEventListener("keydown", keydown, true);
       renderer.dispose();
       host.removeChild(canvas);
@@ -4296,6 +4382,26 @@ export default function Home() {
       `Mapa ${selected.part}: conector eliminado`,
     );
   };
+  const duplicateConnector = (index: number) => {
+    if (!selected || running) return;
+    const next = selected.connectors.map((connector) => ({
+        ...connector,
+        local: connector.local.clone(),
+        axis: connector.axis.clone(),
+      })),
+      source = next[index];
+    if (!source) return;
+    next.splice(index + 1, 0, {
+      ...source,
+      local: source.local.clone(),
+      axis: source.axis.clone(),
+    });
+    commitConnectorMap(
+      selected,
+      next,
+      `Mapa ${selected.part}: conector ${index + 1} duplicado`,
+    );
+  };
   const exportConnectorMap = () => {
     if (!selected) return;
     const payload = {
@@ -4358,6 +4464,203 @@ export default function Home() {
       );
     } finally {
       if (connectorFileRef.current) connectorFileRef.current.value = "";
+    }
+  };
+  const cloneCollider = (primitive: CollisionPrimitive): CollisionPrimitive => ({
+      ...primitive,
+      center: primitive.center.clone(),
+      size: primitive.size?.clone(),
+      rotation: primitive.rotation.clone(),
+    }),
+    colliderData = (colliders: CollisionPrimitive[]) =>
+      colliders.map((primitive) => ({
+        shape: primitive.shape,
+        center: primitive.center.toArray(),
+        size: primitive.size?.toArray(),
+        radius: primitive.radius,
+        halfHeight: primitive.halfHeight,
+        rotation: primitive.rotation.toArray(),
+      }));
+  const commitCollisionMap = (
+    piece: Piece,
+    colliders: CollisionPrimitive[],
+    notice: string,
+  ) => {
+    const state = appRef.current;
+    if (!state || running) return;
+    const normalized = colliders.map(cloneCollider);
+    state.pieces
+      .filter((instance) => instance.part === piece.part)
+      .forEach((instance) => {
+        instance.colliders = normalized.map(cloneCollider);
+      });
+    try {
+      localStorage.setItem(
+        `sim-colliders-v1:${piece.part}`,
+        JSON.stringify(colliderData(normalized)),
+      );
+    } catch {}
+    state.debug.colliders = true;
+    setDebugViews((current) => ({ ...current, colliders: true }));
+    state.refreshDebug();
+    setColliderRevision((value) => value + 1);
+    setMessage(notice);
+  };
+  const addCollider = (shape: CollisionPrimitive["shape"]) => {
+    if (!selected || running) return;
+    const next = selected.colliders.map(cloneCollider);
+    next.push(
+      shape === "box"
+        ? {
+            shape,
+            center: new THREE.Vector3(),
+            size: new THREE.Vector3(1, 1, 1),
+            rotation: new THREE.Quaternion(),
+          }
+        : {
+            shape,
+            center: new THREE.Vector3(),
+            radius: 0.5,
+            halfHeight: 0.5,
+            rotation: new THREE.Quaternion(),
+          },
+    );
+    commitCollisionMap(
+      selected,
+      next,
+      `Mapa ${selected.part}: ${shape === "box" ? "caja" : "cilindro"} añadido`,
+    );
+  };
+  const updateCollider = (
+    index: number,
+    field: "shape" | "center" | "size" | "rotation" | "radius" | "halfHeight",
+    value: string,
+    component = 0,
+  ) => {
+    if (!selected || running) return;
+    const next = selected.colliders.map(cloneCollider),
+      primitive = next[index];
+    if (!primitive) return;
+    if (field === "shape") {
+      primitive.shape = value as CollisionPrimitive["shape"];
+      if (primitive.shape === "box") {
+        primitive.size ??= new THREE.Vector3(1, 1, 1);
+        primitive.radius = undefined;
+        primitive.halfHeight = undefined;
+      } else {
+        primitive.size = undefined;
+        primitive.radius ??= 0.5;
+        primitive.halfHeight ??= 0.5;
+      }
+    } else if (field === "center")
+      primitive.center.setComponent(component, +value || 0);
+    else if (field === "size")
+      primitive.size?.setComponent(component, Math.max(0.01, +value || 0.01));
+    else if (field === "radius")
+      primitive.radius = Math.max(0.01, +value || 0.01);
+    else if (field === "halfHeight")
+      primitive.halfHeight = Math.max(0.01, +value || 0.01);
+    else {
+      const rotation = new THREE.Euler().setFromQuaternion(
+        primitive.rotation,
+        "XYZ",
+      );
+      if (component === 0) rotation.x = THREE.MathUtils.degToRad(+value || 0);
+      else if (component === 1)
+        rotation.y = THREE.MathUtils.degToRad(+value || 0);
+      else rotation.z = THREE.MathUtils.degToRad(+value || 0);
+      primitive.rotation.setFromEuler(rotation).normalize();
+    }
+    commitCollisionMap(
+      selected,
+      next,
+      `Mapa ${selected.part}: collider ${index + 1} actualizado`,
+    );
+  };
+  const removeCollider = (index: number) => {
+    if (!selected || running) return;
+    commitCollisionMap(
+      selected,
+      selected.colliders.filter((_, item) => item !== index),
+      `Mapa ${selected.part}: collider eliminado`,
+    );
+  };
+  const exportCollisionMap = () => {
+    if (!selected) return;
+    const payload = {
+        format: "sim-studio-collision-map",
+        version: 1,
+        part: selected.part,
+        name: selected.name,
+        colliders: colliderData(selected.colliders),
+      },
+      a = document.createElement("a");
+    a.href = URL.createObjectURL(
+      new Blob([JSON.stringify(payload, null, 2)], {
+        type: "application/json",
+      }),
+    );
+    a.download = `${selected.part}-collisions.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+  const importCollisionMap = async (file: File) => {
+    if (!selected || running) return;
+    try {
+      const payload = JSON.parse(await file.text()),
+        rows = Array.isArray(payload) ? payload : payload.colliders;
+      if (!Array.isArray(rows)) throw new Error("Formato incorrecto");
+      const colliders: CollisionPrimitive[] = rows.map(
+        (row: {
+          shape: string;
+          center: number[];
+          size?: number[];
+          radius?: number;
+          halfHeight?: number;
+          rotation?: number[];
+        }) => {
+          if (
+            !["box", "cylinder"].includes(row.shape) ||
+            !Array.isArray(row.center) ||
+            row.center.length < 3
+          )
+            throw new Error("Collider incorrecto");
+          const shape = row.shape as CollisionPrimitive["shape"];
+          if (shape === "box" && (!Array.isArray(row.size) || row.size.length < 3))
+            throw new Error("Tamaño de caja incorrecto");
+          return {
+            shape,
+            center: new THREE.Vector3().fromArray(row.center),
+            size:
+              shape === "box"
+                ? new THREE.Vector3().fromArray(row.size!).max(
+                    new THREE.Vector3(0.01, 0.01, 0.01),
+                  )
+                : undefined,
+            radius:
+              shape === "cylinder" ? Math.max(0.01, row.radius ?? 0.5) : undefined,
+            halfHeight:
+              shape === "cylinder"
+                ? Math.max(0.01, row.halfHeight ?? 0.5)
+                : undefined,
+            rotation:
+              Array.isArray(row.rotation) && row.rotation.length >= 4
+                ? new THREE.Quaternion().fromArray(row.rotation).normalize()
+                : new THREE.Quaternion(),
+          };
+        },
+      );
+      commitCollisionMap(
+        selected,
+        colliders,
+        `Mapa ${selected.part}: ${colliders.length} colliders importados`,
+      );
+    } catch (error) {
+      setMessage(
+        `No se pudo importar el mapa de colisiones: ${error instanceof Error ? error.message : "JSON inválido"}`,
+      );
+    } finally {
+      if (colliderFileRef.current) colliderFileRef.current.value = "";
     }
   };
   const downloadPhysicsLog = () => {
@@ -4523,8 +4826,58 @@ export default function Home() {
           : 4
       : 0;
 
+  const inspectorWidthBounds = () => {
+    const studioWidth =
+      studioRef.current?.clientWidth ??
+      (typeof window === "undefined" ? 1200 : window.innerWidth);
+    return {
+      minimum: 270,
+      maximum: Math.max(270, Math.min(680, studioWidth - 300 - 360)),
+    };
+  };
+  const resizeInspectorBy = (change: number) => {
+    const { minimum, maximum } = inspectorWidthBounds();
+    setInspectorWidth((width) =>
+      Math.min(maximum, Math.max(minimum, width + change)),
+    );
+  };
+  const beginInspectorResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (window.innerWidth <= 950) return;
+    event.preventDefault();
+    const handle = event.currentTarget,
+      pointerId = event.pointerId,
+      startX = event.clientX,
+      startWidth = inspectorWidth;
+    handle.setPointerCapture(pointerId);
+    document.body.classList.add("resizing-inspector");
+    const move = (moveEvent: PointerEvent) => {
+      const { minimum, maximum } = inspectorWidthBounds();
+      setInspectorWidth(
+        Math.min(
+          maximum,
+          Math.max(minimum, startWidth + startX - moveEvent.clientX),
+        ),
+      );
+    };
+    const finish = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      document.body.classList.remove("resizing-inspector");
+      if (handle.hasPointerCapture(pointerId))
+        handle.releasePointerCapture(pointerId);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+  };
+
   return (
-    <main className={`studio ${theme}`}>
+    <main
+      ref={studioRef}
+      className={`studio ${theme}`}
+      style={{ "--inspector-width": `${inspectorWidth}px` } as CSSProperties}
+    >
       <header>
         <div className="brand">
           <span className="mark">S</span>
@@ -4762,6 +5115,39 @@ export default function Home() {
           {t.cameraHelp}
         </div>
       </section>
+      <div
+        className="inspector-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={
+          language === "es"
+            ? "Cambiar el ancho del panel de propiedades"
+            : "Resize the properties panel"
+        }
+        aria-valuemin={270}
+        aria-valuemax={inspectorWidthBounds().maximum}
+        aria-valuenow={Math.round(inspectorWidth)}
+        tabIndex={0}
+        title={
+          language === "es"
+            ? "Arrastra para cambiar el ancho · doble clic para restablecer"
+            : "Drag to resize · double-click to reset"
+        }
+        onPointerDown={beginInspectorResize}
+        onDoubleClick={() => setInspectorWidth(270)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            resizeInspectorBy(20);
+          } else if (event.key === "ArrowRight") {
+            event.preventDefault();
+            resizeInspectorBy(-20);
+          } else if (event.key === "Home") {
+            event.preventDefault();
+            setInspectorWidth(270);
+          }
+        }}
+      />
       <aside className="inspector">
         <div className="panel-title">
           <span>{t.properties}</span>
@@ -4966,14 +5352,31 @@ export default function Home() {
                       <b>#{index + 1}</b>{" "}
                       {connector.role === "socket" ? t.hole : t.shaft} ·{" "}
                       {connector.kind === "round" ? t.round : t.axle}
-                      <button
-                        onClick={(event) => {
-                          event.preventDefault();
-                          removeConnector(index);
-                        }}
-                      >
-                        ×
-                      </button>
+                      <span className="connector-row-actions">
+                        <button
+                          className="duplicate-connector"
+                          aria-label={t.duplicateConnector}
+                          title={t.duplicateConnector}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            duplicateConnector(index);
+                          }}
+                        >
+                          ⧉
+                        </button>
+                        <button
+                          aria-label={t.deleteConnector}
+                          title={t.deleteConnector}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            removeConnector(index);
+                          }}
+                        >
+                          ×
+                        </button>
+                      </span>
                     </summary>
                     <div className="connector-types">
                       <select
@@ -5057,6 +5460,185 @@ export default function Home() {
                     </div>
                   </details>
                 ))}
+              </div>
+            )}
+            <div className="data-row">
+              <span>{t.collisionMapEditor}</span>
+              <b>{selected.colliders.length} formas</b>
+            </div>
+            <button
+              className="map-toggle collision-map-toggle"
+              onClick={() => {
+                const next = !collisionMapOpen;
+                setCollisionMapOpen(next);
+                if (next) {
+                  const state = appRef.current;
+                  if (state) {
+                    state.debug.colliders = true;
+                    state.refreshDebug();
+                  }
+                  setDebugViews((current) => ({
+                    ...current,
+                    colliders: true,
+                  }));
+                }
+              }}
+            >
+              {collisionMapOpen
+                ? t.closeCollisionMap
+                : t.editCollisionMap}
+            </button>
+            {collisionMapOpen && (
+              <div className="map-editor collision-map-editor">
+                <p>{t.collisionMapHelp}</p>
+                <div className="map-actions collision-map-actions">
+                  <button onClick={() => addCollider("box")}>{t.addBox}</button>
+                  <button onClick={() => addCollider("cylinder")}>
+                    {t.addCylinder}
+                  </button>
+                  <button onClick={exportCollisionMap}>{t.exportJson}</button>
+                  <button onClick={() => colliderFileRef.current?.click()}>
+                    {t.importJson}
+                  </button>
+                  <input
+                    ref={colliderFileRef}
+                    hidden
+                    type="file"
+                    accept=".json,application/json"
+                    onChange={(event) =>
+                      event.target.files?.[0] &&
+                      void importCollisionMap(event.target.files[0])
+                    }
+                  />
+                </div>
+                {selected.colliders.map((primitive, index) => {
+                  const rotation = new THREE.Euler().setFromQuaternion(
+                    primitive.rotation,
+                    "XYZ",
+                  );
+                  return (
+                    <details
+                      className="connector-row collision-row"
+                      key={`${index}-${primitive.shape}`}
+                    >
+                      <summary>
+                        <b>#{index + 1}</b>{" "}
+                        {primitive.shape === "box" ? t.box : t.cylinder}
+                        <button
+                          onClick={(event) => {
+                            event.preventDefault();
+                            removeCollider(index);
+                          }}
+                        >
+                          ×
+                        </button>
+                      </summary>
+                      <div className="connector-types">
+                        <select
+                          value={primitive.shape}
+                          onChange={(event) =>
+                            updateCollider(index, "shape", event.target.value)
+                          }
+                        >
+                          <option value="box">{t.box}</option>
+                          <option value="cylinder">{t.cylinder}</option>
+                        </select>
+                      </div>
+                      <label>{t.position}</label>
+                      <div className="vector-fields">
+                        {primitive.center.toArray().map((value, component) => (
+                          <DeferredNumberInput
+                            key={component}
+                            value={value}
+                            onCommit={(nextValue) =>
+                              updateCollider(
+                                index,
+                                "center",
+                                String(nextValue),
+                                component,
+                              )
+                            }
+                          />
+                        ))}
+                      </div>
+                      <label>{t.rotation}</label>
+                      <div className="vector-fields">
+                        {[rotation.x, rotation.y, rotation.z].map(
+                          (value, component) => (
+                            <DeferredNumberInput
+                              key={component}
+                              step={1}
+                              value={THREE.MathUtils.radToDeg(value)}
+                              onCommit={(nextValue) =>
+                                updateCollider(
+                                  index,
+                                  "rotation",
+                                  String(nextValue),
+                                  component,
+                                )
+                              }
+                            />
+                          ),
+                        )}
+                      </div>
+                      {primitive.shape === "box" ? (
+                        <>
+                          <label>{t.size}</label>
+                          <div className="vector-fields">
+                            {(primitive.size ?? new THREE.Vector3(1, 1, 1))
+                              .toArray()
+                              .map((value, component) => (
+                                <DeferredNumberInput
+                                  key={component}
+                                  min={0.01}
+                                  value={value}
+                                  onCommit={(nextValue) =>
+                                    updateCollider(
+                                      index,
+                                      "size",
+                                      String(nextValue),
+                                      component,
+                                    )
+                                  }
+                                />
+                              ))}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="measure-fields">
+                          <label>
+                            {t.radius}
+                            <DeferredNumberInput
+                              min={0.01}
+                              value={primitive.radius ?? 0.5}
+                              onCommit={(nextValue) =>
+                                updateCollider(
+                                  index,
+                                  "radius",
+                                  String(nextValue),
+                                )
+                              }
+                            />
+                          </label>
+                          <label>
+                            {t.halfHeight}
+                            <DeferredNumberInput
+                              min={0.01}
+                              value={primitive.halfHeight ?? 0.5}
+                              onCommit={(nextValue) =>
+                                updateCollider(
+                                  index,
+                                  "halfHeight",
+                                  String(nextValue),
+                                )
+                              }
+                            />
+                          </label>
+                        </div>
+                      )}
+                    </details>
+                  );
+                })}
               </div>
             )}
             <div className="data-row">
