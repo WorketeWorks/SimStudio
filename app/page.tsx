@@ -903,24 +903,10 @@ export default function Home() {
       antialias: true,
       powerPreference: "high-performance",
     }),
-      nativePixelRatio = Math.min(devicePixelRatio, 2),
-      scaleForViewport = () =>
-        THREE.MathUtils.clamp(
-          Math.sqrt(
-            2_200_000 /
-              Math.max(
-                1,
-                host.clientWidth *
-                  host.clientHeight *
-                  nativePixelRatio *
-                  nativePixelRatio,
-              ),
-          ),
-          0.5,
-          1,
-        );
-    let renderScale = scaleForViewport(),
-      healthyFpsWindows = 0;
+      nativePixelRatio = Math.min(devicePixelRatio, 2);
+    let renderScale = 1,
+      healthyFpsWindows = 0,
+      lowFpsWindows = 0;
     renderer.setPixelRatio(nativePixelRatio * renderScale);
     renderer.setSize(host.clientWidth, host.clientHeight);
     renderer.shadowMap.enabled = true;
@@ -1067,11 +1053,19 @@ export default function Home() {
               if (String(material.userData.code) !== String(sourceColor))
                 return material;
               if (child instanceof THREE.Mesh) return replacement;
-              const conditional = !!(
-                material as THREE.Material & {
-                  isLDrawConditionalLineMaterial?: boolean;
-                }
-              ).isLDrawConditionalLineMaterial;
+              // ObjectLoader serializes LDrawConditionalLineMaterial as a plain
+              // ShaderMaterial. Detect it by its required geometry attributes too,
+              // otherwise recoloring turns every conditional edge into a normal
+              // line and exposes the polygon facets of cylinders and curved parts.
+              const conditional =
+                !!(
+                  material as THREE.Material & {
+                    isLDrawConditionalLineMaterial?: boolean;
+                  }
+                ).isLDrawConditionalLineMaterial ||
+                (child.geometry.hasAttribute("control0") &&
+                  child.geometry.hasAttribute("control1") &&
+                  child.geometry.hasAttribute("direction"));
               return conditional
                 ? conditionalReplacement ?? edgeReplacement ?? material
                 : edgeReplacement ?? material;
@@ -1702,9 +1696,9 @@ export default function Home() {
       state.renderBatchItems = [];
       state.renderBatchesDirty = true;
       scene.add(root);
-      let hiddenOriginalLines = 0,
-        hiddenOriginalMeshes = 0,
+      const hiddenOriginalLines = 0,
         outlineBatchCount = 0;
+      let hiddenOriginalMeshes = 0;
       state.renderLineBatchRoot = undefined;
       const materialFingerprint = (material: THREE.Material) => {
         const lineMaterial = material as THREE.Material & {
@@ -1796,114 +1790,15 @@ export default function Home() {
         const template = pieces[0];
         template.mesh.updateMatrixWorld(true);
         const templateMeshes: THREE.Mesh[] = [],
-          templateLines: THREE.Line[] = [],
           meshGroups = new Map<
             string,
             { material: THREE.Material; geometries: THREE.BufferGeometry[] }
-          >(),
-          outlineGroups = new Map<
-            string,
-            {
-              kind: "segments" | "line";
-              material: THREE.Material;
-              geometries: THREE.BufferGeometry[];
-            }
           >();
         template.mesh.traverse((child) => {
           if (child instanceof THREE.Mesh) templateMeshes.push(child);
-          else if (child instanceof THREE.Line) templateLines.push(child);
         });
         if (!templateMeshes.length) return;
         const inverseWrapper = template.mesh.matrixWorld.clone().invert();
-        templateLines.forEach((child) => {
-          const materials = Array.isArray(child.material)
-              ? child.material
-              : [child.material],
-            ranges = Array.isArray(child.material) && child.geometry.groups.length
-              ? child.geometry.groups.map((group) => ({
-                  start: group.start,
-                  count: group.count,
-                  material: materials[group.materialIndex ?? 0],
-                }))
-              : [{
-                  start: 0,
-                  count: child.geometry.index
-                    ? child.geometry.index.count
-                    : child.geometry.getAttribute("position").count,
-                  material: materials[0],
-                }],
-            localTransform = inverseWrapper.clone().multiply(child.matrixWorld);
-          ranges.forEach(({ start, count, material }) => {
-            if (!material || count <= 0) return;
-            const geometry = cloneGeometryRange(child.geometry, start, count),
-              transformAttribute = (name: string, direction = false) => {
-                const attribute = geometry.getAttribute(name);
-                if (!attribute || attribute.itemSize < 3) return;
-                const value = new THREE.Vector3(),
-                  linear = new THREE.Matrix3().setFromMatrix4(localTransform);
-                for (let index = 0; index < attribute.count; index++) {
-                  value.set(
-                    attribute.getX(index),
-                    attribute.getY(index),
-                    attribute.getZ(index),
-                  );
-                  if (direction) value.applyMatrix3(linear);
-                  else value.applyMatrix4(localTransform);
-                  attribute.setXYZ(index, value.x, value.y, value.z);
-                }
-              };
-            geometry.applyMatrix4(localTransform);
-            transformAttribute("control0");
-            transformAttribute("control1");
-            transformAttribute("direction", true);
-            const kind =
-                child instanceof THREE.LineSegments ? "segments" : "line",
-              attributes = Object.entries(geometry.attributes)
-                .map(
-                  ([name, attribute]) =>
-                    `${name}:${attribute.itemSize}:${attribute.normalized}:${attribute.array.constructor.name}`,
-                )
-                .sort()
-                .join("|"),
-              key = `${kind}:${materialFingerprint(material)}:${attributes}`,
-              group = outlineGroups.get(key) ?? {
-                kind,
-                material,
-                geometries: [],
-              };
-            group.geometries.push(geometry);
-            outlineGroups.set(key, group);
-          });
-        });
-        pieces.forEach((piece) => {
-          piece.mesh.traverse((child) => {
-            if (child instanceof THREE.Line && !child.userData.dynamicOutlineBatch) {
-              child.visible = false;
-              hiddenOriginalLines++;
-            }
-          });
-        });
-        outlineGroups.forEach(({ kind, material, geometries }) => {
-          const merged = geometries.length > 1
-              ? mergeGeometries(geometries, false)
-              : undefined,
-            batches = merged ? [merged] : geometries;
-          if (merged) geometries.forEach((geometry) => geometry.dispose());
-          batches.forEach((geometry) => {
-            pieces.forEach((piece) => {
-              const outline =
-                kind === "segments"
-                  ? new THREE.LineSegments(geometry, material)
-                  : new THREE.Line(geometry, material);
-              outline.name = "Sim Studio dynamic LDraw outline";
-              outline.frustumCulled = false;
-              outline.raycast = () => undefined;
-              outline.userData.dynamicOutlineBatch = true;
-              piece.mesh.add(outline);
-              outlineBatchCount++;
-            });
-          });
-        });
         templateMeshes.forEach((child) => {
           const materials = Array.isArray(child.material)
               ? child.material
@@ -1947,34 +1842,9 @@ export default function Home() {
             batches = merged ? [merged] : geometries;
           if (merged) geometries.forEach((geometry) => geometry.dispose());
           batches.forEach((geometry) => {
-            const standard = material as THREE.MeshStandardMaterial,
-              useLightweightPlastic =
-                batchPieces.length > 80 && !!standard.isMeshStandardMaterial,
-              batchMaterial = useLightweightPlastic
-                ? new THREE.MeshPhongMaterial({
-                    name: `${material.name} optimized plastic`,
-                    color: standard.color,
-                    emissive: standard.emissive,
-                    specular: new THREE.Color(0x292929),
-                    shininess: 34,
-                    vertexColors: standard.vertexColors,
-                    flatShading: standard.flatShading,
-                    transparent: standard.transparent,
-                    opacity: standard.opacity,
-                    alphaTest: standard.alphaTest,
-                    side: standard.side,
-                    depthTest: standard.depthTest,
-                    depthWrite: standard.depthWrite,
-                    blending: standard.blending,
-                    fog: standard.fog,
-                    polygonOffset: standard.polygonOffset,
-                    polygonOffsetFactor: standard.polygonOffsetFactor,
-                    polygonOffsetUnits: standard.polygonOffsetUnits,
-                  })
-                : material,
-              instance = new THREE.InstancedMesh(
+            const instance = new THREE.InstancedMesh(
                 geometry,
-                batchMaterial,
+                material,
                 pieces.length,
               );
             instance.name = `${template.part} × ${pieces.length}`;
@@ -1984,7 +1854,7 @@ export default function Home() {
             instance.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
             instance.userData.instancePieces = pieces;
             instance.userData.ownedBatchGeometry = true;
-            instance.userData.ownedBatchMaterial = useLightweightPlastic;
+            instance.userData.ownedBatchMaterial = false;
             root.add(instance);
             state.renderBatchItems.push({
               mesh: instance,
@@ -3185,7 +3055,6 @@ export default function Home() {
     const resize = () => {
       camera.aspect = host.clientWidth / host.clientHeight;
       camera.updateProjectionMatrix();
-      renderScale = Math.min(renderScale, scaleForViewport());
       state.renderScale = renderScale;
       renderer.setPixelRatio(nativePixelRatio * renderScale);
       renderer.setSize(host.clientWidth, host.clientHeight);
@@ -3266,8 +3135,11 @@ export default function Home() {
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     window.addEventListener("resize", resize);
     window.addEventListener("keydown", keydown, true);
+    const maximumFps = 60,
+      minimumFrameIntervalMs = 1000 / maximumFps;
     let frame = 0,
       lastFrameStarted = performance.now(),
+      lastAnimationFrame = lastFrameStarted,
       fpsWindowStarted = lastFrameStarted,
       fpsFrames = 0,
       previousFrameWorkMs = 0;
@@ -3276,8 +3148,12 @@ export default function Home() {
       sample: FramePerformanceSample;
     }[] = [];
     const clock = new THREE.Clock();
-    const animate = () => {
+    const animate = (animationFrameTime: number) => {
       frame = requestAnimationFrame(animate);
+      const animationInterval = animationFrameTime - lastAnimationFrame;
+      if (animationInterval < minimumFrameIntervalMs) return;
+      lastAnimationFrame =
+        animationFrameTime - (animationInterval % minimumFrameIntervalMs);
       const frameStarted = performance.now(),
         frameIntervalMs = frameStarted - lastFrameStarted;
       lastFrameStarted = frameStarted;
@@ -3308,16 +3184,24 @@ export default function Home() {
         const fps = (fpsFrames * 1000) / (frameStarted - fpsWindowStarted),
           counter = fpsRef.current;
         let nextScale = renderScale;
-        if (fps < 48) {
+        if (fps < 15) {
           healthyFpsWindows = 0;
-          nextScale = Math.max(0.5, renderScale - 0.1);
-        } else if (fps > 58) {
+          lowFpsWindows++;
+          if (lowFpsWindows >= 2) {
+            nextScale = Math.max(0.5, renderScale - 0.1);
+            lowFpsWindows = 0;
+          }
+        } else if (fps > 30) {
+          lowFpsWindows = 0;
           healthyFpsWindows++;
           if (healthyFpsWindows >= 4) {
             nextScale = Math.min(1, renderScale + 0.05);
             healthyFpsWindows = 0;
           }
-        } else healthyFpsWindows = 0;
+        } else {
+          healthyFpsWindows = 0;
+          lowFpsWindows = 0;
+        }
         if (Math.abs(nextScale - renderScale) > 0.001) {
           renderScale = nextScale;
           state.renderScale = renderScale;
@@ -3326,7 +3210,7 @@ export default function Home() {
         }
         if (counter) {
           counter.textContent = `${Math.round(fps)} FPS · ${(1000 / Math.max(fps, 0.1)).toFixed(1)} ms · ${Math.round(renderScale * 100)}%`;
-          counter.dataset.level = fps < 25 ? "low" : fps < 50 ? "medium" : "high";
+          counter.dataset.level = fps < 15 ? "low" : fps < 40 ? "medium" : "high";
         }
         fpsWindowStarted = frameStarted;
         fpsFrames = 0;
@@ -3564,7 +3448,7 @@ export default function Home() {
         trace.cursor = (trace.cursor + 1) % trace.samples.length;
       }
     };
-    animate();
+    frame = requestAnimationFrame(animate);
     return () => {
       cancelAnimationFrame(frame);
       if (renderBatchRebuildFrame)
@@ -4128,7 +4012,18 @@ export default function Home() {
     s.pendingPlacement = undefined;
     pieces.forEach((piece) => {
       piece.mesh.visible = true;
+      piece.mesh.updateMatrixWorld(true);
     });
+    const modelBounds = new THREE.Box3();
+    pieces.forEach((piece) => modelBounds.expandByObject(piece.mesh));
+    const groundY = s.grid.position.y;
+    if (!modelBounds.isEmpty() && modelBounds.min.y < groundY) {
+      const lift = groundY - modelBounds.min.y;
+      pieces.forEach((piece) => {
+        piece.mesh.position.y += lift;
+        piece.mesh.updateMatrixWorld(true);
+      });
+    }
     s.rebuildRenderBatches();
     let connections = s.connections.length;
     if (AUTO_CONNECTIONS_ENABLED) {
