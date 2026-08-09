@@ -128,6 +128,7 @@ type FramePerformanceSample = {
   worldStepMs: number;
   syncMs: number;
   physicsLogMs: number;
+  connectionScanMs: number;
   batchMs: number;
   debugMs: number;
   locksMs: number;
@@ -191,6 +192,7 @@ type AppState = {
   largeSimulation?: boolean;
   performanceTrace: PerformanceTrace;
   pendingInputMs: number;
+  pendingConnectionMs: number;
   pendingPlacement?: {
     pieces: Piece[];
     offsets: THREE.Vector3[];
@@ -1668,6 +1670,7 @@ export default function Home() {
         totalFrames: 0,
       },
       pendingInputMs: 0,
+      pendingConnectionMs: 0,
       renderBatchItems: [],
       addPart,
       preloadPart,
@@ -1697,23 +1700,26 @@ export default function Home() {
       rod: Piece,
       socket: MeshConnector,
       shaft: MeshConnector,
+      preparedSocket?: {
+        point: THREE.Vector3;
+        axis: THREE.Vector3;
+        localAxisA: THREE.Vector3;
+      },
     ) => {
       const profile = connectorProfile(shaft, socket);
       if (
         !profile ||
-        state.connections.some(
-          (connection) =>
-            connection.a === host &&
-            connection.b === rod &&
-            connection.socket === socket &&
-            connection.shaft === shaft,
-        )
+        (!state.bulkConnecting &&
+          state.connections.some(
+            (connection) =>
+              connection.a === host &&
+              connection.b === rod &&
+              connection.socket === socket &&
+              connection.shaft === shaft,
+          ))
       )
         return false;
-      const world = worldConnector(host, socket),
-        hostWorldRotation = host.mesh.getWorldQuaternion(
-          new THREE.Quaternion(),
-        ),
+      const world = preparedSocket ?? worldConnector(host, socket),
         socketIndex = host.connectors.indexOf(socket),
         shaftIndex = rod.connectors.indexOf(shaft),
         id = `${host.id}:${socketIndex}:${rod.id}:${shaftIndex}:${profile}`,
@@ -1735,10 +1741,14 @@ export default function Home() {
         profile,
         point: world.point.clone(),
         axis: world.axis.clone(),
-        localAxisA: world.axis
-          .clone()
-          .applyQuaternion(hostWorldRotation.invert())
-          .normalize(),
+        localAxisA:
+          preparedSocket?.localAxisA.clone() ??
+          world.axis
+            .clone()
+            .applyQuaternion(
+              host.mesh.getWorldQuaternion(new THREE.Quaternion()).invert(),
+            )
+            .normalize(),
         travel: shaft.length ?? 0.5,
         motorSpeed,
         motorForce,
@@ -1835,6 +1845,8 @@ export default function Home() {
       host: Piece;
       socket: MeshConnector;
       point: THREE.Vector3;
+      axis: THREE.Vector3;
+      localAxisA: THREE.Vector3;
     };
     const connectionCellSize = 0.45,
       connectionCell = (point: THREE.Vector3) =>
@@ -1846,10 +1858,20 @@ export default function Home() {
           host.connectors
             .filter((connector) => connector.role === "socket")
             .forEach((socket) => {
-              const point = worldConnector(host, socket).point,
+              const point = socket.local.clone().applyMatrix4(host.mesh.matrixWorld),
+                axis = socket.axis
+                  .clone()
+                  .transformDirection(host.mesh.matrixWorld)
+                  .normalize(),
                 key = connectionCell(point),
                 entries = grid.get(key) ?? [];
-              entries.push({ host, socket, point });
+              entries.push({
+                host,
+                socket,
+                point,
+                axis,
+                localAxisA: socket.axis.clone().normalize(),
+              });
               grid.set(key, entries);
             });
         });
@@ -1878,7 +1900,13 @@ export default function Home() {
         for (const shaft of shaftPiece.connectors.filter(
           (connector) => connector.role === "shaft",
         )) {
-          const shaftWorld = worldConnector(shaftPiece, shaft),
+          const shaftWorld = {
+              point: shaft.local.clone().applyMatrix4(shaftPiece.mesh.matrixWorld),
+              axis: shaft.axis
+                .clone()
+                .transformDirection(shaftPiece.mesh.matrixWorld)
+                .normalize(),
+            },
             candidates = new Set<IndexedSocket>();
           if (shaft.kind === "round")
             nearbySockets(grid, shaftWorld.point, candidates);
@@ -1894,12 +1922,30 @@ export default function Home() {
                 candidates,
               );
           }
-          candidates.forEach(({ host, socket }) => {
-            if (
-              host !== shaftPiece &&
-              connectorsOverlap(host, socket, shaftPiece, shaft)
-            )
-              addConnection(host, shaftPiece, socket, shaft);
+          candidates.forEach((candidate) => {
+            const { host, socket, point, axis, localAxisA } = candidate,
+              profile = connectorProfile(shaft, socket);
+            if (!profile || host === shaftPiece) return;
+            if (Math.abs(axis.dot(shaftWorld.axis)) < 0.965) return;
+            let overlaps: boolean;
+            if (shaft.kind === "round")
+              overlaps = shaftWorld.point.distanceTo(point) <= 0.18;
+            else {
+              const half = (shaft.length ?? 0.5) / 2,
+                delta = point.clone().sub(shaftWorld.point),
+                along = delta.dot(shaftWorld.axis),
+                radial = delta
+                  .clone()
+                  .addScaledVector(shaftWorld.axis, -along)
+                  .length();
+              overlaps = radial <= 0.16 && Math.abs(along) <= half + 0.1;
+            }
+            if (overlaps)
+              addConnection(host, shaftPiece, socket, shaft, {
+                point,
+                axis,
+                localAxisA,
+              });
           });
         }
       },
@@ -1909,8 +1955,9 @@ export default function Home() {
         setConnectionRevision((value) => value + 1);
         refreshDebug();
         return state.connections.length;
-      };
+    };
     const verifyConnections = () => {
+      const started = performance.now();
       state.connections = [];
       state.bulkConnecting = true;
       const grid = buildSocketGrid();
@@ -1919,21 +1966,33 @@ export default function Home() {
           piece.connectors.some((connector) => connector.role === "shaft"),
         )
         .forEach((piece) => scanShaftPiece(piece, grid));
-      return finishConnectionScan();
+      const result = finishConnectionScan();
+      state.pendingConnectionMs += performance.now() - started;
+      return result;
     };
     const verifyConnectionsAsync = async () => {
+      let operationStarted = performance.now();
       state.connections = [];
       state.bulkConnecting = true;
       const grid = buildSocketGrid(),
         shafts = state.pieces.filter((piece) =>
           piece.connectors.some((connector) => connector.role === "shaft"),
         );
+      state.pendingConnectionMs += performance.now() - operationStarted;
+      let sliceStarted = performance.now();
       for (let index = 0; index < shafts.length; index++) {
+        operationStarted = performance.now();
         scanShaftPiece(shafts[index], grid);
-        if (index % 12 === 11)
+        state.pendingConnectionMs += performance.now() - operationStarted;
+        if (performance.now() - sliceStarted >= 6) {
           await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          sliceStarted = performance.now();
+        }
       }
-      return finishConnectionScan();
+      operationStarted = performance.now();
+      const result = finishConnectionScan();
+      state.pendingConnectionMs += performance.now() - operationStarted;
+      return result;
     };
     state.verifyConnections = verifyConnections;
     state.verifyConnectionsAsync = verifyConnectionsAsync;
@@ -2935,6 +2994,7 @@ export default function Home() {
           worldStepMs,
           syncMs,
           physicsLogMs,
+          connectionScanMs: state.pendingConnectionMs,
           batchMs,
           debugMs,
           locksMs,
@@ -2947,6 +3007,7 @@ export default function Home() {
           triangles: renderer.info.render.triangles,
         };
       state.pendingInputMs = 0;
+      state.pendingConnectionMs = 0;
       trace.totalFrames++;
       if (trace.samples.length < 600) trace.samples.push(sample);
       else {
@@ -3799,6 +3860,7 @@ export default function Home() {
         "worldStepMs",
         "syncMs",
         "physicsLogMs",
+        "connectionScanMs",
         "batchMs",
         "debugMs",
         "locksMs",
@@ -3831,6 +3893,7 @@ export default function Home() {
         "worldStepMs",
         "syncMs",
         "physicsLogMs",
+        "connectionScanMs",
         "batchMs",
         "debugMs",
         "locksMs",
