@@ -5,6 +5,7 @@ import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { LDrawLoader } from "three/addons/loaders/LDrawLoader.js";
 import { LDrawConditionalLineMaterial } from "three/addons/materials/LDrawConditionalLineMaterial.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { makeLDR, parseLDR, type LDrawPlacement } from "./ldraw";
 import {
   approximateCollisionPrimitives,
@@ -44,6 +45,12 @@ type Piece = CatalogPart & {
   lockSprite?: THREE.Sprite;
   body?: RAPIER.RigidBody;
   physicsBase?: THREE.Quaternion;
+  renderBatched?: boolean;
+};
+type RenderBatchItem = {
+  mesh: THREE.InstancedMesh;
+  pieces: Piece[];
+  localMatrix: THREE.Matrix4;
 };
 type PreparedImportPlacement = {
   catalog: CatalogPart;
@@ -121,6 +128,7 @@ type FramePerformanceSample = {
   worldStepMs: number;
   syncMs: number;
   physicsLogMs: number;
+  batchMs: number;
   debugMs: number;
   locksMs: number;
   renderMs: number;
@@ -172,7 +180,14 @@ type AppState = {
   preloadPart: (part: CatalogPart) => Promise<void>;
   renderImportPreview: (parts: PreparedImportPlacement[]) => Promise<string>;
   verifyConnections: () => number;
+  verifyConnectionsAsync: () => Promise<number>;
+  rebuildRenderBatches: (pieces?: Piece[]) => void;
+  updateRenderBatches: () => void;
+  disposeRenderBatches: () => void;
+  renderBatchRoot?: THREE.Group;
+  renderBatchItems: RenderBatchItem[];
   bulkLoading?: boolean;
+  bulkConnecting?: boolean;
   largeSimulation?: boolean;
   performanceTrace: PerformanceTrace;
   pendingInputMs: number;
@@ -631,6 +646,7 @@ function DeferredNumberInput({
 
 export default function Home() {
   const mountRef = useRef<HTMLDivElement>(null),
+    fpsRef = useRef<HTMLDivElement>(null),
     fileRef = useRef<HTMLInputElement>(null),
     connectorFileRef = useRef<HTMLInputElement>(null),
     importTokenRef = useRef(0),
@@ -803,6 +819,80 @@ export default function Home() {
       connectorCache = new Map<string, MeshConnector[]>(),
       collisionCache = new Map<string, CollisionPrimitive[]>();
     const assetUrl = (path: string) => new URL(path, document.baseURI).href;
+    const optimizeLDrawModel = (source: THREE.Object3D) => {
+      source.updateMatrixWorld(true);
+      const inverseRoot = source.matrixWorld.clone().invert(),
+        groups = new Map<
+          string,
+          {
+            kind: "mesh" | "segments" | "line";
+            material: THREE.Material;
+            geometries: THREE.BufferGeometry[];
+          }
+        >();
+      source.traverse((child) => {
+        const isMesh = child instanceof THREE.Mesh,
+          isSegments = child instanceof THREE.LineSegments,
+          isLine = child instanceof THREE.Line;
+        if ((!isMesh && !isSegments && !isLine) || !("geometry" in child))
+          return;
+        const renderable = child as THREE.Mesh | THREE.LineSegments | THREE.Line,
+          material = renderable.material;
+        if (Array.isArray(material)) return;
+        const geometry = renderable.geometry.clone(),
+          transform = inverseRoot.clone().multiply(child.matrixWorld),
+          transformAttribute = (name: string, direction = false) => {
+            const attribute = geometry.getAttribute(name);
+            if (!attribute || attribute.itemSize < 3) return;
+            const value = new THREE.Vector3(),
+              linear = new THREE.Matrix3().setFromMatrix4(transform);
+            for (let index = 0; index < attribute.count; index++) {
+              value.set(attribute.getX(index), attribute.getY(index), attribute.getZ(index));
+              if (direction) value.applyMatrix3(linear);
+              else value.applyMatrix4(transform);
+              attribute.setXYZ(index, value.x, value.y, value.z);
+            }
+            attribute.needsUpdate = true;
+          };
+        geometry.applyMatrix4(transform);
+        // Conditional LDraw lines use custom position attributes which Three.js
+        // does not transform from BufferGeometry.applyMatrix4().
+        transformAttribute("control0");
+        transformAttribute("control1");
+        transformAttribute("direction", true);
+        const kind = isMesh ? "mesh" : isSegments ? "segments" : "line",
+          attributes = Object.entries(geometry.attributes)
+            .map(
+              ([name, attribute]) =>
+                `${name}:${attribute.itemSize}:${attribute.normalized}:${attribute.array.constructor.name}`,
+            )
+            .sort()
+            .join("|"),
+          key = `${kind}:${material.uuid}:${geometry.index ? geometry.index.array.constructor.name : "none"}:${attributes}`,
+          group = groups.get(key) ?? { kind, material, geometries: [] };
+        group.geometries.push(geometry);
+        groups.set(key, group);
+      });
+      if (!groups.size) return source;
+      const optimized = new THREE.Group();
+      optimized.name = source.name;
+      optimized.userData = { ...source.userData, optimizedLDraw: true };
+      groups.forEach(({ kind, material, geometries }) => {
+        const geometry =
+          geometries.length === 1
+            ? geometries[0]
+            : mergeGeometries(geometries, false) ?? geometries[0];
+        if (geometry !== geometries[0]) geometries.forEach((item) => item.dispose());
+        let renderable: THREE.Object3D;
+        if (kind === "mesh") renderable = new THREE.Mesh(geometry, material);
+        else if (kind === "segments")
+          renderable = new THREE.LineSegments(geometry, material);
+        else renderable = new THREE.Line(geometry, material);
+        renderable.userData.optimizedLDraw = true;
+        optimized.add(renderable);
+      });
+      return optimized;
+    };
     const loadPartModel = async (p: CatalogPart) => {
       const key = `${p.part}:${p.color}`,
         cached = modelCache.get(key);
@@ -841,6 +931,7 @@ export default function Home() {
             }
           }
         }
+        exact = optimizeLDrawModel(exact);
         sourceModelCache.set(sourceKey, exact.clone(true));
       }
       if (sourceColor !== p.color) {
@@ -1395,6 +1486,110 @@ export default function Home() {
         }
       updateDebug();
     };
+    const disposeRenderBatches = () => {
+      if (state.renderBatchRoot) {
+        scene.remove(state.renderBatchRoot);
+        state.renderBatchRoot.clear();
+        state.renderBatchRoot = undefined;
+      }
+      state.renderBatchItems = [];
+      state.pieces?.forEach((piece) => {
+        piece.renderBatched = false;
+        piece.mesh.traverse((child) => {
+          if (child instanceof THREE.Mesh || child instanceof THREE.Line)
+            child.visible = true;
+          if (child instanceof THREE.Mesh) child.castShadow = true;
+        });
+      });
+    };
+    const updateRenderBatches = () => {
+      const matrix = new THREE.Matrix4();
+      for (const batch of state.renderBatchItems ?? []) {
+        batch.pieces.forEach((piece, index) => {
+          piece.mesh.updateMatrixWorld(true);
+          matrix.multiplyMatrices(piece.mesh.matrixWorld, batch.localMatrix);
+          batch.mesh.setMatrixAt(index, matrix);
+        });
+        batch.mesh.instanceMatrix.needsUpdate = true;
+      }
+    };
+    const rebuildRenderBatches = (batchPieces = state.pieces) => {
+      disposeRenderBatches();
+      if (batchPieces.length < 120) return;
+      const root = new THREE.Group();
+      root.name = "Sim Studio instanced LDraw batches";
+      state.renderBatchRoot = root;
+      state.renderBatchItems = [];
+      scene.add(root);
+      const groups = new Map<string, Piece[]>();
+      batchPieces.forEach((piece) => {
+        // Outlines are useful for small builds, but hundreds of independent
+        // LDraw line objects overwhelm the renderer in large assemblies.
+        piece.mesh.traverse((child) => {
+          if (child instanceof THREE.Line) child.visible = false;
+          if (child instanceof THREE.Mesh) child.castShadow = false;
+        });
+        const key = `${piece.geometry ?? piece.modelPart ?? piece.part}:${piece.color}`,
+          group = groups.get(key) ?? [];
+        group.push(piece);
+        groups.set(key, group);
+      });
+      groups.forEach((pieces) => {
+        if (pieces.length < 2) return;
+        const template = pieces[0];
+        template.mesh.updateMatrixWorld(true);
+        const templateMeshes: THREE.Mesh[] = [];
+        template.mesh.traverse((child) => {
+          if (child instanceof THREE.Mesh && !Array.isArray(child.material))
+            templateMeshes.push(child);
+        });
+        if (!templateMeshes.length) return;
+        const inverseWrapper = template.mesh.matrixWorld.clone().invert(),
+          eligibleIndices: number[] = [];
+        templateMeshes.forEach((child, meshIndex) => {
+          const compatible = pieces.every((piece) => {
+            const meshes: THREE.Mesh[] = [];
+            piece.mesh.traverse((candidate) => {
+              if (candidate instanceof THREE.Mesh && !Array.isArray(candidate.material))
+                meshes.push(candidate);
+            });
+            return !!meshes[meshIndex];
+          });
+          if (!compatible) return;
+          const instance = new THREE.InstancedMesh(
+            child.geometry,
+            child.material as THREE.Material,
+            pieces.length,
+          );
+          instance.name = `${template.part} × ${pieces.length}`;
+          instance.castShadow = false;
+          instance.receiveShadow = true;
+          instance.frustumCulled = false;
+          instance.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+          instance.userData.instancePieces = pieces;
+          root.add(instance);
+          state.renderBatchItems.push({
+            mesh: instance,
+            pieces,
+            localMatrix: inverseWrapper.clone().multiply(child.matrixWorld),
+          });
+          eligibleIndices.push(meshIndex);
+        });
+        if (!eligibleIndices.length) return;
+        pieces.forEach((piece) => {
+          const meshes: THREE.Mesh[] = [];
+          piece.mesh.traverse((child) => {
+            if (child instanceof THREE.Mesh && !Array.isArray(child.material))
+              meshes.push(child);
+          });
+          eligibleIndices.forEach((index) => {
+            if (meshes[index]) meshes[index].visible = false;
+          });
+          piece.renderBatched = true;
+        });
+      });
+      updateRenderBatches();
+    };
     const addPart = async (
       p: CatalogPart,
       position: THREE.Vector3,
@@ -1473,9 +1668,13 @@ export default function Home() {
         totalFrames: 0,
       },
       pendingInputMs: 0,
+      renderBatchItems: [],
       addPart,
       preloadPart,
       renderImportPreview,
+      rebuildRenderBatches,
+      updateRenderBatches,
+      disposeRenderBatches,
       debug: { colliders: false, connectors: false, physics: false },
       refreshDebug,
       updateDebug,
@@ -1545,7 +1744,7 @@ export default function Home() {
         motorForce,
         userConfigured,
       });
-      rebalanceSmartDefaults(state, rod);
+      if (!state.bulkConnecting) rebalanceSmartDefaults(state, rod);
       return true;
     };
     const connectManual = (
@@ -1632,28 +1831,112 @@ export default function Home() {
           `Connect: ${added} unión${added === 1 ? "" : "es"} compatible${added === 1 ? "" : "s"} en ${rod.part}`,
         );
     };
+    type IndexedSocket = {
+      host: Piece;
+      socket: MeshConnector;
+      point: THREE.Vector3;
+    };
+    const connectionCellSize = 0.45,
+      connectionCell = (point: THREE.Vector3) =>
+        `${Math.floor(point.x / connectionCellSize)}:${Math.floor(point.y / connectionCellSize)}:${Math.floor(point.z / connectionCellSize)}`,
+      buildSocketGrid = () => {
+        const grid = new Map<string, IndexedSocket[]>();
+        state.pieces.forEach((host) => {
+          host.mesh.updateMatrixWorld(true);
+          host.connectors
+            .filter((connector) => connector.role === "socket")
+            .forEach((socket) => {
+              const point = worldConnector(host, socket).point,
+                key = connectionCell(point),
+                entries = grid.get(key) ?? [];
+              entries.push({ host, socket, point });
+              grid.set(key, entries);
+            });
+        });
+        return grid;
+      },
+      nearbySockets = (
+        grid: Map<string, IndexedSocket[]>,
+        point: THREE.Vector3,
+        found: Set<IndexedSocket>,
+      ) => {
+        const x = Math.floor(point.x / connectionCellSize),
+          y = Math.floor(point.y / connectionCellSize),
+          z = Math.floor(point.z / connectionCellSize);
+        for (let dx = -1; dx <= 1; dx++)
+          for (let dy = -1; dy <= 1; dy++)
+            for (let dz = -1; dz <= 1; dz++)
+              grid
+                .get(`${x + dx}:${y + dy}:${z + dz}`)
+                ?.forEach((entry) => found.add(entry));
+      },
+      scanShaftPiece = (
+        shaftPiece: Piece,
+        grid: Map<string, IndexedSocket[]>,
+      ) => {
+        shaftPiece.mesh.updateMatrixWorld(true);
+        for (const shaft of shaftPiece.connectors.filter(
+          (connector) => connector.role === "shaft",
+        )) {
+          const shaftWorld = worldConnector(shaftPiece, shaft),
+            candidates = new Set<IndexedSocket>();
+          if (shaft.kind === "round")
+            nearbySockets(grid, shaftWorld.point, candidates);
+          else {
+            const half = (shaft.length ?? 0.5) / 2 + 0.12,
+              steps = Math.max(1, Math.ceil((half * 2) / connectionCellSize));
+            for (let step = 0; step <= steps; step++)
+              nearbySockets(
+                grid,
+                shaftWorld.point
+                  .clone()
+                  .addScaledVector(shaftWorld.axis, -half + (step / steps) * half * 2),
+                candidates,
+              );
+          }
+          candidates.forEach(({ host, socket }) => {
+            if (
+              host !== shaftPiece &&
+              connectorsOverlap(host, socket, shaftPiece, shaft)
+            )
+              addConnection(host, shaftPiece, socket, shaft);
+          });
+        }
+      },
+      finishConnectionScan = () => {
+        state.bulkConnecting = false;
+        rebalanceAllSmartDefaults(state);
+        setConnectionRevision((value) => value + 1);
+        refreshDebug();
+        return state.connections.length;
+      };
     const verifyConnections = () => {
       state.connections = [];
-      for (const shaftPiece of state.pieces.filter((piece) =>
-        piece.connectors.some((connector) => connector.role === "shaft"),
-      ))
-        for (const host of state.pieces) {
-          if (host === shaftPiece) continue;
-          for (const socket of host.connectors.filter(
-            (connector) => connector.role === "socket",
-          ))
-            for (const shaft of shaftPiece.connectors.filter(
-              (connector) => connector.role === "shaft",
-            ))
-              if (connectorsOverlap(host, socket, shaftPiece, shaft))
-                addConnection(host, shaftPiece, socket, shaft);
-        }
-      rebalanceAllSmartDefaults(state);
-      setConnectionRevision((value) => value + 1);
-      refreshDebug();
-      return state.connections.length;
+      state.bulkConnecting = true;
+      const grid = buildSocketGrid();
+      state.pieces
+        .filter((piece) =>
+          piece.connectors.some((connector) => connector.role === "shaft"),
+        )
+        .forEach((piece) => scanShaftPiece(piece, grid));
+      return finishConnectionScan();
+    };
+    const verifyConnectionsAsync = async () => {
+      state.connections = [];
+      state.bulkConnecting = true;
+      const grid = buildSocketGrid(),
+        shafts = state.pieces.filter((piece) =>
+          piece.connectors.some((connector) => connector.role === "shaft"),
+        );
+      for (let index = 0; index < shafts.length; index++) {
+        scanShaftPiece(shafts[index], grid);
+        if (index % 12 === 11)
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      }
+      return finishConnectionScan();
     };
     state.verifyConnections = verifyConnections;
+    state.verifyConnectionsAsync = verifyConnectionsAsync;
     const connect = (piece: Piece) => {
       if (isRod(piece)) {
         type Match = {
@@ -1839,7 +2122,10 @@ export default function Home() {
         })
         .sort((a, b) => a.distance - b.distance)[0]?.connector;
     };
-    const pieceFrom = (object: THREE.Object3D) => {
+    const pieceFrom = (object: THREE.Object3D, instanceId?: number) => {
+      const instancePieces = object.userData.instancePieces as Piece[] | undefined;
+      if (instancePieces && instanceId !== undefined)
+        return instancePieces[instanceId];
       let o: THREE.Object3D | null = object;
       while (o) {
         if (o.userData.piece) return o.userData.piece as Piece;
@@ -1991,10 +2277,15 @@ export default function Home() {
         return;
       }
       const hit = ray.intersectObjects(
-          state.pieces.map((p) => p.mesh),
+          [
+            ...state.pieces
+              .filter((piece) => !piece.renderBatched)
+              .map((piece) => piece.mesh),
+            ...(state.renderBatchRoot ? [state.renderBatchRoot] : []),
+          ],
           true,
         )[0],
-        hitPiece = hit ? pieceFrom(hit.object) : undefined;
+        hitPiece = hit ? pieceFrom(hit.object, hit.instanceId) : undefined;
       orbit = e.button === 2 || e.altKey;
       altCandidate = e.altKey && e.button === 0 ? hitPiece : undefined;
       if (orbit) return;
@@ -2362,9 +2653,11 @@ export default function Home() {
         code = e.code;
       if (code === "Delete") {
         e.preventDefault();
+        const rebuildBatches = !!piece.renderBatched;
         scene.remove(piece.mesh);
         if (piece.lockSprite) scene.remove(piece.lockSprite);
         state.pieces = state.pieces.filter((item) => item !== piece);
+        if (rebuildBatches) state.rebuildRenderBatches();
         state.connections = state.connections.filter(
           (connection) => connection.a !== piece && connection.b !== piece,
         );
@@ -2427,19 +2720,33 @@ export default function Home() {
     window.addEventListener("resize", resize);
     window.addEventListener("keydown", keydown, true);
     let frame = 0,
-      lastFrameStarted = performance.now();
+      lastFrameStarted = performance.now(),
+      fpsWindowStarted = lastFrameStarted,
+      fpsFrames = 0;
     const clock = new THREE.Clock();
     const animate = () => {
       frame = requestAnimationFrame(animate);
       const frameStarted = performance.now(),
         frameIntervalMs = frameStarted - lastFrameStarted;
       lastFrameStarted = frameStarted;
+      fpsFrames++;
+      if (frameStarted - fpsWindowStarted >= 500) {
+        const fps = (fpsFrames * 1000) / (frameStarted - fpsWindowStarted),
+          counter = fpsRef.current;
+        if (counter) {
+          counter.textContent = `${Math.round(fps)} FPS · ${(1000 / Math.max(fps, 0.1)).toFixed(1)} ms`;
+          counter.dataset.level = fps < 25 ? "low" : fps < 50 ? "medium" : "high";
+        }
+        fpsWindowStarted = frameStarted;
+        fpsFrames = 0;
+      }
       let forceResetMs = 0,
         springMs = 0,
         jointForcesMs = 0,
         worldStepMs = 0,
         syncMs = 0,
         physicsLogMs = 0,
+        batchMs = 0,
         activeBodies = 0,
         sleepingBodies = 0;
       if (state.running && state.world) {
@@ -2599,6 +2906,9 @@ export default function Home() {
         physicsLogMs = performance.now() - phaseStarted;
       } else clock.getDelta();
       let phaseStarted = performance.now();
+      state.updateRenderBatches();
+      batchMs = performance.now() - phaseStarted;
+      phaseStarted = performance.now();
       state.updateDebug();
       const debugMs = performance.now() - phaseStarted;
       phaseStarted = performance.now();
@@ -2625,6 +2935,7 @@ export default function Home() {
           worldStepMs,
           syncMs,
           physicsLogMs,
+          batchMs,
           debugMs,
           locksMs,
           renderMs,
@@ -2751,9 +3062,11 @@ export default function Home() {
     const s = appRef.current,
       p = s?.selected;
     if (!s || !p || running) return;
+    const rebuildBatches = !!p.renderBatched;
     s.scene.remove(p.mesh);
     if (p.lockSprite) s.scene.remove(p.lockSprite);
     s.pieces = s.pieces.filter((x) => x !== p);
+    if (rebuildBatches) s.rebuildRenderBatches();
     s.connections = s.connections.filter((c) => c.a !== p && c.b !== p);
     rebalanceAllSmartDefaults(s);
     s.selected = undefined;
@@ -2765,6 +3078,7 @@ export default function Home() {
     const s = appRef.current;
     if (!s) return;
     s.running = false;
+    s.disposeRenderBatches();
     s.pieces.forEach((p) => {
       s.scene.remove(p.mesh);
       if (p.lockSprite) s.scene.remove(p.lockSprite);
@@ -3182,7 +3496,13 @@ export default function Home() {
     // Temporary performance mode: imported models keep their LDraw position
     // and are finalized immediately instead of following the pointer.
     s.pendingPlacement = undefined;
-    const connections = s.verifyConnections();
+    s.rebuildRenderBatches(pieces);
+    setMessage(
+      language === "es"
+        ? "Optimizando conexiones por lotes…"
+        : "Optimizing connections in batches…",
+    );
+    const connections = await s.verifyConnectionsAsync();
     s.refreshDebug();
     setMessage(
       language === "es"
@@ -3479,6 +3799,7 @@ export default function Home() {
         "worldStepMs",
         "syncMs",
         "physicsLogMs",
+        "batchMs",
         "debugMs",
         "locksMs",
         "renderMs",
@@ -3510,6 +3831,7 @@ export default function Home() {
         "worldStepMs",
         "syncMs",
         "physicsLogMs",
+        "batchMs",
         "debugMs",
         "locksMs",
         "renderMs",
@@ -3810,6 +4132,9 @@ export default function Home() {
         </div>
       </aside>
       <section className="viewport" ref={mountRef}>
+        <div className="fps-counter" ref={fpsRef} data-level="high">
+          -- FPS
+        </div>
         <div className="view-label">
           <span className={running ? "live" : ""} />
           {running
