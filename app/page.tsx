@@ -5,6 +5,7 @@ import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { LDrawLoader } from "three/addons/loaders/LDrawLoader.js";
 import { LDrawConditionalLineMaterial } from "three/addons/materials/LDrawConditionalLineMaterial.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { makeLDR, parseLDR, type LDrawPlacement } from "./ldraw";
 import {
   approximateCollisionPrimitives,
@@ -50,6 +51,12 @@ type RenderBatchItem = {
   mesh: THREE.InstancedMesh;
   pieces: Piece[];
   localMatrix: THREE.Matrix4;
+};
+type RenderBatchStats = {
+  lineBatches: number;
+  meshBatches: number;
+  hiddenOriginalLines: number;
+  hiddenOriginalMeshes: number;
 };
 type PreparedImportPlacement = {
   catalog: CatalogPart;
@@ -119,6 +126,7 @@ type SimulationLog = {
 type FramePerformanceSample = {
   elapsedMs: number;
   frameIntervalMs: number;
+  betweenFramesMs: number;
   totalMs: number;
   inputMs: number;
   forceResetMs: number;
@@ -132,12 +140,15 @@ type FramePerformanceSample = {
   debugMs: number;
   locksMs: number;
   renderMs: number;
+  gpuMs: number | null;
   pieces: number;
   connections: number;
   activeBodies: number;
   sleepingBodies: number;
   drawCalls: number;
   triangles: number;
+  lines: number;
+  resolutionScale: number;
 };
 type PerformanceTrace = {
   startedAt: string;
@@ -185,7 +196,10 @@ type AppState = {
   updateRenderBatches: () => void;
   disposeRenderBatches: () => void;
   renderBatchRoot?: THREE.Group;
+  renderLineBatchRoot?: THREE.Group;
   renderBatchItems: RenderBatchItem[];
+  renderBatchStats: RenderBatchStats;
+  renderBatchesDirty: boolean;
   bulkLoading?: boolean;
   bulkConnecting?: boolean;
   largeSimulation?: boolean;
@@ -193,6 +207,10 @@ type AppState = {
   pendingInputMs: number;
   pendingConnectionMs: number;
   connectionScanVersion: number;
+  renderScale: number;
+  gpuTimerSupported: boolean;
+  gpuRenderer: string;
+  gpuVendor: string;
   pendingPlacement?: {
     pieces: Piece[];
     offsets: THREE.Vector3[];
@@ -211,8 +229,7 @@ const LDRAW =
     "https://cdn.jsdelivr.net/gh/remig/ldraw_parts@master/",
   LEGACY_LDRAW = "https://cdn.jsdelivr.net/gh/pybricks/ldraw@master/",
   MODEL_LOAD_TIMEOUT = 20_000,
-  // Temporary switch: manual Ctrl connections remain available.
-  AUTO_CONNECTIONS_ENABLED = false;
+  AUTO_CONNECTIONS_ENABLED = true;
 const packagedParts = preloadedCatalog.parts as Record<
   string,
   {
@@ -757,11 +774,49 @@ export default function Home() {
     );
     camera.position.set(13, 12, 17);
     camera.lookAt(0, 1.5, 0);
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: "high-performance",
+    }),
+      nativePixelRatio = Math.min(devicePixelRatio, 2),
+      scaleForViewport = () =>
+        THREE.MathUtils.clamp(
+          Math.sqrt(
+            2_200_000 /
+              Math.max(
+                1,
+                host.clientWidth *
+                  host.clientHeight *
+                  nativePixelRatio *
+                  nativePixelRatio,
+              ),
+          ),
+          0.5,
+          1,
+        );
+    let renderScale = scaleForViewport(),
+      healthyFpsWindows = 0;
+    renderer.setPixelRatio(nativePixelRatio * renderScale);
     renderer.setSize(host.clientWidth, host.clientHeight);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    const gl = renderer.getContext(),
+      gpuTimerExtension = gl.getExtension(
+        "EXT_disjoint_timer_query_webgl2",
+      ) as {
+        TIME_ELAPSED_EXT: number;
+        GPU_DISJOINT_EXT: number;
+      } | null,
+      rendererInfoExtension = gl.getExtension("WEBGL_debug_renderer_info") as {
+        UNMASKED_RENDERER_WEBGL: number;
+        UNMASKED_VENDOR_WEBGL: number;
+      } | null,
+      gpuRenderer = rendererInfoExtension
+        ? String(gl.getParameter(rendererInfoExtension.UNMASKED_RENDERER_WEBGL))
+        : String(gl.getParameter(gl.RENDERER)),
+      gpuVendor = rendererInfoExtension
+        ? String(gl.getParameter(rendererInfoExtension.UNMASKED_VENDOR_WEBGL))
+        : String(gl.getParameter(gl.VENDOR));
     host.appendChild(renderer.domElement);
     scene.add(new THREE.HemisphereLight(0xffffff, 0x718090, 2.1));
     const sun = new THREE.DirectionalLight(0xffffff, 2.3);
@@ -1416,12 +1471,46 @@ export default function Home() {
       updateDebug();
     };
     const disposeRenderBatches = () => {
+      state.renderBatchItems?.forEach(({ mesh }) => {
+        if (mesh.userData.ownedBatchMaterial)
+          (mesh.material as THREE.Material).dispose();
+        if (mesh.userData.ownedBatchGeometry) mesh.geometry.dispose();
+        mesh.dispose();
+      });
+      const outlineGeometries = new Set<THREE.BufferGeometry>();
+      state.pieces?.forEach((piece) => {
+        const outlines: THREE.Line[] = [];
+        piece.mesh.traverse((object) => {
+          if (object instanceof THREE.Line && object.userData.dynamicOutlineBatch)
+            outlines.push(object);
+        });
+        outlines.forEach((outline) => {
+          outlineGeometries.add(outline.geometry);
+          outline.removeFromParent();
+        });
+      });
+      outlineGeometries.forEach((geometry) => geometry.dispose());
       if (state.renderBatchRoot) {
+        state.renderBatchRoot.traverse((object) => {
+          if (
+            object.userData.ownedBatchGeometry &&
+            object instanceof THREE.Line
+          )
+            object.geometry.dispose();
+        });
         scene.remove(state.renderBatchRoot);
         state.renderBatchRoot.clear();
         state.renderBatchRoot = undefined;
+        state.renderLineBatchRoot = undefined;
       }
       state.renderBatchItems = [];
+      state.renderBatchStats = {
+        lineBatches: 0,
+        meshBatches: 0,
+        hiddenOriginalLines: 0,
+        hiddenOriginalMeshes: 0,
+      };
+      state.renderBatchesDirty = false;
       state.pieces?.forEach((piece) => {
         piece.renderBatched = false;
         piece.mesh.traverse((child) => {
@@ -1433,23 +1522,196 @@ export default function Home() {
     };
     const updateRenderBatches = () => {
       const matrix = new THREE.Matrix4();
+      const pieceMatrices = new Map<Piece, THREE.Matrix4>();
+      state.pieces.forEach((piece) => {
+        piece.mesh.updateMatrix();
+        pieceMatrices.set(piece, piece.mesh.matrix);
+      });
       for (const batch of state.renderBatchItems ?? []) {
+        let changed = false;
         batch.pieces.forEach((piece, index) => {
-          piece.mesh.updateMatrixWorld(true);
-          matrix.multiplyMatrices(piece.mesh.matrixWorld, batch.localMatrix);
+          if (
+            state.running &&
+            (!piece.body || piece.fixed || piece.body.isSleeping())
+          )
+            return;
+          matrix.multiplyMatrices(
+            pieceMatrices.get(piece) ?? piece.mesh.matrix,
+            batch.localMatrix,
+          );
           batch.mesh.setMatrixAt(index, matrix);
+          changed = true;
         });
-        batch.mesh.instanceMatrix.needsUpdate = true;
+        if (changed) batch.mesh.instanceMatrix.needsUpdate = true;
       }
+      state.renderBatchesDirty = false;
     };
     const rebuildRenderBatches = (batchPieces = state.pieces) => {
       disposeRenderBatches();
-      if (batchPieces.length < 120) return;
+      if (!batchPieces.length) return;
       const root = new THREE.Group();
       root.name = "Sim Studio instanced LDraw batches";
       state.renderBatchRoot = root;
       state.renderBatchItems = [];
+      state.renderBatchesDirty = true;
       scene.add(root);
+      let hiddenOriginalLines = 0,
+        hiddenOriginalMeshes = 0,
+        outlineBatchCount = 0;
+      state.renderLineBatchRoot = undefined;
+      const materialFingerprint = (material: THREE.Material) => {
+        const lineMaterial = material as THREE.Material & {
+          color?: THREE.Color;
+          emissive?: THREE.Color;
+          roughness?: number;
+          metalness?: number;
+          flatShading?: boolean;
+          linewidth?: number;
+          dashed?: boolean;
+          fog?: boolean;
+          map?: THREE.Texture | null;
+          normalMap?: THREE.Texture | null;
+          roughnessMap?: THREE.Texture | null;
+          metalnessMap?: THREE.Texture | null;
+          uniforms?: Record<string, { value?: unknown }>;
+        };
+        return JSON.stringify({
+          type: (lineMaterial as THREE.Material & {
+            isLDrawConditionalLineMaterial?: boolean;
+          }).isLDrawConditionalLineMaterial
+            ? "LDrawConditionalLineMaterial"
+            : material.type,
+          color: lineMaterial.color?.getHexString() ?? null,
+          emissive: lineMaterial.emissive?.getHexString() ?? null,
+          roughness: lineMaterial.roughness ?? null,
+          metalness: lineMaterial.metalness ?? null,
+          flatShading: lineMaterial.flatShading ?? null,
+          map: lineMaterial.map?.uuid ?? null,
+          normalMap: lineMaterial.normalMap?.uuid ?? null,
+          roughnessMap: lineMaterial.roughnessMap?.uuid ?? null,
+          metalnessMap: lineMaterial.metalnessMap?.uuid ?? null,
+          opacity: material.opacity,
+          transparent: material.transparent,
+          depthTest: material.depthTest,
+          depthWrite: material.depthWrite,
+          blending: material.blending,
+          vertexColors: material.vertexColors,
+          linewidth: lineMaterial.linewidth ?? null,
+          dashed: lineMaterial.dashed ?? null,
+          fog: lineMaterial.fog ?? null,
+          alphaTest: material.alphaTest,
+          side: material.side,
+        });
+      };
+      const cloneGeometryRange = (
+        source: THREE.BufferGeometry,
+        start: number,
+        count: number,
+      ) => {
+        const nonIndexed = source.index ? source.toNonIndexed() : source,
+          result = new THREE.BufferGeometry();
+        Object.entries(nonIndexed.attributes).forEach(([name, attribute]) => {
+          if (attribute.isInterleavedBufferAttribute) return;
+          const sourceArray = attribute.array as ArrayLike<number> & {
+              slice?: (from: number, to: number) => ArrayLike<number>;
+            },
+            from = start * attribute.itemSize,
+            to = (start + count) * attribute.itemSize,
+            sliced = sourceArray.slice
+              ? sourceArray.slice(from, to)
+              : Array.from(sourceArray).slice(from, to),
+            ArrayType = attribute.array.constructor as new (
+              values: ArrayLike<number>,
+            ) => THREE.TypedArray;
+          result.setAttribute(
+            name,
+            new THREE.BufferAttribute(
+              new ArrayType(sliced),
+              attribute.itemSize,
+              attribute.normalized,
+            ),
+          );
+        });
+        if (source.index) nonIndexed.dispose();
+        return result;
+      };
+      const simplifyLineSegments = (
+        source: THREE.BufferGeometry,
+        tolerance: number,
+      ) => {
+        const position = source.getAttribute("position");
+        if (
+          !position ||
+          position.itemSize !== 3 ||
+          Object.keys(source.attributes).some((name) => name !== "position")
+        )
+          return source;
+        type OutlineNode = { point: THREE.Vector3; neighbors: Set<string> };
+        const nodes = new Map<string, OutlineNode>(),
+          keyFor = (point: THREE.Vector3) =>
+            `${Math.round(point.x * 100000)}:${Math.round(point.y * 100000)}:${Math.round(point.z * 100000)}`,
+          addNode = (point: THREE.Vector3) => {
+            const key = keyFor(point);
+            if (!nodes.has(key))
+              nodes.set(key, { point: point.clone(), neighbors: new Set() });
+            return key;
+          };
+        for (let index = 0; index + 1 < position.count; index += 2) {
+          const a = new THREE.Vector3().fromBufferAttribute(position, index),
+            b = new THREE.Vector3().fromBufferAttribute(position, index + 1),
+            aKey = addNode(a),
+            bKey = addNode(b);
+          if (aKey === bKey) continue;
+          nodes.get(aKey)!.neighbors.add(bKey);
+          nodes.get(bKey)!.neighbors.add(aKey);
+        }
+        const queue = [...nodes.keys()],
+          queued = new Set(queue),
+          segment = new THREE.Line3(),
+          closest = new THREE.Vector3();
+        while (queue.length) {
+          const key = queue.shift()!;
+          queued.delete(key);
+          const node = nodes.get(key);
+          if (!node || node.neighbors.size !== 2) continue;
+          const [aKey, bKey] = [...node.neighbors],
+            a = nodes.get(aKey),
+            b = nodes.get(bKey);
+          if (!a || !b || aKey === bKey) continue;
+          segment.set(a.point, b.point);
+          segment.closestPointToPoint(node.point, true, closest);
+          if (closest.distanceToSquared(node.point) > tolerance * tolerance)
+            continue;
+          a.neighbors.delete(key);
+          b.neighbors.delete(key);
+          a.neighbors.add(bKey);
+          b.neighbors.add(aKey);
+          nodes.delete(key);
+          for (const neighborKey of [aKey, bKey])
+            if (!queued.has(neighborKey)) {
+              queued.add(neighborKey);
+              queue.push(neighborKey);
+            }
+        }
+        const points: THREE.Vector3[] = [],
+          edges = new Set<string>();
+        nodes.forEach((node, key) =>
+          node.neighbors.forEach((neighborKey) => {
+            const edgeKey = key < neighborKey
+              ? `${key}|${neighborKey}`
+              : `${neighborKey}|${key}`;
+            if (edges.has(edgeKey)) return;
+            edges.add(edgeKey);
+            const neighbor = nodes.get(neighborKey);
+            if (neighbor) points.push(node.point, neighbor.point);
+          }),
+        );
+        if (!points.length || points.length >= position.count) return source;
+        const simplified = new THREE.BufferGeometry().setFromPoints(points);
+        simplified.computeBoundingBox();
+        simplified.computeBoundingSphere();
+        return simplified;
+      };
       const groups = new Map<string, Piece[]>();
       batchPieces.forEach((piece) => {
         piece.mesh.traverse((child) => {
@@ -1461,60 +1723,243 @@ export default function Home() {
         groups.set(key, group);
       });
       groups.forEach((pieces) => {
-        if (pieces.length < 2) return;
         const template = pieces[0];
         template.mesh.updateMatrixWorld(true);
-        const templateMeshes: THREE.Mesh[] = [];
+        const templateMeshes: THREE.Mesh[] = [],
+          templateLines: THREE.Line[] = [],
+          meshGroups = new Map<
+            string,
+            { material: THREE.Material; geometries: THREE.BufferGeometry[] }
+          >(),
+          outlineGroups = new Map<
+            string,
+            {
+              kind: "segments" | "line";
+              material: THREE.Material;
+              geometries: THREE.BufferGeometry[];
+            }
+          >();
         template.mesh.traverse((child) => {
-          if (child instanceof THREE.Mesh && !Array.isArray(child.material))
-            templateMeshes.push(child);
+          if (child instanceof THREE.Mesh) templateMeshes.push(child);
+          else if (child instanceof THREE.Line) templateLines.push(child);
         });
         if (!templateMeshes.length) return;
-        const inverseWrapper = template.mesh.matrixWorld.clone().invert(),
-          eligibleIndices: number[] = [];
-        templateMeshes.forEach((child, meshIndex) => {
-          const compatible = pieces.every((piece) => {
-            const meshes: THREE.Mesh[] = [];
-            piece.mesh.traverse((candidate) => {
-              if (candidate instanceof THREE.Mesh && !Array.isArray(candidate.material))
-                meshes.push(candidate);
-            });
-            return !!meshes[meshIndex];
+        const inverseWrapper = template.mesh.matrixWorld.clone().invert();
+        templateLines.forEach((child) => {
+          const materials = Array.isArray(child.material)
+              ? child.material
+              : [child.material],
+            ranges = Array.isArray(child.material) && child.geometry.groups.length
+              ? child.geometry.groups.map((group) => ({
+                  start: group.start,
+                  count: group.count,
+                  material: materials[group.materialIndex ?? 0],
+                }))
+              : [{
+                  start: 0,
+                  count: child.geometry.index
+                    ? child.geometry.index.count
+                    : child.geometry.getAttribute("position").count,
+                  material: materials[0],
+                }],
+            localTransform = inverseWrapper.clone().multiply(child.matrixWorld);
+          ranges.forEach(({ start, count, material }) => {
+            if (!material || count <= 0) return;
+            const conditional = !!(
+              material as THREE.Material & {
+                isLDrawConditionalLineMaterial?: boolean;
+              }
+            ).isLDrawConditionalLineMaterial;
+            if (conditional && batchPieces.length > 80) return;
+            const geometry = cloneGeometryRange(child.geometry, start, count),
+              transformAttribute = (name: string, direction = false) => {
+                const attribute = geometry.getAttribute(name);
+                if (!attribute || attribute.itemSize < 3) return;
+                const value = new THREE.Vector3(),
+                  linear = new THREE.Matrix3().setFromMatrix4(localTransform);
+                for (let index = 0; index < attribute.count; index++) {
+                  value.set(
+                    attribute.getX(index),
+                    attribute.getY(index),
+                    attribute.getZ(index),
+                  );
+                  if (direction) value.applyMatrix3(linear);
+                  else value.applyMatrix4(localTransform);
+                  attribute.setXYZ(index, value.x, value.y, value.z);
+                }
+              };
+            geometry.applyMatrix4(localTransform);
+            transformAttribute("control0");
+            transformAttribute("control1");
+            transformAttribute("direction", true);
+            const kind =
+                child instanceof THREE.LineSegments ? "segments" : "line",
+              attributes = Object.entries(geometry.attributes)
+                .map(
+                  ([name, attribute]) =>
+                    `${name}:${attribute.itemSize}:${attribute.normalized}:${attribute.array.constructor.name}`,
+                )
+                .sort()
+                .join("|"),
+              key = `${kind}:${materialFingerprint(material)}:${attributes}`,
+              group = outlineGroups.get(key) ?? {
+                kind,
+                material,
+                geometries: [],
+              };
+            group.geometries.push(geometry);
+            outlineGroups.set(key, group);
           });
-          if (!compatible) return;
-          const instance = new THREE.InstancedMesh(
-            child.geometry,
-            child.material as THREE.Material,
-            pieces.length,
-          );
-          instance.name = `${template.part} × ${pieces.length}`;
-          instance.castShadow = false;
-          instance.receiveShadow = true;
-          instance.frustumCulled = false;
-          instance.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-          instance.userData.instancePieces = pieces;
-          root.add(instance);
-          state.renderBatchItems.push({
-            mesh: instance,
-            pieces,
-            localMatrix: inverseWrapper.clone().multiply(child.matrixWorld),
-          });
-          eligibleIndices.push(meshIndex);
         });
-        if (!eligibleIndices.length) return;
         pieces.forEach((piece) => {
-          const meshes: THREE.Mesh[] = [];
           piece.mesh.traverse((child) => {
-            if (child instanceof THREE.Mesh && !Array.isArray(child.material))
-              meshes.push(child);
+            if (child instanceof THREE.Line && !child.userData.dynamicOutlineBatch) {
+              child.visible = false;
+              hiddenOriginalLines++;
+            }
           });
-          eligibleIndices.forEach((index) => {
-            if (meshes[index]) meshes[index].visible = false;
+        });
+        outlineGroups.forEach(({ kind, material, geometries }) => {
+          const merged = geometries.length > 1
+              ? mergeGeometries(geometries, false)
+              : undefined,
+            batches = merged ? [merged] : geometries;
+          if (merged) geometries.forEach((geometry) => geometry.dispose());
+          batches.forEach((geometry) => {
+            const displayGeometry =
+              batchPieces.length > 80 && kind === "segments"
+                ? simplifyLineSegments(geometry, 0.0015)
+                : geometry;
+            if (displayGeometry !== geometry) geometry.dispose();
+            pieces.forEach((piece) => {
+              const outline =
+                kind === "segments"
+                  ? new THREE.LineSegments(displayGeometry, material)
+                  : new THREE.Line(displayGeometry, material);
+              outline.name = "Sim Studio dynamic LDraw outline";
+              outline.frustumCulled = false;
+              outline.raycast = () => undefined;
+              outline.userData.dynamicOutlineBatch = true;
+              piece.mesh.add(outline);
+              outlineBatchCount++;
+            });
+          });
+        });
+        templateMeshes.forEach((child) => {
+          const materials = Array.isArray(child.material)
+              ? child.material
+              : [child.material],
+            ranges = Array.isArray(child.material) && child.geometry.groups.length
+              ? child.geometry.groups.map((group) => ({
+                  start: group.start,
+                  count: group.count,
+                  material: materials[group.materialIndex ?? 0],
+                }))
+              : [{
+                  start: 0,
+                  count: child.geometry.index
+                    ? child.geometry.index.count
+                    : child.geometry.getAttribute("position").count,
+                  material: materials[0],
+                }],
+            localTransform = inverseWrapper.clone().multiply(child.matrixWorld);
+          ranges.forEach(({ start, count, material }) => {
+            if (!material || count <= 0) return;
+            const geometry = cloneGeometryRange(child.geometry, start, count);
+            geometry.applyMatrix4(localTransform);
+            const attributes = Object.entries(geometry.attributes)
+                .map(
+                  ([name, attribute]) =>
+                    `${name}:${attribute.itemSize}:${attribute.normalized}:${attribute.array.constructor.name}`,
+                )
+                .sort()
+                .join("|"),
+              key = `${materialFingerprint(material)}:${attributes}`,
+              group = meshGroups.get(key) ?? { material, geometries: [] };
+            group.geometries.push(geometry);
+            meshGroups.set(key, group);
+          });
+        });
+        meshGroups.forEach(({ material, geometries }) => {
+          const merged =
+              geometries.length > 1
+                ? mergeGeometries(geometries, false)
+                : undefined,
+            batches = merged ? [merged] : geometries;
+          if (merged) geometries.forEach((geometry) => geometry.dispose());
+          batches.forEach((geometry) => {
+            const standard = material as THREE.MeshStandardMaterial,
+              useLightweightPlastic =
+                batchPieces.length > 80 && !!standard.isMeshStandardMaterial,
+              batchMaterial = useLightweightPlastic
+                ? new THREE.MeshPhongMaterial({
+                    name: `${material.name} optimized plastic`,
+                    color: standard.color,
+                    emissive: standard.emissive,
+                    specular: new THREE.Color(0x292929),
+                    shininess: 34,
+                    vertexColors: standard.vertexColors,
+                    flatShading: standard.flatShading,
+                    transparent: standard.transparent,
+                    opacity: standard.opacity,
+                    alphaTest: standard.alphaTest,
+                    side: standard.side,
+                    depthTest: standard.depthTest,
+                    depthWrite: standard.depthWrite,
+                    blending: standard.blending,
+                    fog: standard.fog,
+                    polygonOffset: standard.polygonOffset,
+                    polygonOffsetFactor: standard.polygonOffsetFactor,
+                    polygonOffsetUnits: standard.polygonOffsetUnits,
+                  })
+                : material,
+              instance = new THREE.InstancedMesh(
+                geometry,
+                batchMaterial,
+                pieces.length,
+              );
+            instance.name = `${template.part} × ${pieces.length}`;
+            instance.castShadow = false;
+            instance.receiveShadow = true;
+            instance.frustumCulled = false;
+            instance.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+            instance.userData.instancePieces = pieces;
+            instance.userData.ownedBatchGeometry = true;
+            instance.userData.ownedBatchMaterial = useLightweightPlastic;
+            root.add(instance);
+            state.renderBatchItems.push({
+              mesh: instance,
+              pieces,
+              localMatrix: new THREE.Matrix4(),
+            });
+          });
+        });
+        if (!meshGroups.size) return;
+        pieces.forEach((piece) => {
+          piece.mesh.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+              child.visible = false;
+              hiddenOriginalMeshes++;
+            }
           });
           piece.renderBatched = true;
         });
       });
+      state.renderBatchStats = {
+        lineBatches: outlineBatchCount,
+        meshBatches: state.renderBatchItems.length,
+        hiddenOriginalLines,
+        hiddenOriginalMeshes,
+      };
       updateRenderBatches();
+    };
+    let renderBatchRebuildFrame = 0;
+    const scheduleRenderBatchRebuild = () => {
+      if (state.bulkLoading || state.running || renderBatchRebuildFrame) return;
+      renderBatchRebuildFrame = requestAnimationFrame(() => {
+        renderBatchRebuildFrame = 0;
+        if (!state.bulkLoading && !state.running) state.rebuildRenderBatches();
+      });
     };
     const addPart = async (
       p: CatalogPart,
@@ -1547,8 +1992,9 @@ export default function Home() {
             fixed: false,
             pin: isPinPart(p),
             frictionPin: hasPinFriction(p),
-          };
+        };
         wrapper.userData.piece = piece;
+        wrapper.visible = !state.bulkLoading;
         state.pieces.push(piece);
         scene.add(wrapper);
         if (!rotation) {
@@ -1561,6 +2007,7 @@ export default function Home() {
             `${p.part} · ${connectors.length} conectores · ${colliders.length} formas físicas`,
           );
           refreshDebug();
+          scheduleRenderBatchRebuild();
         }
         return piece;
       } catch {
@@ -1596,7 +2043,18 @@ export default function Home() {
       pendingInputMs: 0,
       pendingConnectionMs: 0,
       connectionScanVersion: 0,
+      renderScale,
+      gpuTimerSupported: !!gpuTimerExtension,
+      gpuRenderer,
+      gpuVendor,
       renderBatchItems: [],
+      renderBatchStats: {
+        lineBatches: 0,
+        meshBatches: 0,
+        hiddenOriginalLines: 0,
+        hiddenOriginalMeshes: 0,
+      },
+      renderBatchesDirty: false,
       addPart,
       preloadPart,
       renderImportPreview,
@@ -1706,6 +2164,7 @@ export default function Home() {
           .sub(worldConnector(sourcePiece, sourceConnector).point),
       );
       sourcePiece.mesh.updateMatrixWorld(true);
+      state.renderBatchesDirty = true;
       state.connections = state.connections.filter(
         (connection) =>
           connection.a !== sourcePiece && connection.b !== sourcePiece,
@@ -1720,51 +2179,6 @@ export default function Home() {
         shaft =
           sourceConnector.role === "shaft" ? sourceConnector : targetConnector;
       return addConnection(socketPiece, shaftPiece, socket, shaft);
-    };
-    const connectorsOverlap = (
-      host: Piece,
-      socket: MeshConnector,
-      shaftPiece: Piece,
-      shaft: MeshConnector,
-    ) => {
-      if (!connectorProfile(shaft, socket)) return false;
-      const socketWorld = worldConnector(host, socket),
-        shaftWorld = worldConnector(shaftPiece, shaft),
-        shaftAxis = shaftWorld.axis;
-      if (Math.abs(socketWorld.axis.dot(shaftAxis)) < 0.965) return false;
-      if (shaft.kind === "round")
-        return shaftWorld.point.distanceTo(socketWorld.point) <= 0.18;
-      const half = (shaft.length ?? 0.5) / 2,
-        delta = socketWorld.point.clone().sub(shaftWorld.point),
-        along = delta.dot(shaftAxis),
-        radial = delta.clone().addScaledVector(shaftAxis, -along).length();
-      return radial <= 0.16 && Math.abs(along) <= half + 0.1;
-    };
-    const attachRod = (rod: Piece) => {
-      rod.mesh.updateMatrixWorld(true);
-      const shafts = rod.connectors.filter(
-          (connector) => connector.role === "shaft",
-        );
-      let added = 0;
-      state.connections = state.connections.filter(
-        (connection) => connection.b !== rod,
-      );
-      rebalanceAllSmartDefaults(state);
-      for (const host of state.pieces.filter((part) => part !== rod))
-        for (const socket of host.connectors.filter(
-          (connector) => connector.role === "socket",
-        ))
-          for (const shaft of shafts) {
-            if (!connectorsOverlap(host, socket, rod, shaft)) continue;
-            if (addConnection(host, rod, socket, shaft)) {
-              added++;
-              break;
-            }
-          }
-      if (added)
-        setMessage(
-          `Connect: ${added} unión${added === 1 ? "" : "es"} compatible${added === 1 ? "" : "s"} en ${rod.part}`,
-        );
     };
     type IndexedSocket = {
       host: Piece;
@@ -2015,7 +2429,6 @@ export default function Home() {
             piece.mesh.position.copy(targetShaftPoint).sub(rotated);
           }
           piece.mesh.updateMatrixWorld(true);
-          attachRod(piece);
           return;
         }
       }
@@ -2080,7 +2493,6 @@ export default function Home() {
         piece.mesh.position.add(perpendicular);
       }
       piece.mesh.updateMatrixWorld(true);
-      state.pieces.filter(isRod).forEach(attachRod);
     };
 
     const ray = new THREE.Raycaster(),
@@ -2290,7 +2702,7 @@ export default function Home() {
         );
         return;
       }
-      const hit = ray.intersectObjects(
+      const hits = ray.intersectObjects(
           [
             ...state.pieces
               .filter((piece) => !piece.renderBatched)
@@ -2298,8 +2710,19 @@ export default function Home() {
             ...(state.renderBatchRoot ? [state.renderBatchRoot] : []),
           ],
           true,
-        )[0],
-        hitPiece = hit ? pieceFrom(hit.object, hit.instanceId) : undefined;
+        ),
+        hitMatch = hits
+          .map((candidate) => ({
+            hit: candidate,
+            piece: pieceFrom(
+              candidate.object,
+              candidate.instanceId ??
+                (candidate as THREE.Intersection & { batchId?: number }).batchId,
+            ),
+          }))
+          .find((candidate) => !!candidate.piece),
+        hit = hitMatch?.hit,
+        hitPiece = hitMatch?.piece;
       orbit = e.button === 2 || e.altKey;
       altCandidate = e.altKey && e.button === 0 ? hitPiece : undefined;
       if (orbit) return;
@@ -2444,6 +2867,7 @@ export default function Home() {
             piece.mesh.position.copy(target).add(state.pendingPlacement!.offsets[index]);
             piece.mesh.updateMatrixWorld(true);
           });
+          state.renderBatchesDirty = true;
           refreshDebug();
         }
         return;
@@ -2547,6 +2971,7 @@ export default function Home() {
           }
         }
         previous = { x: e.clientX, y: e.clientY };
+        state.renderBatchesDirty = true;
       }
     };
     const up = (e: PointerEvent) => {
@@ -2578,18 +3003,25 @@ export default function Home() {
             best.piece,
             best.connector,
           );
-        const detected = connected ? verifyConnections() : state.connections.length;
         scene.remove(draft.line);
         draft.line.geometry.dispose();
         (draft.line.material as THREE.Material).dispose();
         state.manualConnect = undefined;
+        if (connected && draft.piece.renderBatched)
+          state.rebuildRenderBatches();
         setConnectionRevision((value) => value + 1);
         setMessage(
           connected && best
-            ? `Connect manual: ${draft.piece.part} ↔ ${best.piece.part} · ${detected} uniones verificadas`
+            ? `Connect manual: ${draft.piece.part} ↔ ${best.piece.part} · verificando el resto de uniones…`
             : "Connect manual cancelado: no hay un punto compatible a menos de 2 unidades",
         );
         refreshDebug();
+        if (connected)
+          void verifyConnectionsAsync().then((connections) => {
+            setMessage(
+              `Connect manual: ${draft.piece.part} ↔ ${best!.piece.part} · ${connections} uniones verificadas`,
+            );
+          });
         return;
       }
       if (spring) {
@@ -2614,12 +3046,15 @@ export default function Home() {
       if (orbit && !moved && altCandidate) toggleFixed(altCandidate);
       orbit = false;
       altCandidate = undefined;
+      const movedPiece = moving;
       if (moving && moved) {
         connect(moving);
-        verifyConnections();
+        void verifyConnectionsAsync();
       }
       moving = undefined;
       movingLinearAxis = undefined;
+      if (movedPiece?.renderBatched && moved)
+        state.rebuildRenderBatches();
       setConnectionRevision((value) => value + 1);
       refreshDebug();
     };
@@ -2640,7 +3075,11 @@ export default function Home() {
               0,
               Math.round(ground.point.z / 0.4) * 0.4,
             ),
-          );
+          ).then((piece) => {
+            if (!piece) return;
+            connect(piece);
+            void verifyConnectionsAsync();
+          });
           setImported((old) =>
             old.some((x) => x.part === p.part) ? old : [p, ...old],
           );
@@ -2656,6 +3095,9 @@ export default function Home() {
     const resize = () => {
       camera.aspect = host.clientWidth / host.clientHeight;
       camera.updateProjectionMatrix();
+      renderScale = Math.min(renderScale, scaleForViewport());
+      state.renderScale = renderScale;
+      renderer.setPixelRatio(nativePixelRatio * renderScale);
       renderer.setSize(host.clientWidth, host.clientHeight);
     };
     const keydown = (e: KeyboardEvent) => {
@@ -2667,11 +3109,10 @@ export default function Home() {
         code = e.code;
       if (code === "Delete") {
         e.preventDefault();
-        const rebuildBatches = !!piece.renderBatched;
         scene.remove(piece.mesh);
         if (piece.lockSprite) scene.remove(piece.lockSprite);
         state.pieces = state.pieces.filter((item) => item !== piece);
-        if (rebuildBatches) state.rebuildRenderBatches();
+        state.rebuildRenderBatches();
         state.connections = state.connections.filter(
           (connection) => connection.a !== piece && connection.b !== piece,
         );
@@ -2700,6 +3141,8 @@ export default function Home() {
       if (rotation.axis === "x") piece.mesh.rotateX(rotation.angle);
       else piece.mesh.rotateY(rotation.angle);
       piece.mesh.updateMatrixWorld(true);
+      if (piece.renderBatched) state.rebuildRenderBatches();
+      else state.renderBatchesDirty = true;
       refreshDebug();
       setSelectedId(piece.id);
       setMessage(`${piece.part} rotada 90° · ${rotation.axis.toUpperCase()}`);
@@ -2736,19 +3179,63 @@ export default function Home() {
     let frame = 0,
       lastFrameStarted = performance.now(),
       fpsWindowStarted = lastFrameStarted,
-      fpsFrames = 0;
+      fpsFrames = 0,
+      previousFrameWorkMs = 0;
+    const pendingGpuTimers: {
+      query: WebGLQuery;
+      sample: FramePerformanceSample;
+    }[] = [];
     const clock = new THREE.Clock();
     const animate = () => {
       frame = requestAnimationFrame(animate);
       const frameStarted = performance.now(),
         frameIntervalMs = frameStarted - lastFrameStarted;
       lastFrameStarted = frameStarted;
+      if (gpuTimerExtension) {
+        while (pendingGpuTimers.length) {
+          const pending = pendingGpuTimers[0],
+            available = gl.getQueryParameter(
+              pending.query,
+              gl.QUERY_RESULT_AVAILABLE,
+            ),
+            disjoint = gl.getParameter(gpuTimerExtension.GPU_DISJOINT_EXT);
+          if (disjoint) {
+            pendingGpuTimers.splice(0).forEach(({ query }) =>
+              gl.deleteQuery(query),
+            );
+            break;
+          }
+          if (!available) break;
+          pending.sample.gpuMs =
+            Number(gl.getQueryParameter(pending.query, gl.QUERY_RESULT)) /
+            1_000_000;
+          gl.deleteQuery(pending.query);
+          pendingGpuTimers.shift();
+        }
+      }
       fpsFrames++;
       if (frameStarted - fpsWindowStarted >= 500) {
         const fps = (fpsFrames * 1000) / (frameStarted - fpsWindowStarted),
           counter = fpsRef.current;
+        let nextScale = renderScale;
+        if (fps < 48) {
+          healthyFpsWindows = 0;
+          nextScale = Math.max(0.5, renderScale - 0.1);
+        } else if (fps > 58) {
+          healthyFpsWindows++;
+          if (healthyFpsWindows >= 4) {
+            nextScale = Math.min(1, renderScale + 0.05);
+            healthyFpsWindows = 0;
+          }
+        } else healthyFpsWindows = 0;
+        if (Math.abs(nextScale - renderScale) > 0.001) {
+          renderScale = nextScale;
+          state.renderScale = renderScale;
+          renderer.setPixelRatio(nativePixelRatio * renderScale);
+          renderer.setSize(host.clientWidth, host.clientHeight, false);
+        }
         if (counter) {
-          counter.textContent = `${Math.round(fps)} FPS · ${(1000 / Math.max(fps, 0.1)).toFixed(1)} ms`;
+          counter.textContent = `${Math.round(fps)} FPS · ${(1000 / Math.max(fps, 0.1)).toFixed(1)} ms · ${Math.round(renderScale * 100)}%`;
           counter.dataset.level = fps < 25 ? "low" : fps < 50 ? "medium" : "high";
         }
         fpsWindowStarted = frameStarted;
@@ -2920,7 +3407,8 @@ export default function Home() {
         physicsLogMs = performance.now() - phaseStarted;
       } else clock.getDelta();
       let phaseStarted = performance.now();
-      state.updateRenderBatches();
+      if (state.running || state.renderBatchesDirty)
+        state.updateRenderBatches();
       batchMs = performance.now() - phaseStarted;
       phaseStarted = performance.now();
       state.updateDebug();
@@ -2935,12 +3423,23 @@ export default function Home() {
       });
       const locksMs = performance.now() - phaseStarted;
       phaseStarted = performance.now();
+      const gpuQuery =
+        gpuTimerExtension &&
+        state.performanceTrace.totalFrames % 4 === 0 &&
+        pendingGpuTimers.length < 16
+          ? gl.createQuery()
+          : null;
+      if (gpuQuery && gpuTimerExtension)
+        gl.beginQuery(gpuTimerExtension.TIME_ELAPSED_EXT, gpuQuery);
       renderer.render(scene, camera);
+      if (gpuQuery && gpuTimerExtension)
+        gl.endQuery(gpuTimerExtension.TIME_ELAPSED_EXT);
       const renderMs = performance.now() - phaseStarted,
         trace = state.performanceTrace,
         sample: FramePerformanceSample = {
           elapsedMs: performance.now() - trace.startedAtMs,
           frameIntervalMs,
+          betweenFramesMs: Math.max(0, frameIntervalMs - previousFrameWorkMs),
           totalMs: performance.now() - frameStarted,
           inputMs: state.pendingInputMs,
           forceResetMs,
@@ -2954,13 +3453,18 @@ export default function Home() {
           debugMs,
           locksMs,
           renderMs,
+          gpuMs: null,
           pieces: state.pieces.length,
           connections: state.connections.length,
           activeBodies,
           sleepingBodies,
           drawCalls: renderer.info.render.calls,
           triangles: renderer.info.render.triangles,
+          lines: renderer.info.render.lines,
+          resolutionScale: state.renderScale,
         };
+      previousFrameWorkMs = sample.totalMs;
+      if (gpuQuery) pendingGpuTimers.push({ query: gpuQuery, sample });
       state.pendingInputMs = 0;
       state.pendingConnectionMs = 0;
       trace.totalFrames++;
@@ -2973,6 +3477,9 @@ export default function Home() {
     animate();
     return () => {
       cancelAnimationFrame(frame);
+      if (renderBatchRebuildFrame)
+        cancelAnimationFrame(renderBatchRebuildFrame);
+      pendingGpuTimers.forEach(({ query }) => gl.deleteQuery(query));
       window.removeEventListener("resize", resize);
       window.removeEventListener("keydown", keydown, true);
       renderer.dispose();
@@ -3063,6 +3570,8 @@ export default function Home() {
     if (axis === "x") p.mesh.rotateX(radians);
     else if (axis === "y") p.mesh.rotateY(radians);
     else p.mesh.rotateZ(radians);
+    if (p.renderBatched) s.rebuildRenderBatches();
+    else s.renderBatchesDirty = true;
     s.refreshDebug();
     setSelectedId(p.id);
   };
@@ -3071,6 +3580,8 @@ export default function Home() {
       p = s?.selected;
     if (!s || !p || running) return;
     p.mesh.position[axis] += amount;
+    if (p.renderBatched) s.rebuildRenderBatches();
+    else s.renderBatchesDirty = true;
     s.refreshDebug();
     setSelectedId(p.id);
   };
@@ -3078,11 +3589,10 @@ export default function Home() {
     const s = appRef.current,
       p = s?.selected;
     if (!s || !p || running) return;
-    const rebuildBatches = !!p.renderBatched;
     s.scene.remove(p.mesh);
     if (p.lockSprite) s.scene.remove(p.lockSprite);
     s.pieces = s.pieces.filter((x) => x !== p);
-    if (rebuildBatches) s.rebuildRenderBatches();
+    s.rebuildRenderBatches();
     s.connections = s.connections.filter((c) => c.a !== p && c.b !== p);
     rebalanceAllSmartDefaults(s);
     s.selected = undefined;
@@ -3277,6 +3787,7 @@ export default function Home() {
         x.piece.body = undefined;
         x.piece.physicsBase = undefined;
       });
+      s.renderBatchesDirty = true;
       s.snapshot = undefined;
       s.world = undefined;
       s.largeSimulation = undefined;
@@ -3514,7 +4025,10 @@ export default function Home() {
     // Temporary performance mode: imported models keep their LDraw position
     // and are finalized immediately instead of following the pointer.
     s.pendingPlacement = undefined;
-    s.rebuildRenderBatches(pieces);
+    pieces.forEach((piece) => {
+      piece.mesh.visible = true;
+    });
+    s.rebuildRenderBatches();
     let connections = s.connections.length;
     if (AUTO_CONNECTIONS_ENABLED) {
       setMessage(
@@ -3816,6 +4330,7 @@ export default function Home() {
           : trace.samples.slice(),
       metrics: (keyof FramePerformanceSample)[] = [
         "frameIntervalMs",
+        "betweenFramesMs",
         "totalMs",
         "inputMs",
         "forceResetMs",
@@ -3829,15 +4344,22 @@ export default function Home() {
         "debugMs",
         "locksMs",
         "renderMs",
+        "gpuMs",
       ],
       percentile = (values: number[], amount: number) =>
         values[Math.min(values.length - 1, Math.floor(values.length * amount))] ?? 0,
       summary = Object.fromEntries(
         metrics.map((metric) => {
           const values = samples
-              .map((sample) => Number(sample[metric]))
+              .map((sample) => sample[metric])
+              .filter(
+                (value): value is number =>
+                  typeof value === "number" && Number.isFinite(value),
+              )
               .sort((a, b) => a - b),
-            average = values.reduce((total, value) => total + value, 0) / values.length;
+            average = values.length
+              ? values.reduce((total, value) => total + value, 0) / values.length
+              : 0;
           return [
             metric,
             {
@@ -3850,6 +4372,7 @@ export default function Home() {
         }),
       ),
       phaseNames = [
+        "betweenFramesMs",
         "inputMs",
         "forceResetMs",
         "springMs",
@@ -3862,6 +4385,7 @@ export default function Home() {
         "debugMs",
         "locksMs",
         "renderMs",
+        "gpuMs",
       ],
       dominantPhase = phaseNames
         .map((name) => ({
@@ -3871,7 +4395,7 @@ export default function Home() {
         .sort((a, b) => b.p95 - a.p95)[0],
       payload = {
         format: "sim-studio-frame-profile",
-        version: 1,
+        version: 2,
         generatedAt: new Date().toISOString(),
         recordingStartedAt: trace.startedAt,
         retainedFrames: samples.length,
@@ -3882,6 +4406,7 @@ export default function Home() {
           simulationRunning: state.running,
           largeSimulation: !!state.largeSimulation,
           diagnostics: state.debug,
+          renderBatches: state.renderBatchStats,
         },
         environment: {
           userAgent: navigator.userAgent,
@@ -3889,6 +4414,16 @@ export default function Home() {
           deviceMemory:
             (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? null,
           devicePixelRatio,
+          renderScale: state.renderScale,
+          gpuTimerSupported: state.gpuTimerSupported,
+          gpuRenderer: state.gpuRenderer,
+          gpuVendor: state.gpuVendor,
+          viewport: {
+            cssWidth: state.renderer.domElement.clientWidth,
+            cssHeight: state.renderer.domElement.clientHeight,
+            drawingBufferWidth: state.renderer.domElement.width,
+            drawingBufferHeight: state.renderer.domElement.height,
+          },
         },
         diagnosis: {
           dominantPhaseByP95: dominantPhase,
