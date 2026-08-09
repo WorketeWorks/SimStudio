@@ -1782,83 +1782,6 @@ export default function Home() {
         if (source.index) nonIndexed.dispose();
         return result;
       };
-      const simplifyLineSegments = (
-        source: THREE.BufferGeometry,
-        tolerance: number,
-      ) => {
-        const position = source.getAttribute("position");
-        if (
-          !position ||
-          position.itemSize !== 3 ||
-          Object.keys(source.attributes).some((name) => name !== "position")
-        )
-          return source;
-        type OutlineNode = { point: THREE.Vector3; neighbors: Set<string> };
-        const nodes = new Map<string, OutlineNode>(),
-          keyFor = (point: THREE.Vector3) =>
-            `${Math.round(point.x * 100000)}:${Math.round(point.y * 100000)}:${Math.round(point.z * 100000)}`,
-          addNode = (point: THREE.Vector3) => {
-            const key = keyFor(point);
-            if (!nodes.has(key))
-              nodes.set(key, { point: point.clone(), neighbors: new Set() });
-            return key;
-          };
-        for (let index = 0; index + 1 < position.count; index += 2) {
-          const a = new THREE.Vector3().fromBufferAttribute(position, index),
-            b = new THREE.Vector3().fromBufferAttribute(position, index + 1),
-            aKey = addNode(a),
-            bKey = addNode(b);
-          if (aKey === bKey) continue;
-          nodes.get(aKey)!.neighbors.add(bKey);
-          nodes.get(bKey)!.neighbors.add(aKey);
-        }
-        const queue = [...nodes.keys()],
-          queued = new Set(queue),
-          segment = new THREE.Line3(),
-          closest = new THREE.Vector3();
-        while (queue.length) {
-          const key = queue.shift()!;
-          queued.delete(key);
-          const node = nodes.get(key);
-          if (!node || node.neighbors.size !== 2) continue;
-          const [aKey, bKey] = [...node.neighbors],
-            a = nodes.get(aKey),
-            b = nodes.get(bKey);
-          if (!a || !b || aKey === bKey) continue;
-          segment.set(a.point, b.point);
-          segment.closestPointToPoint(node.point, true, closest);
-          if (closest.distanceToSquared(node.point) > tolerance * tolerance)
-            continue;
-          a.neighbors.delete(key);
-          b.neighbors.delete(key);
-          a.neighbors.add(bKey);
-          b.neighbors.add(aKey);
-          nodes.delete(key);
-          for (const neighborKey of [aKey, bKey])
-            if (!queued.has(neighborKey)) {
-              queued.add(neighborKey);
-              queue.push(neighborKey);
-            }
-        }
-        const points: THREE.Vector3[] = [],
-          edges = new Set<string>();
-        nodes.forEach((node, key) =>
-          node.neighbors.forEach((neighborKey) => {
-            const edgeKey = key < neighborKey
-              ? `${key}|${neighborKey}`
-              : `${neighborKey}|${key}`;
-            if (edges.has(edgeKey)) return;
-            edges.add(edgeKey);
-            const neighbor = nodes.get(neighborKey);
-            if (neighbor) points.push(node.point, neighbor.point);
-          }),
-        );
-        if (!points.length || points.length >= position.count) return source;
-        const simplified = new THREE.BufferGeometry().setFromPoints(points);
-        simplified.computeBoundingBox();
-        simplified.computeBoundingSphere();
-        return simplified;
-      };
       const groups = new Map<string, Piece[]>();
       batchPieces.forEach((piece) => {
         piece.mesh.traverse((child) => {
@@ -1912,12 +1835,6 @@ export default function Home() {
             localTransform = inverseWrapper.clone().multiply(child.matrixWorld);
           ranges.forEach(({ start, count, material }) => {
             if (!material || count <= 0) return;
-            const conditional = !!(
-              material as THREE.Material & {
-                isLDrawConditionalLineMaterial?: boolean;
-              }
-            ).isLDrawConditionalLineMaterial;
-            if (conditional && batchPieces.length > 80) return;
             const geometry = cloneGeometryRange(child.geometry, start, count),
               transformAttribute = (name: string, direction = false) => {
                 const attribute = geometry.getAttribute(name);
@@ -1973,16 +1890,11 @@ export default function Home() {
             batches = merged ? [merged] : geometries;
           if (merged) geometries.forEach((geometry) => geometry.dispose());
           batches.forEach((geometry) => {
-            const displayGeometry =
-              batchPieces.length > 80 && kind === "segments"
-                ? simplifyLineSegments(geometry, 0.0015)
-                : geometry;
-            if (displayGeometry !== geometry) geometry.dispose();
             pieces.forEach((piece) => {
               const outline =
                 kind === "segments"
-                  ? new THREE.LineSegments(displayGeometry, material)
-                  : new THREE.Line(displayGeometry, material);
+                  ? new THREE.LineSegments(geometry, material)
+                  : new THREE.Line(geometry, material);
               outline.name = "Sim Studio dynamic LDraw outline";
               outline.frustumCulled = false;
               outline.raycast = () => undefined;
