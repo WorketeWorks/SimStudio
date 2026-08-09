@@ -1033,6 +1033,32 @@ export default function Home() {
       connectorCache = new Map<string, MeshConnector[]>(),
       collisionCache = new Map<string, CollisionPrimitive[]>();
     const assetUrl = (path: string) => new URL(path, document.baseURI).href;
+    const normalizeBlackOutlines = (root: THREE.Object3D, color: number) => {
+      if (color !== 0) return;
+      const replacements = new WeakMap<THREE.Material, THREE.Material>(),
+        edgeColor = new THREE.Color(0x30363a);
+      root.traverse((child) => {
+        if (!(child instanceof THREE.Line)) return;
+        const recolor = (material: THREE.Material) => {
+          const cached = replacements.get(material);
+          if (cached) return cached;
+          const replacement = material.clone() as THREE.Material & {
+            color?: THREE.Color;
+            uniforms?: Record<string, { value?: unknown }>;
+          };
+          if (replacement.color instanceof THREE.Color)
+            replacement.color.copy(edgeColor);
+          const diffuse = replacement.uniforms?.diffuse?.value;
+          if (diffuse instanceof THREE.Color) diffuse.copy(edgeColor);
+          replacement.needsUpdate = true;
+          replacements.set(material, replacement);
+          return replacement;
+        };
+        child.material = Array.isArray(child.material)
+          ? child.material.map(recolor)
+          : recolor(child.material);
+      });
+    };
     const loadPartModel = async (p: CatalogPart) => {
       const key = `${p.part}:${p.color}`,
         cached = modelCache.get(key);
@@ -1120,6 +1146,7 @@ export default function Home() {
           });
         }
       }
+      normalizeBlackOutlines(exact, p.color);
       modelCache.set(key, exact.clone(true));
       return exact;
     };
@@ -3351,9 +3378,15 @@ export default function Home() {
             movingMass = dynamic.reduce(
               (total, piece) => total + Math.max(0.25, piece.body!.mass()),
               0,
-            );
+            ),
+            // A large rigid assembly must not multiply the cursor spring by the
+            // mass of hundreds of pieces. That produced impulses above 47 kN
+            // in real logs and overwhelmed every joint in the island.
+            effectiveMovingMass = Math.min(movingMass, 40);
           if (acceleration.length() > 90) acceleration.setLength(90);
-          const force = acceleration.multiplyScalar(Math.max(0.25, movingMass)),
+          const force = acceleration.multiplyScalar(
+              Math.max(0.25, effectiveMovingMass),
+            ),
             totalForce = force.length();
           spring.piece.body.addForceAtPoint(
             { x: force.x, y: force.y, z: force.z },
@@ -3739,12 +3772,19 @@ export default function Home() {
       s.nextLogSample = 0;
       s.simStartedMs = performance.now();
       const largeSimulation = s.pieces.length > 250,
+        solverIterations = largeSimulation ? 8 : 12,
+        internalPgsIterations = largeSimulation ? 4 : 2,
         world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
       s.largeSimulation = largeSimulation;
-      world.integrationParameters.numSolverIterations = largeSimulation ? 4 : 8;
+      world.integrationParameters.numSolverIterations = solverIterations;
+      world.integrationParameters.numInternalPgsIterations =
+        internalPgsIterations;
       world.integrationParameters.maxCcdSubsteps = largeSimulation ? 1 : 2;
       world.integrationParameters.contact_natural_frequency = 18;
-      world.integrationParameters.normalizedAllowedLinearError = 0.01;
+      world.integrationParameters.normalizedAllowedLinearError = 0.004;
+      s.simLog.events.push(
+        `Solver rígido: ${solverIterations} iteraciones × ${internalPgsIterations} PGS interno`,
+      );
       world.createCollider(
         RAPIER.ColliderDesc.cuboid(20, 0.15, 20)
           .setTranslation(0, -0.2, 0)
@@ -3755,8 +3795,8 @@ export default function Home() {
         const desc = p.fixed
           ? RAPIER.RigidBodyDesc.fixed()
           : RAPIER.RigidBodyDesc.dynamic()
-              .setLinearDamping(0.35)
-              .setAngularDamping(0.65)
+              .setLinearDamping(0.55)
+              .setAngularDamping(0.95)
               .setCcdEnabled(!largeSimulation)
               .setSoftCcdPrediction(largeSimulation ? 0 : 0.1)
               .setAdditionalMass(p.kind === "motor" ? 2 : 0.65);
@@ -3794,8 +3834,19 @@ export default function Home() {
         }
         p.body = rb;
       });
+      const rigidBodyPairs = new Set<string>();
+      let redundantRigidJoints = 0;
       s.connections.forEach((c) => {
         if (!c.a.body || !c.b.body) return;
+        if (c.mode === "fixed") {
+          const pairKey =
+            c.a.id < c.b.id ? `${c.a.id}:${c.b.id}` : `${c.b.id}:${c.a.id}`;
+          if (rigidBodyPairs.has(pairKey)) {
+            redundantRigidJoints++;
+            return;
+          }
+          rigidBodyPairs.add(pairKey);
+        }
         const a = c.point.clone().sub(c.a.mesh.position),
           b = c.point.clone().sub(c.b.mesh.position),
           axis = c.axis.clone().normalize();
@@ -3843,6 +3894,10 @@ export default function Home() {
           (created as RAPIER.PrismaticImpulseJoint).setLimits(-limit, limit);
         }
       });
+      if (redundantRigidJoints)
+        s.simLog.events.push(
+          `${redundantRigidJoints} uniones rígidas redundantes omitidas`,
+        );
       s.world = world;
       s.running = true;
       setRunning(true);
