@@ -1,83 +1,110 @@
 # Sim Studio
 
-Sim Studio es un editor 3D experimental para construir mecanismos compatibles con piezas LEGO® Technic y probar su comportamiento físico directamente en el navegador. Permite colocar modelos LDraw, conectarlos mediante pines y ejes, fijar piezas, configurar cada unión y ejecutar una simulación con gravedad, colisiones y motores.
+Sim Studio is an experimental browser-based 3D editor for building LEGO® Technic-compatible mechanisms and testing them with real-time physics. It combines full LDraw part geometry with connection maps, compound colliders, configurable joints, motors, gravity, friction and collision simulation.
 
-> El proyecto está en desarrollo. No es una herramienta oficial de LEGO Group ni de BrickLink Studio.
+> Sim Studio is an independent, unofficial project. It is not sponsored, endorsed or authorized by the LEGO Group, BrickLink or Studio.
 
-## Funciones principales
+## Main features
 
-- Catálogo organizado de vigas, ejes, pines, conectores, engranajes y ruedas.
-- Modelos 3D cargados desde la biblioteca LDraw.
-- Búsqueda por nombre o referencia y carga de referencias externas.
-- Arrastrar piezas desde la paleta hasta la zona de construcción.
-- Movimiento y rotación de piezas colocadas.
-- Importación de modelos `.ldr` y `.mpd`.
-- Exportación del montaje como archivo `.ldr`.
-- Tema claro y oscuro, incluido el entorno 3D.
-- Simulación con gravedad, rozamiento, colisiones, uniones y arrastre mediante resorte.
-- Piezas fijables con `Alt + clic`.
-- Restauración automática del montaje al detener la simulación.
-- Registro JSON de cada simulación.
-- Visualización de colliders, conectores, cuerpos físicos, pivotes y uniones.
+- Offline-first default palette with locally packaged LDraw sources, parsed 3D geometry, renders, connection maps, collider data and metadata.
+- Beams, axles, pins, connectors, gears and wheels organized into Studio-like categories.
+- Search by part name or part number, plus external LDraw part import.
+- Drag parts from the palette into the 3D workspace.
+- Move placed parts on X/Z, use `Shift` for constrained movement, and rotate them by any angle.
+- Rotate the selected part in 90° steps with `WASD` or the arrow keys.
+- Import `.ldr` and `.mpd` models and export the assembly as `.ldr`.
+- Light and dark themes, including the 3D environment.
+- Spanish and English UI, selected from the flag button in the top bar.
+- Gravity, friction, collisions, configurable joints, motors and spring-force dragging.
+- Fix or release parts with `Alt + click`.
+- Restore the complete build state when the simulation stops.
+- JSON physics log for the most recent simulation.
+- Diagnostic views for colliders, connection points, bodies, pivots and physics joints.
+- Connection-map editor with JSON import/export for correcting individual parts.
 
-## Sistema Connect
+## Offline-first part catalog
 
-El mapa de conexiones utiliza cuatro tipos visuales:
+Every default-palette variant is stored in the repository:
 
-| Color | Tipo | Compatibilidad |
+```text
+public/
+├── catalog/
+│   ├── geometry/       # Pre-parsed Three.js geometry for each part/color variant
+│   ├── renders/        # Local palette thumbnails
+│   └── manifest.json   # Metadata, connection maps, colliders and asset paths
+└── ldraw/              # Original LDraw parts, subparts and primitives
+```
+
+The editor loads pre-parsed local geometry first. The original LDraw source tree is retained for attribution, reproducibility and future regeneration. Network access is only required when a user imports an external part that is not included in the default palette.
+
+To rebuild the package after editing `app/palette.ts` or the connection algorithms:
+
+```bash
+npm run catalog:precache
+```
+
+The generator recursively downloads the required LDraw dependencies, stores the thumbnails, parses each color variant and writes the connection/collider manifest. Review generated connection maps in the editor because automatic detection can still require manual correction for irregular parts.
+
+## Connect system
+
+Connection maps use four visual connector types:
+
+| Color | Connector | Compatible with |
 | --- | --- | --- |
-| Azul | Agujero redondo | Pines naranjas y ejes morados |
-| Naranja | Punto macho de pin | Agujeros azules |
-| Verde | Agujero en cruz | Ejes morados |
-| Morado | Recorrido utilizable de un eje | Agujeros verdes y azules |
+| Blue | Round socket | Orange pins and purple axles |
+| Orange | Pin shaft | Blue sockets |
+| Green | Cross-shaped axle socket | Purple axles |
+| Purple | Usable axle path | Green and blue sockets |
 
-El autoconectado alinea únicamente los ejes necesarios y conserva la rotación que la pieza ya tenía alrededor de ellos. Los centros de conexión de los pines se ajustan a posiciones LEGO de medio stud para evitar la superposición de piezas.
+Mixed parts can contain sockets and shafts at the same time. Each shaft uses its own local position, orientation and usable length, allowing perpendicular holes on axle pins and pin connectors to participate in auto-connect.
 
-Las piezas mixtas, como un `axle pin` o un eje con agujero perpendicular, pueden contener conectores macho y hembra simultáneamente.
+Auto-connect aligns only the connector axes that must coincide and preserves the part's existing rotation around that axis. `Ctrl + drag` starts manual Connect: choose a connection point, drag its guide and release near a highlighted compatible point.
 
-### Modos de unión
+### Joint modes
 
-Cada unión se configura por separado desde el panel de propiedades. Sólo aparecen los modos compatibles con su geometría:
+Each connection is configured on the part that owns the orange or purple shaft:
 
-| Unión | Fija | Rotación | Lineal | Rotación + lineal | Motor |
+| Connection | Fixed | Rotation | Linear | Rotation + linear | Motor |
 | --- | :---: | :---: | :---: | :---: | :---: |
-| Pin naranja ↔ agujero azul | ✓ | ✓ | — | — | ✓ |
-| Eje morado ↔ agujero verde | ✓ | — | ✓ | — | — |
-| Eje morado ↔ agujero azul | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Orange pin ↔ blue socket | ✓ | ✓ | — | — | ✓ |
+| Purple axle ↔ green socket | ✓ | — | ✓ | — | — |
+| Purple axle ↔ blue socket | — | ✓ | ✓ | ✓ | ✓ |
 
-El modo **Motor** crea una unión rotatoria accionada. Su deslizador permite elegir velocidad y sentido entre `-12` y `12 rad/s`. Las configuraciones se conservan al cambiar de selección y cuando el autoconectado reconstruye una unión durante la sesión.
+Friction pins default to rigid joints. Other multi-connection shafts intelligently keep one anchoring joint while assigning the greatest compatible freedom to their remaining joints. Cross-axle connections default to fixed.
 
-## Colliders simplificados
+Motor mode creates a driven rotational joint with configurable angular speed, direction and maximum torque.
 
-La malla LDraw visible se mantiene completa, pero la física utiliza colliders compuestos más ligeros. El análisis se realiza automáticamente cuando se carga una pieza del catálogo y el resultado se guarda en caché para reutilizarlo.
+## Physics and colliders
 
-Según la geometría detectada se generan:
+The visible LDraw mesh remains detailed, while Rapier uses lighter compound colliders. The generated collider set is stored in the local catalog instead of being recalculated on every browser session.
 
-- Vigas rectas: caja longitudinal y remates cilíndricos.
-- Vigas en L, T o formas angulares: varias cajas siguiendo sus tramos y cilindros en extremos o intersecciones.
-- Pines y ejes: uno o dos cilindros, incluyendo topes o casquillos cuando corresponde.
-- Ruedas, engranajes y casquillos: cilindros.
-- Otras piezas: una aproximación por caja ajustada.
+- Straight beams use a longitudinal box and cylindrical end caps.
+- L, T and angled beams use multiple aligned boxes and cylinders.
+- Pins and axles use simplified cylinders.
+- Wheels, gears and bushes use cylindrical approximations.
+- Irregular parts fall back to adjusted compound boxes/cylinders.
 
-Puedes revisar el resultado activando **Mallas de colisión** en el panel de propiedades.
+During simulation, clicking a point on a part and dragging applies a visible spring force at that exact point. The force label displays newtons and the off-center application point can create torque. Stopping simulation restores all parts to their pre-simulation position and rotation.
 
-## Controles
+## Controls
 
-| Acción | Control |
+| Action | Control |
 | --- | --- |
-| Colocar una pieza | Arrastrarla desde la paleta hasta la mesa |
-| Seleccionar | Clic sobre una pieza |
-| Mover en X/Z | Arrastrar una pieza colocada |
-| Mover en Y | `Shift` + arrastrar |
-| Orbitar la cámara | Botón derecho o `Alt` + arrastrar |
-| Zoom | Rueda del ratón |
-| Fijar o liberar una pieza | `Alt` + clic |
-| Aplicar fuerza en simulación | Arrastrar desde un punto de la pieza |
-| Rotar 90° | Botones X, Y o Z del panel de propiedades |
+| Place a part | Drag it from the palette onto the workspace |
+| Select | Click a placed part |
+| Move on X/Z | Drag a placed part |
+| Move along a free linear connection or Y | `Shift` + drag |
+| Manual Connect | `Ctrl` + drag from a connection point |
+| Orbit camera | Right button or `Alt` + drag |
+| Zoom | Mouse wheel |
+| Fix/release a part | `Alt` + click |
+| Apply force during simulation | Drag from a point on the part |
+| Rotate 90° | `WASD` or arrow keys |
+| Delete selected part | `Delete` |
 
-## Instalación
+## Installation
 
-Requiere Node.js `22.13.0` o posterior.
+Node.js `22.13.0` or newer is required.
 
 ```bash
 git clone https://github.com/WorketeWorks/SimStudio.git
@@ -86,53 +113,45 @@ npm install
 npm run dev
 ```
 
-Abre la dirección local que aparece en la terminal.
-
-## Comandos
+## Commands
 
 ```bash
-npm run dev      # servidor de desarrollo
-npm run build    # compilación de producción
-npm run start    # ejecutar la compilación
-npm run lint     # análisis estático
-npm test         # compilación y pruebas automatizadas
+npm run dev               # Development server
+npm run build             # Production build
+npm run build:pages       # GitHub Pages build
+npm run start             # Run the production build
+npm run catalog:precache  # Regenerate the offline default catalog
+npm run lint              # Static analysis
+npm test                  # Build and automated tests
 ```
 
-## Tecnologías
+## Technology
 
-- React 19 y TypeScript.
-- Three.js para renderizado 3D y carga de modelos LDraw.
-- Rapier 3D para cuerpos rígidos, colliders y uniones físicas.
-- Vinext y Vite para desarrollo y compilación.
-- Cloudflare Workers/Sites como entorno de despliegue compatible.
+- React 19 and TypeScript.
+- Three.js and LDrawLoader for 3D rendering and LDraw parsing.
+- Rapier 3D for rigid bodies, compound colliders and physics joints.
+- Vinext and Vite for development and production builds.
+- GitHub Pages-compatible static build for the default local catalog.
 
-## Estructura relevante
+## Data and current limitations
 
-```text
-app/
-├── page.tsx          # editor, interacción, autoconectado y simulación
-├── connectors.ts     # detección Connect y cálculo de colliders
-├── palette.ts        # piezas incluidas en la paleta
-├── ldraw.ts          # importación y exportación LDraw
-├── globals.css       # interfaz y temas
-└── api/parts/        # búsqueda de referencias externas
-```
+- LDraw import restores part number, color, position and orientation.
+- LDraw export creates `sim-studio-model.ldr`; Sim Studio-specific physics modes are not currently embedded in the exported model.
+- Automatic connector detection is geometric and may require correction for unusual parts.
+- Compound colliders are simulation approximations, not manufacturing geometry.
+- Motors and large connected mechanisms remain experimental.
+- The dynamic `/api/parts` search is unavailable on plain GitHub Pages; default parts remain fully available offline, while arbitrary online catalog search requires the server/Worker deployment.
 
-## Importación, exportación y datos
+## LDraw attribution and licensing
 
-- La importación reconstruye posición, orientación, referencia y color de las piezas LDraw.
-- La exportación genera `sim-studio-model.ldr`.
-- LDraw no almacena los modos físicos propios de Sim Studio; actualmente esos ajustes no se incluyen en el archivo exportado.
-- El último registro físico se conserva en el navegador y puede descargarse como `sim-studio-physics-log.json`.
-- La biblioteca de piezas y sus miniaturas se descargan desde servicios LDraw, por lo que la primera carga necesita conexión a Internet.
+**This software uses The LDraw Parts Library.** See [LDraw.org](https://www.ldraw.org/).
 
-## Limitaciones actuales
+The original `.dat` sources under `public/ldraw/` retain their author, history and `!LICENSE` headers. Depending on the individual file, they are licensed under [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), both licenses, or another license explicitly identified in that file.
 
-- La detección de conectores en piezas irregulares es geométrica y puede necesitar ajustes para referencias concretas.
-- Los colliders son aproximaciones optimizadas para simulación, no geometría de fabricación.
-- Las uniones y motores son un sistema experimental y pueden requerir más estabilización en mecanismos grandes.
-- GitHub puede alojar el código, pero GitHub Pages estático no ejecuta la ruta dinámica de búsqueda `/api/parts`. Para conservar todas las funciones usa un despliegue compatible con Workers o servidor Node.
+The pre-parsed Three.js geometry, generated connection data and generated collider descriptions are conversions/derivative data created from those LDraw sources by Sim Studio. They are distributed with attribution to **The LDraw Parts Library**, links to the applicable license terms, and an indication that conversion, scaling, coordinate transformation and physics approximation changes were made. Rendered 2D thumbnails are treated separately under the LDraw rendered-image policy.
 
-## Créditos y licencia de marcas
+See [LDRAW-NOTICE.md](./LDRAW-NOTICE.md) and `public/ldraw/CAreadme.txt` for the redistribution notice. The project does not add technological or legal restrictions to the packaged LDraw material beyond the terms identified by its source files.
 
-Los modelos de piezas proceden del ecosistema [LDraw](https://www.ldraw.org/). LEGO® es una marca registrada de LEGO Group. Este proyecto es independiente y no está patrocinado, autorizado ni respaldado por LEGO Group o BrickLink Studio.
+LDraw™ is a trademark owned and licensed by the Estate of James Jessiman. LEGO® is a registered trademark of the LEGO Group, which does not sponsor, endorse or authorize this project.
+
+This section is a practical compliance summary, not legal advice. If the distribution model changes, especially if unofficial or third-party part libraries are added, review their individual headers and licenses again.

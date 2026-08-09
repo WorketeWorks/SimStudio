@@ -18,6 +18,7 @@ import {
 } from "./connectors";
 import { paletteParts } from "./palette";
 import { preloadedConnectionMaps } from "./connection-maps";
+import preloadedCatalog from "./preloaded-catalog.json";
 
 type PieceKind = "beam" | "wheel" | "motor";
 type CatalogPart = {
@@ -29,6 +30,7 @@ type CatalogPart = {
   family?: string;
   modelPart?: string;
   rawThumb?: boolean;
+  geometry?: string;
 };
 type Piece = CatalogPart & {
   id: number;
@@ -129,6 +131,27 @@ type AppState = {
 };
 
 const LDRAW = "https://cdn.jsdelivr.net/gh/pybricks/ldraw@master/";
+const packagedParts = preloadedCatalog.parts as Record<
+  string,
+  {
+    connectors: {
+      local: number[];
+      axis: number[];
+      kind: "round" | "axle";
+      role: "socket" | "shaft";
+      diameter: number;
+      length?: number;
+    }[];
+    colliders: {
+      shape: "box" | "cylinder";
+      center: number[];
+      size?: number[];
+      radius?: number;
+      halfHeight?: number;
+      rotation: number[];
+    }[];
+  }
+>;
 const colorHex: Record<number, string> = {
   0: "#1b2a34",
   1: "#0055bf",
@@ -190,14 +213,177 @@ const palettePreviewFilter = (color = 71) => {
   return "grayscale(1) brightness(.78) contrast(1.2)" + shadow;
 };
 const categories = [
-  { id: "beams", label: "Vigas", icon: "━" },
-  { id: "axles", label: "Ejes", icon: "╂" },
-  { id: "pins", label: "Pines", icon: "●" },
-  { id: "connectors", label: "Conectores", icon: "⌘" },
-  { id: "gears", label: "Engranajes", icon: "⚙" },
-  { id: "wheels", label: "Ruedas", icon: "◉" },
-  { id: "imported", label: "Importadas", icon: "↓" },
+  { id: "beams", icon: "━" },
+  { id: "axles", icon: "╂" },
+  { id: "pins", icon: "●" },
+  { id: "connectors", icon: "⌘" },
+  { id: "gears", icon: "⚙" },
+  { id: "wheels", icon: "◉" },
+  { id: "imported", icon: "↓" },
 ] as const;
+type Language = "es" | "en";
+const translations = {
+  es: {
+    subtitle: "LABORATORIO DE FÍSICA",
+    light: "Claro",
+    dark: "Oscuro",
+    switchTheme: "Cambiar tema",
+    project: "Proyecto",
+    mechanism: "Mi mecanismo",
+    import: "Importar",
+    export: "Exportar",
+    stop: "■ Detener",
+    simulate: "▶ Simular",
+    palette: "PALETA STUDIO",
+    search: "Nombre o referencia…",
+    external: "Añadir referencia externa",
+    pieces: "piezas",
+    noResults: "No hay piezas de la paleta que coincidan con la búsqueda.",
+    dragHelp: "Catálogo predeterminado precargado localmente.",
+    ready: "Catálogo local listo",
+    running: "SIMULACIÓN: arrastra una pieza para aplicarle fuerza",
+    cameraHelp:
+      "Arrastrar: mover · Ctrl+arrastrar: Connect manual · Shift: mover Y · WASD/flechas: rotar 90° · Alt+clic: fijar · Alt/botón derecho: orbitar",
+    properties: "PROPIEDADES",
+    piece: "PIEZA",
+    move: "DESPLAZAR",
+    rotateAny: "ROTAR CUALQUIER ÁNGULO",
+    pieceJoints: "UNIONES DE ESTA PIEZA",
+    joint: "Unión",
+    speed: "VELOCIDAD",
+    torque: "FUERZA / PAR",
+    noJoints: "Acerca la pieza a un conector compatible para crear una unión.",
+    connectMap: "Mapa Connect",
+    points: "puntos",
+    closeMap: "Cerrar editor de mapa",
+    editMap: "Editar mapa de conexiones",
+    mapHelp:
+      "Las coordenadas son locales a la pieza. Al editar se muestra el mapa y se eliminan las uniones antiguas de esta referencia.",
+    addPoint: "+ Punto",
+    exportJson: "Exportar JSON",
+    importJson: "Importar JSON",
+    hole: "Hueco",
+    shaft: "Saliente",
+    round: "Redondo",
+    axle: "Cruz / eje",
+    position: "POSICIÓN X / Y / Z",
+    axis: "EJE X / Y / Z",
+    diameter: "DIÁMETRO",
+    length: "LONGITUD",
+    activeJoints: "Uniones activas",
+    model: "Modelo",
+    deletePiece: "Eliminar pieza",
+    nothing: "Nada seleccionado",
+    selectHelp: "Selecciona una pieza colocada para moverla o rotarla.",
+    technical: "VISUALIZACIÓN TÉCNICA",
+    collisionMeshes: "Mallas de colisión",
+    connectionMap: "Mapa de conexiones",
+    blue: "Azul: hueco de pin",
+    orange: "Naranja: pin",
+    green: "Verde: hueco de eje",
+    purple: "Morado: recorrido de eje",
+    bodies: "Cuerpos, uniones y pivotes",
+    physicsLog: "REGISTRO DE FÍSICA",
+    downloadLog: "Descargar último log JSON",
+    stopForLog: "Detén una simulación para generar el log",
+    readLog: "Leer último log",
+    physicsEngine: "MOTOR DE FÍSICA",
+    physicsHelp:
+      "Cada unión de pin o eje puede configurarse según sus grados de libertad compatibles.",
+    grid: "Cuadrícula 0.4 u",
+    cache: "caché local activa",
+    ldrawCredit: "Usa The LDraw Parts Library",
+    categories: {
+      beams: "Vigas",
+      axles: "Ejes",
+      pins: "Pines",
+      connectors: "Conectores",
+      gears: "Engranajes",
+      wheels: "Ruedas",
+      imported: "Importadas",
+    },
+  },
+  en: {
+    subtitle: "PHYSICS BUILD LAB",
+    light: "Light",
+    dark: "Dark",
+    switchTheme: "Switch theme",
+    project: "Project",
+    mechanism: "My mechanism",
+    import: "Import",
+    export: "Export",
+    stop: "■ Stop",
+    simulate: "▶ Simulate",
+    palette: "STUDIO PALETTE",
+    search: "Name or part number…",
+    external: "Add external part number",
+    pieces: "parts",
+    noResults: "No palette parts match the search.",
+    dragHelp: "Default catalog preloaded locally.",
+    ready: "Local catalog ready",
+    running: "SIMULATION: drag a part to apply force",
+    cameraHelp:
+      "Drag: move · Ctrl+drag: manual Connect · Shift: move Y · WASD/arrows: rotate 90° · Alt+click: fix · Alt/right button: orbit",
+    properties: "PROPERTIES",
+    piece: "PART",
+    move: "MOVE",
+    rotateAny: "ROTATE ANY ANGLE",
+    pieceJoints: "JOINTS ON THIS PART",
+    joint: "Joint",
+    speed: "SPEED",
+    torque: "FORCE / TORQUE",
+    noJoints: "Move the part near a compatible connector to create a joint.",
+    connectMap: "Connect map",
+    points: "points",
+    closeMap: "Close map editor",
+    editMap: "Edit connection map",
+    mapHelp:
+      "Coordinates are local to the part. Editing displays the map and removes old joints for this part number.",
+    addPoint: "+ Point",
+    exportJson: "Export JSON",
+    importJson: "Import JSON",
+    hole: "Socket",
+    shaft: "Shaft",
+    round: "Round",
+    axle: "Cross / axle",
+    position: "POSITION X / Y / Z",
+    axis: "AXIS X / Y / Z",
+    diameter: "DIAMETER",
+    length: "LENGTH",
+    activeJoints: "Active joints",
+    model: "Model",
+    deletePiece: "Delete part",
+    nothing: "Nothing selected",
+    selectHelp: "Select a placed part to move or rotate it.",
+    technical: "TECHNICAL VIEW",
+    collisionMeshes: "Collision meshes",
+    connectionMap: "Connection map",
+    blue: "Blue: pin socket",
+    orange: "Orange: pin shaft",
+    green: "Green: axle socket",
+    purple: "Purple: axle travel",
+    bodies: "Bodies, joints and pivots",
+    physicsLog: "PHYSICS LOG",
+    downloadLog: "Download latest JSON log",
+    stopForLog: "Stop a simulation to generate a log",
+    readLog: "Read latest log",
+    physicsEngine: "PHYSICS ENGINE",
+    physicsHelp:
+      "Each pin or axle joint can be configured using its compatible degrees of freedom.",
+    grid: "0.4 u grid",
+    cache: "local cache active",
+    ldrawCredit: "Uses The LDraw Parts Library",
+    categories: {
+      beams: "Beams",
+      axles: "Axles",
+      pins: "Pins",
+      connectors: "Connectors",
+      gears: "Gears",
+      wheels: "Wheels",
+      imported: "Imported",
+    },
+  },
+} as const;
 
 const kindFor = (category: string, name = ""): PieceKind =>
   category === "motors" || /motor/i.test(name)
@@ -362,7 +548,7 @@ export default function Home() {
   const [results, setResults] = useState<CatalogPart[]>([]),
     [imported, setImported] = useState<CatalogPart[]>([]);
   const [catalogBusy, setCatalogBusy] = useState(false),
-    [message, setMessage] = useState("Preparando catálogo LDraw…");
+    [message, setMessage] = useState("catalog-ready");
   const [debugViews, setDebugViews] = useState<DebugFlags>({
       colliders: false,
       connectors: false,
@@ -373,13 +559,36 @@ export default function Home() {
   const [rotationAngle, setRotationAngle] = useState(15),
     [, setConnectorRevision] = useState(0),
     [connectionMapOpen, setConnectionMapOpen] = useState(false);
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [theme, setTheme] = useState<"dark" | "light">("dark"),
+    [language, setLanguage] = useState<Language>("es");
+  const t = translations[language],
+    modeLabels: Record<JointMode, string> =
+      language === "es"
+        ? modeLabel
+        : {
+            fixed: "Fixed",
+            rotation: "Free rotation",
+            linear: "Free linear travel",
+            "rotation-linear": "Free rotation and linear travel",
+            motor: "Motor",
+          },
+    profileLabels: Record<ConnectionProfile, string> =
+      language === "es"
+        ? profileLabel
+        : {
+            "pin-round": "Orange ↔ blue",
+            "axle-cross": "Purple ↔ green",
+            "axle-round": "Purple ↔ blue",
+          };
 
   useEffect(() => {
     try {
       setLastLog(localStorage.getItem("sim-studio:physics-log") ?? "");
       setTheme(
         localStorage.getItem("sim-studio:theme") === "light" ? "light" : "dark",
+      );
+      setLanguage(
+        localStorage.getItem("sim-studio:language") === "en" ? "en" : "es",
       );
     } catch {}
   }, []);
@@ -388,6 +597,12 @@ export default function Home() {
       localStorage.setItem("sim-studio:theme", theme);
     } catch {}
   }, [theme]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("sim-studio:language", language);
+    } catch {}
+    document.documentElement.lang = language;
+  }, [language]);
 
   useEffect(() => {
     const source =
@@ -460,9 +675,26 @@ export default function Home() {
     void loader.preloadMaterials(LDRAW + "LDConfig.ldr");
     const preloaded = new Set<string>(),
       preloading = new Map<string, Promise<void>>(),
+      modelCache = new Map<string, THREE.Object3D>(),
       connectorCache = new Map<string, MeshConnector[]>(),
       collisionCache = new Map<string, CollisionPrimitive[]>();
-    const prepareModel = (exact: THREE.Group) => {
+    const assetUrl = (path: string) => new URL(path, document.baseURI).href;
+    const loadPartModel = async (p: CatalogPart) => {
+      const key = `${p.part}:${p.color}`,
+        cached = modelCache.get(key);
+      if (cached) return cached.clone(true);
+      let exact: THREE.Object3D | undefined;
+      if (p.geometry)
+        try {
+          exact = await new THREE.ObjectLoader().loadAsync(assetUrl(p.geometry));
+        } catch {}
+      exact ??= await loader.loadAsync(
+        `data:text/plain;charset=utf-8,${encodeURIComponent(modelText(p))}`,
+      );
+      modelCache.set(key, exact.clone(true));
+      return exact;
+    };
+    const prepareModel = (exact: THREE.Object3D) => {
       exact.rotation.x = Math.PI;
       exact.scale.setScalar(0.05);
       exact.updateMatrixWorld(true);
@@ -496,6 +728,12 @@ export default function Home() {
       } catch {}
       if (!connectors && preloadedConnectionMaps[p.part])
         connectors = preloadedConnectionMaps[p.part].map((connector) => ({
+          ...connector,
+          local: new THREE.Vector3().fromArray(connector.local),
+          axis: new THREE.Vector3().fromArray(connector.axis).normalize(),
+        }));
+      if (!connectors && packagedParts[p.part])
+        connectors = packagedParts[p.part].connectors.map((connector) => ({
           ...connector,
           local: new THREE.Vector3().fromArray(connector.local),
           axis: new THREE.Vector3().fromArray(connector.axis).normalize(),
@@ -557,6 +795,15 @@ export default function Home() {
         size: primitive.size?.clone(),
         rotation: primitive.rotation.clone(),
       }));
+      if (!colliders && packagedParts[p.part])
+        colliders = packagedParts[p.part].colliders.map((primitive) => ({
+          ...primitive,
+          center: new THREE.Vector3().fromArray(primitive.center),
+          size: primitive.size
+            ? new THREE.Vector3().fromArray(primitive.size)
+            : undefined,
+          rotation: new THREE.Quaternion().fromArray(primitive.rotation),
+        }));
       if (!colliders) {
         colliders = approximateCollisionPrimitives(wrapper, p.name, connectors);
         collisionCache.set(
@@ -574,10 +821,7 @@ export default function Home() {
     const preloadPart = async (p: CatalogPart) => {
       if (preloaded.has(p.part)) return;
       if (preloading.has(p.part)) return preloading.get(p.part);
-      const task = loader
-        .loadAsync(
-          `data:text/plain;charset=utf-8,${encodeURIComponent(modelText(p))}`,
-        )
+      const task = loadPartModel(p)
         .then((exact) => {
           prepareModel(exact);
           const wrapper = new THREE.Group();
@@ -867,9 +1111,7 @@ export default function Home() {
     ) => {
       setMessage(`Cargando ${p.part}…`);
       try {
-        const exact = await loader.loadAsync(
-          `data:text/plain;charset=utf-8,${encodeURIComponent(modelText(p))}`,
-        );
+        const exact = await loadPartModel(p);
         preloaded.add(p.part);
         prepareModel(exact);
         exact.traverse((object) => {
@@ -2362,7 +2604,7 @@ export default function Home() {
     rebalanceSmartDefaults(state, connection.b);
     state.refreshDebug();
     setConnectionRevision((value) => value + 1);
-    setMessage(`${profileLabel[connection.profile]} · ${modeLabel[mode]}`);
+    setMessage(`${profileLabels[connection.profile]} · ${modeLabels[mode]}`);
   };
   const setMotorSpeed = (id: string, motorSpeed: number) => {
     const state = appRef.current,
@@ -2579,23 +2821,41 @@ export default function Home() {
           <span className="mark">S</span>
           <div>
             <strong>SIM STUDIO</strong>
-            <small>PHYSICS BUILD LAB</small>
+            <small>{t.subtitle}</small>
           </div>
+        </div>
+        <div className="language-toggle" role="group" aria-label="Language / Idioma">
+          <button
+            className={language === "es" ? "active" : ""}
+            onClick={() => setLanguage("es")}
+            aria-label="Español"
+            title="Español"
+          >
+            🇪🇸
+          </button>
+          <button
+            className={language === "en" ? "active" : ""}
+            onClick={() => setLanguage("en")}
+            aria-label="English"
+            title="English"
+          >
+            🇬🇧
+          </button>
         </div>
         <button
           className="theme-toggle"
           onClick={() =>
             setTheme((value) => (value === "dark" ? "light" : "dark"))
           }
-          aria-label={`Cambiar a tema ${theme === "dark" ? "claro" : "oscuro"}`}
-          title={`Tema ${theme === "dark" ? "claro" : "oscuro"}`}
+          aria-label={t.switchTheme}
+          title={theme === "dark" ? t.light : t.dark}
         >
           <span>{theme === "dark" ? "☀" : "◐"}</span>
-          {theme === "dark" ? "Claro" : "Oscuro"}
+          {theme === "dark" ? t.light : t.dark}
         </button>
         <div className="project">
-          <span>Proyecto</span>
-          <b>Mi mecanismo</b>
+          <span>{t.project}</span>
+          <b>{t.mechanism}</b>
         </div>
         <div className="header-actions">
           <input
@@ -2608,19 +2868,19 @@ export default function Home() {
             }
           />
           <button className="ghost" onClick={() => fileRef.current?.click()}>
-            Importar
+            {t.import}
           </button>
           <button className="ghost" onClick={exportModel}>
-            Exportar
+            {t.export}
           </button>
           <button className={running ? "stop" : "play"} onClick={physics}>
-            {running ? "■ Detener" : "▶ Simular"}
+            {running ? t.stop : t.simulate}
           </button>
         </div>
       </header>
       <aside className="library">
         <div className="panel-title">
-          <span>PALETA STUDIO</span>
+          <span>{t.palette}</span>
           <b>{count}</b>
         </div>
         <div className="part-search">
@@ -2628,7 +2888,7 @@ export default function Home() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Nombre o referencia…"
+            placeholder={t.search}
           />
         </div>
         <div className="category-tabs">
@@ -2642,12 +2902,12 @@ export default function Home() {
               }}
             >
               <i>{c.icon}</i>
-              {c.label}
+              {t.categories[c.id]}
             </button>
           ))}
         </div>
         <div className="reference-box">
-          <b>Añadir referencia externa</b>
+          <b>{t.external}</b>
           <div>
             <input
               value={reference}
@@ -2659,8 +2919,12 @@ export default function Home() {
           </div>
         </div>
         <div className="catalog-head">
-          <b>{categories.find((c) => c.id === category)?.label}</b>
-          <span>{`${visible.length} piezas`}</span>
+          <b>{
+            t.categories[
+              categories.find((c) => c.id === category)?.id ?? "beams"
+            ]
+          }</b>
+          <span>{`${visible.length} ${t.pieces}`}</span>
         </div>
         <div className="parts-grid">
           {visible.map((p) => (
@@ -2674,7 +2938,11 @@ export default function Home() {
                     ? old
                     : [p, ...old],
                 );
-                setMessage(`Arrastra ${p.part} a la mesa`);
+                setMessage(
+                  language === "es"
+                    ? `Arrastra ${p.part} a la mesa`
+                    : `Drag ${p.part} onto the workspace`,
+                );
               }}
             >
               <div className="thumb">
@@ -2705,39 +2973,40 @@ export default function Home() {
         </div>
         {!visible.length && (
           <div className="no-results">
-            No hay piezas de la paleta que coincidan con la búsqueda.
+            {t.noResults}
           </div>
         )}
         <div className="drag-help">
-          Sólo se muestran las piezas incluidas en Palette_fav.
+          {t.dragHelp}
         </div>
       </aside>
       <section className="viewport" ref={mountRef}>
         <div className="view-label">
           <span className={running ? "live" : ""} />
           {running
-            ? "SIMULACIÓN: arrastra una pieza para aplicarle fuerza"
-            : message}
+            ? t.running
+            : message === "catalog-ready"
+              ? t.ready
+              : message}
         </div>
         <div className="camera-help">
-          Arrastrar: mover · Ctrl+arrastrar: Connect manual · Shift: mover Y ·
-          WASD/flechas: rotar 90° · Alt+clic: fijar · Alt/botón derecho: orbitar
+          {t.cameraHelp}
         </div>
       </section>
       <aside className="inspector">
         <div className="panel-title">
-          <span>PROPIEDADES</span>
+          <span>{t.properties}</span>
         </div>
         {selectedId && selected ? (
           <>
             <div className="selected-card">
               <div className="cube">◆</div>
               <div>
-                <small>PIEZA {selected.part}</small>
+                <small>{t.piece} {selected.part}</small>
                 <b>{selected.name}</b>
               </div>
             </div>
-            <label>DESPLAZAR</label>
+            <label>{t.move}</label>
             <div className="control-grid">
               <button onClick={() => nudge("x", -0.4)}>X−</button>
               <button onClick={() => nudge("y", 0.4)}>Y+</button>
@@ -2747,7 +3016,7 @@ export default function Home() {
               <button onClick={() => nudge("z", 0.4)}>Z+</button>
             </div>
             <div className="angle-head">
-              <label>ROTAR CUALQUIER ÁNGULO</label>
+              <label>{t.rotateAny}</label>
               <input
                 type="number"
                 min=".1"
@@ -2775,7 +3044,7 @@ export default function Home() {
               (connector) => connector.role === "shaft",
             ) && (
               <div className="connection-editor">
-                <label>UNIONES DE ESTA PIEZA</label>
+                <label>{t.pieceJoints}</label>
                 {selectedConnections.length ? (
                   selectedConnections.map((connection, index) => {
                     const other = connection.a;
@@ -2783,9 +3052,9 @@ export default function Home() {
                       <div className="connection-card" key={connection.id}>
                         <div>
                           <b>
-                            Unión {index + 1} · {other.part}
+                            {t.joint} {index + 1} · {other.part}
                           </b>
-                          <span>{profileLabel[connection.profile]}</span>
+                          <span>{profileLabels[connection.profile]}</span>
                         </div>
                         <select
                           value={connection.mode}
@@ -2799,13 +3068,13 @@ export default function Home() {
                         >
                           {allowedModes(connection.profile).map((mode) => (
                             <option value={mode} key={mode}>
-                              {modeLabel[mode]}
+                              {modeLabels[mode]}
                             </option>
                           ))}
                         </select>
                         {connection.mode === "motor" && (
                           <>
-                            <label className="motor-label">VELOCIDAD</label>
+                            <label className="motor-label">{t.speed}</label>
                             <div className="motor-control">
                               <input
                                 aria-label="Velocidad del motor"
@@ -2824,7 +3093,7 @@ export default function Home() {
                               />
                               <b>{connection.motorSpeed.toFixed(1)} rad/s</b>
                             </div>
-                            <label className="motor-label">FUERZA / PAR</label>
+                            <label className="motor-label">{t.torque}</label>
                             <div className="motor-control">
                               <input
                                 aria-label="Fuerza del motor"
@@ -2850,35 +3119,33 @@ export default function Home() {
                   })
                 ) : (
                   <p className="no-connections">
-                    Acerca la pieza a un conector compatible para crear una
-                    unión.
+                    {t.noJoints}
                   </p>
                 )}
               </div>
             )}
             <div className="data-row">
-              <span>Mapa Connect</span>
-              <b>{selected.connectors.length} puntos</b>
+              <span>{t.connectMap}</span>
+              <b>{selected.connectors.length} {t.points}</b>
             </div>
             <button
               className="map-toggle"
               onClick={() => setConnectionMapOpen((value) => !value)}
             >
               {connectionMapOpen
-                ? "Cerrar editor de mapa"
-                : "Editar mapa de conexiones"}
+                ? t.closeMap
+                : t.editMap}
             </button>
             {connectionMapOpen && (
               <div className="map-editor">
                 <p>
-                  Las coordenadas son locales a la pieza. Al editar se muestra
-                  el mapa y se eliminan las uniones antiguas de esta referencia.
+                  {t.mapHelp}
                 </p>
                 <div className="map-actions">
-                  <button onClick={addConnector}>+ Punto</button>
-                  <button onClick={exportConnectorMap}>Exportar JSON</button>
+                  <button onClick={addConnector}>{t.addPoint}</button>
+                  <button onClick={exportConnectorMap}>{t.exportJson}</button>
                   <button onClick={() => connectorFileRef.current?.click()}>
-                    Importar JSON
+                    {t.importJson}
                   </button>
                   <input
                     ref={connectorFileRef}
@@ -2898,8 +3165,8 @@ export default function Home() {
                   >
                     <summary>
                       <b>#{index + 1}</b>{" "}
-                      {connector.role === "socket" ? "Hueco" : "Saliente"} ·{" "}
-                      {connector.kind === "round" ? "redondo" : "cruz/eje"}
+                      {connector.role === "socket" ? t.hole : t.shaft} ·{" "}
+                      {connector.kind === "round" ? t.round : t.axle}
                       <button
                         onClick={(event) => {
                           event.preventDefault();
@@ -2916,8 +3183,8 @@ export default function Home() {
                           updateConnector(index, "role", event.target.value)
                         }
                       >
-                        <option value="socket">Hueco</option>
-                        <option value="shaft">Saliente</option>
+                        <option value="socket">{t.hole}</option>
+                        <option value="shaft">{t.shaft}</option>
                       </select>
                       <select
                         value={connector.kind}
@@ -2925,11 +3192,11 @@ export default function Home() {
                           updateConnector(index, "kind", event.target.value)
                         }
                       >
-                        <option value="round">Redondo</option>
-                        <option value="axle">Cruz / eje</option>
+                        <option value="round">{t.round}</option>
+                        <option value="axle">{t.axle}</option>
                       </select>
                     </div>
-                    <label>POSICIÓN X / Y / Z</label>
+                    <label>{t.position}</label>
                     <div className="vector-fields">
                       {connector.local.toArray().map((value, component) => (
                         <DeferredNumberInput
@@ -2946,7 +3213,7 @@ export default function Home() {
                         />
                       ))}
                     </div>
-                    <label>EJE X / Y / Z</label>
+                    <label>{t.axis}</label>
                     <div className="vector-fields">
                       {connector.axis.toArray().map((value, component) => (
                         <DeferredNumberInput
@@ -2965,7 +3232,7 @@ export default function Home() {
                     </div>
                     <div className="measure-fields">
                       <label>
-                        DIÁMETRO
+                        {t.diameter}
                         <DeferredNumberInput
                           min={0.01}
                           value={connector.diameter}
@@ -2979,7 +3246,7 @@ export default function Home() {
                         />
                       </label>
                       <label>
-                        LONGITUD
+                        {t.length}
                         <DeferredNumberInput
                           min={0.01}
                           value={connector.length ?? 0.5}
@@ -2994,33 +3261,33 @@ export default function Home() {
               </div>
             )}
             <div className="data-row">
-              <span>Uniones activas</span>
+              <span>{t.activeJoints}</span>
               <b>{selectedConnections.length}</b>
             </div>
             <div className="data-row">
-              <span>Modelo</span>
+              <span>{t.model}</span>
               <b>{selected.part}.dat</b>
             </div>
             <button className="danger" onClick={remove}>
-              Eliminar pieza
+              {t.deletePiece}
             </button>
           </>
         ) : (
           <div className="empty">
             <span>◇</span>
-            <b>Nada seleccionado</b>
-            <p>Selecciona una pieza colocada para moverla o rotarla.</p>
+            <b>{t.nothing}</b>
+            <p>{t.selectHelp}</p>
           </div>
         )}
         <div className="debug-tools">
-          <label>VISUALIZACIÓN TÉCNICA</label>
+          <label>{t.technical}</label>
           <button
             className={debugViews.colliders ? "active" : ""}
             aria-pressed={debugViews.colliders}
             onClick={() => toggleDebug("colliders")}
           >
             <i className="green" />
-            Mallas de colisión
+            {t.collisionMeshes}
           </button>
           <button
             className={debugViews.connectors ? "active" : ""}
@@ -3028,24 +3295,24 @@ export default function Home() {
             onClick={() => toggleDebug("connectors")}
           >
             <i className="cyan" />
-            Mapa de conexiones
+            {t.connectionMap}
           </button>
           <div className="connect-legend">
             <span>
               <i className="socket-round" />
-              Azul: hueco de pin
+              {t.blue}
             </span>
             <span>
               <i className="shaft-round" />
-              Naranja: pin
+              {t.orange}
             </span>
             <span>
               <i className="socket-axle" />
-              Verde: hueco de eje
+              {t.green}
             </span>
             <span>
               <i className="shaft-axle" />
-              Morado: recorrido de eje
+              {t.purple}
             </span>
           </div>
           <button
@@ -3054,38 +3321,40 @@ export default function Home() {
             onClick={() => toggleDebug("physics")}
           >
             <i className="orange" />
-            Cuerpos, uniones y pivotes
+            {t.bodies}
           </button>
         </div>
         <div className="log-tools">
-          <label>REGISTRO DE FÍSICA</label>
+          <label>{t.physicsLog}</label>
           <button disabled={!lastLog} onClick={downloadPhysicsLog}>
             {lastLog
-              ? "Descargar último log JSON"
-              : "Detén una simulación para generar el log"}
+              ? t.downloadLog
+              : t.stopForLog}
           </button>
           {lastLog && (
             <details>
-              <summary>Leer último log</summary>
+              <summary>{t.readLog}</summary>
               <pre>{lastLog}</pre>
             </details>
           )}
         </div>
         <div className="physics">
-          <b>MOTOR DE FÍSICA</b>
+          <b>{t.physicsEngine}</b>
           <span>
             <i /> Rapier + LDraw Connect
           </span>
           <p>
-            Cada unión de pin o eje puede configurarse según sus grados de
-            libertad compatibles.
+            {t.physicsHelp}
           </p>
         </div>
       </aside>
       <footer>
-        <span>● Cuadrícula 0.4 u</span>
+        <span>● {t.grid}</span>
+        <a href="https://www.ldraw.org/" target="_blank" rel="noreferrer">
+          {t.ldrawCredit}
+        </a>
         <span>Y ↑</span>
-        <span>{count} piezas · caché activa</span>
+        <span>{count} {t.pieces} · {t.cache}</span>
       </footer>
     </main>
   );
