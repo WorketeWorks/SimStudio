@@ -1,0 +1,7 @@
+0 Rectangle with 1 Edge
+0 Name: rect1.dat
+0 Author: Chris Dee [cwdee]
+0 !LICENSE Licensed under CC BY 4.0 : see CAreadme.txt
+0 BFC CERTIFY CCW
+2 24 1 0 -1 1 0 1
+4 16 -1 0 1 -1 0 -1 1 0 -1 1 0 1

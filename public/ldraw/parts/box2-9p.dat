@@ -1,0 +1,10 @@
+0 Box with  2 Faces with  3 Parallel Edges
+0 Name: box2-9p.dat
+0 Author: Willy Tschager [Holly-Wood]
+0 !LICENSE Licensed under CC BY 4.0 : see CAreadme.txt
+0 BFC CERTIFY CCW
+2 24 -1 1 1 1 1 1
+2 24 -1 1 -1 1 1 -1
+4 16 -1 1 1 1 1 1 1 1 -1 -1 1 -1
+2 24 -1 -1 1 1 -1 1
+4 16 1 -1 1 1 1 1 -1 1 1 -1 -1 1

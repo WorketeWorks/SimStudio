@@ -1,0 +1,8 @@
+0 Cylinder 0.0625
+0 Name: 1-16cyli.dat
+0 Author: Marc Klein [marckl]
+0 !LICENSE Licensed under CC BY 4.0 : see CAreadme.txt
+0 BFC CERTIFY CCW
+4 16 .9239 1 .3827 .9239 0 .3827 1 0 0 1 1 0
+5 24 1 1 0 1 0 0 1 1 -.4142 .9239 1 .3827
+5 24 .9239 1 .3827 .9239 0 .3827 1 1 0 .7654 1 .7654
