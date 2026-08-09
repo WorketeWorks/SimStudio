@@ -1065,9 +1065,7 @@ export default function Home() {
         (connection) => connection.a !== rod && connection.b !== rod,
       );
       rebalanceAllSmartDefaults(state);
-      for (const host of state.pieces.filter(
-        (part) => part !== rod && !isRod(part),
-      ))
+      for (const host of state.pieces.filter((part) => part !== rod))
         for (const socket of host.connectors.filter(
           (connector) => connector.role === "socket",
         ))
@@ -1108,9 +1106,7 @@ export default function Home() {
           score: number;
         };
         let best: Match | undefined;
-        for (const host of state.pieces.filter(
-          (part) => part !== piece && !isRod(part),
-        ))
+        for (const host of state.pieces.filter((part) => part !== piece))
           for (const socket of host.connectors.filter(
             (connector) => connector.role === "socket",
           ))
@@ -1137,39 +1133,40 @@ export default function Home() {
               if (score < 0.75 && (!best || score < best.score))
                 best = { host, socket, shaft, score };
             }
-        if (!best) return;
-        let targetAxis = worldConnector(best.host, best.socket).axis,
-          currentAxis = rodAxisLocal(piece)
-            .transformDirection(piece.mesh.matrixWorld)
-            .normalize();
-        if (currentAxis.dot(targetAxis) < 0)
-          targetAxis = targetAxis.clone().negate();
-        const alignment = new THREE.Quaternion().setFromUnitVectors(
-          currentAxis,
-          targetAxis,
-        );
-        piece.mesh.quaternion.premultiply(alignment).normalize();
-        piece.mesh.updateMatrixWorld(true);
-        const socketPoint = worldConnector(best.host, best.socket).point;
-        if (best.shaft.kind === "round") {
-          const rotated = best.shaft.local
-            .clone()
-            .applyQuaternion(piece.mesh.quaternion);
-          piece.mesh.position.copy(socketPoint).sub(rotated);
-        } else {
-          const center = rodCenterWorld(piece),
-            along = center.clone().sub(socketPoint).dot(targetAxis),
-            targetCenter = socketPoint
+        if (best) {
+          let targetAxis = worldConnector(best.host, best.socket).axis,
+            currentAxis = rodAxisLocal(piece)
+              .transformDirection(piece.mesh.matrixWorld)
+              .normalize();
+          if (currentAxis.dot(targetAxis) < 0)
+            targetAxis = targetAxis.clone().negate();
+          const alignment = new THREE.Quaternion().setFromUnitVectors(
+            currentAxis,
+            targetAxis,
+          );
+          piece.mesh.quaternion.premultiply(alignment).normalize();
+          piece.mesh.updateMatrixWorld(true);
+          const socketPoint = worldConnector(best.host, best.socket).point;
+          if (best.shaft.kind === "round") {
+            const rotated = best.shaft.local
               .clone()
-              .addScaledVector(targetAxis, along),
-            rotated = rodCenterLocal(piece).applyQuaternion(
-              piece.mesh.quaternion,
-            );
-          piece.mesh.position.copy(targetCenter).sub(rotated);
+              .applyQuaternion(piece.mesh.quaternion);
+            piece.mesh.position.copy(socketPoint).sub(rotated);
+          } else {
+            const center = rodCenterWorld(piece),
+              along = center.clone().sub(socketPoint).dot(targetAxis),
+              targetCenter = socketPoint
+                .clone()
+                .addScaledVector(targetAxis, along),
+              rotated = rodCenterLocal(piece).applyQuaternion(
+                piece.mesh.quaternion,
+              );
+            piece.mesh.position.copy(targetCenter).sub(rotated);
+          }
+          piece.mesh.updateMatrixWorld(true);
+          attachRod(piece);
+          return;
         }
-        piece.mesh.updateMatrixWorld(true);
-        attachRod(piece);
-        return;
       }
       type HostMatch = {
         rod: Piece;
@@ -1178,7 +1175,9 @@ export default function Home() {
         score: number;
       };
       let best: HostMatch | undefined;
-      for (const rod of state.pieces.filter(isRod))
+      for (const rod of state.pieces.filter(
+        (candidate) => candidate !== piece && isRod(candidate),
+      ))
         for (const socket of piece.connectors.filter(
           (connector) => connector.role === "socket",
         ))
@@ -1243,7 +1242,10 @@ export default function Home() {
       altCandidate: Piece | undefined,
       previous = { x: 0, y: 0 },
       orbitStart = { x: 0, y: 0 },
-      moveOffset = new THREE.Vector2();
+      moveOffset = new THREE.Vector2(),
+      movingStartPosition = new THREE.Vector3(),
+      movingStartPointer = new THREE.Vector2(),
+      movingLinearAxis: THREE.Vector3 | undefined;
     let spring:
       | {
           piece: Piece;
@@ -1251,8 +1253,10 @@ export default function Home() {
           anchor: THREE.Vector3;
           target: THREE.Vector3;
           plane: THREE.Plane;
-          line: THREE.Line;
-          label: THREE.Sprite;
+          overlay: SVGSVGElement;
+          line: SVGPolylineElement;
+          label: HTMLDivElement;
+          cursorScreen: { x: number; y: number };
           force: number;
         }
       | undefined;
@@ -1291,73 +1295,36 @@ export default function Home() {
       }
       return undefined;
     };
-    const springPoints = (a: THREE.Vector3, b: THREE.Vector3) => {
-      const direction = b.clone().sub(a),
-        length = direction.length();
-      if (length < 0.001) return [a, b];
-      const forward = direction.normalize(),
-        view = camera.getWorldDirection(new THREE.Vector3()),
-        side = new THREE.Vector3().crossVectors(forward, view);
-      if (side.lengthSq() < 0.01)
-        side.crossVectors(forward, new THREE.Vector3(0, 1, 0));
-      side.normalize();
-      return Array.from({ length: 25 }, (_, i) => {
-        const t = i / 24,
-          offset =
-            i === 0 || i === 24
-              ? 0
-              : (i % 2 ? 1 : -1) * Math.min(0.12, length * 0.08);
-        return a.clone().lerp(b, t).addScaledVector(side, offset);
-      });
-    };
-    const makeForceLabel = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = 256;
-      canvas.height = 64;
-      const texture = new THREE.CanvasTexture(canvas),
-        label = new THREE.Sprite(
-          new THREE.SpriteMaterial({
-            map: texture,
-            transparent: true,
-            depthTest: false,
-          }),
-        );
-      label.scale.set(1.55, 0.39, 1);
-      label.renderOrder = 61;
-      label.userData = { canvas, texture, lastText: "" };
-      return label;
-    };
-    const paintForceLabel = (label: THREE.Sprite, force: number) => {
+    const paintForceLabel = (label: HTMLDivElement, force: number) => {
       const text = `${force.toFixed(1)} N`;
-      if (label.userData.lastText === text) return;
-      const canvas = label.userData.canvas as HTMLCanvasElement,
-        texture = label.userData.texture as THREE.CanvasTexture,
-        context = canvas.getContext("2d")!;
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      context.fillStyle = "rgba(20, 25, 30, .88)";
-      context.beginPath();
-      context.roundRect(4, 4, 248, 56, 18);
-      context.fill();
-      context.strokeStyle = "#ffb327";
-      context.lineWidth = 4;
-      context.stroke();
-      context.fillStyle = "#ffffff";
-      context.font = "700 29px Arial";
-      context.textAlign = "center";
-      context.textBaseline = "middle";
-      context.fillText(text, 128, 33);
-      texture.needsUpdate = true;
-      label.userData.lastText = text;
+      if (label.textContent !== text) label.textContent = text;
     };
     const updateSpring = () => {
       if (!spring) return;
-      const anchor = spring.piece.mesh.localToWorld(spring.anchor.clone());
-      spring.line.geometry.setFromPoints(springPoints(anchor, spring.target));
-      spring.line.geometry.attributes.position.needsUpdate = true;
-      spring.label.position
-        .copy(anchor)
-        .lerp(spring.target, 0.5)
-        .add(new THREE.Vector3(0, 0.28, 0));
+      const projected = spring.piece.mesh
+          .localToWorld(spring.anchor.clone())
+          .project(camera),
+        anchor = {
+          x: ((projected.x + 1) * canvas.clientWidth) / 2,
+          y: ((1 - projected.y) * canvas.clientHeight) / 2,
+        },
+        target = spring.cursorScreen,
+        dx = target.x - anchor.x,
+        dy = target.y - anchor.y,
+        length = Math.hypot(dx, dy),
+        nx = length > 0 ? -dy / length : 0,
+        ny = length > 0 ? dx / length : 0,
+        points = Array.from({ length: 25 }, (_, index) => {
+          const t = index / 24,
+            offset =
+              index === 0 || index === 24
+                ? 0
+                : (index % 2 ? 1 : -1) * Math.min(8, length * 0.04);
+          return `${anchor.x + dx * t + nx * offset},${anchor.y + dy * t + ny * offset}`;
+        });
+      spring.line.setAttribute("points", points.join(" "));
+      spring.label.style.left = `${(anchor.x + target.x) / 2}px`;
+      spring.label.style.top = `${(anchor.y + target.y) / 2}px`;
       paintForceLabel(spring.label, spring.force);
     };
     const connectedPieces = (start: Piece) => {
@@ -1511,25 +1478,31 @@ export default function Home() {
         if (hit && hitPiece && !hitPiece.fixed && hitPiece.body) {
           state.selected = hitPiece;
           setSelectedId(hitPiece.id);
-          const line = new THREE.Line(
-              new THREE.BufferGeometry(),
-              new THREE.LineBasicMaterial({
-                color: 0xffa51f,
-                depthTest: false,
-                linewidth: 2,
-              }),
+          const overlay = document.createElementNS(
+              "http://www.w3.org/2000/svg",
+              "svg",
+            ),
+            line = document.createElementNS(
+              "http://www.w3.org/2000/svg",
+              "polyline",
             ),
             component = connectedPieces(hitPiece),
-            label = makeForceLabel();
-          line.renderOrder = 30;
-          scene.add(line);
-          scene.add(label);
-          component.forEach((p) => {
-            if (p.body && !p.fixed) {
-              p.body.setLinearDamping(1.2);
-              p.body.setAngularDamping(1.8);
-            }
-          });
+            label = document.createElement("div"),
+            canvasBounds = canvas.getBoundingClientRect();
+          overlay.classList.add("spring-overlay");
+          overlay.setAttribute(
+            "viewBox",
+            `0 0 ${canvas.clientWidth} ${canvas.clientHeight}`,
+          );
+          line.setAttribute("fill", "none");
+          line.setAttribute("stroke", "#ffb327");
+          line.setAttribute("stroke-width", "3");
+          line.setAttribute("stroke-linejoin", "round");
+          line.setAttribute("stroke-linecap", "round");
+          overlay.appendChild(line);
+          label.className = "spring-force-label";
+          host.appendChild(overlay);
+          host.appendChild(label);
           spring = {
             piece: hitPiece,
             component,
@@ -1539,8 +1512,13 @@ export default function Home() {
               camera.getWorldDirection(new THREE.Vector3()),
               hit.point,
             ),
+            overlay,
             line,
             label,
+            cursorScreen: {
+              x: e.clientX - canvasBounds.left,
+              y: e.clientY - canvasBounds.top,
+            },
             force: 0,
           };
           if (state.simLog)
@@ -1555,6 +1533,20 @@ export default function Home() {
         moving = hitPiece;
         state.selected = moving;
         setSelectedId(moving.id);
+        movingStartPosition.copy(moving.mesh.position);
+        movingStartPointer.set(e.clientX, e.clientY);
+        const linearGuide = state.connections.find(
+          (connection) =>
+            (connection.a === moving || connection.b === moving) &&
+            (connection.mode === "linear" ||
+              connection.mode === "rotation-linear"),
+        );
+        movingLinearAxis = linearGuide
+          ? linearGuide.localAxisA
+              .clone()
+              .transformDirection(linearGuide.a.mesh.matrixWorld)
+              .normalize()
+          : undefined;
         state.connections = state.connections.filter(
           (c) => c.a !== moving && c.b !== moving,
         );
@@ -1591,7 +1583,12 @@ export default function Home() {
       if (spring) {
         moved = true;
         cast(e);
-        const anchor = spring.piece.mesh.localToWorld(spring.anchor.clone());
+        const anchor = spring.piece.mesh.localToWorld(spring.anchor.clone()),
+          canvasBounds = canvas.getBoundingClientRect();
+        spring.cursorScreen = {
+          x: e.clientX - canvasBounds.left,
+          y: e.clientY - canvasBounds.top,
+        };
         spring.target.copy(
           ray.ray.at(camera.position.distanceTo(anchor), new THREE.Vector3()),
         );
@@ -1622,7 +1619,34 @@ export default function Home() {
       }
       if (moving) {
         moved = true;
-        if (e.shiftKey)
+        if (e.shiftKey && movingLinearAxis) {
+          const bounds = canvas.getBoundingClientRect(),
+            project = (point: THREE.Vector3) => {
+              const projected = point.clone().project(camera);
+              return new THREE.Vector2(
+                bounds.left + ((projected.x + 1) * bounds.width) / 2,
+                bounds.top + ((1 - projected.y) * bounds.height) / 2,
+              );
+            },
+            screenStart = project(movingStartPosition),
+            screenEnd = project(
+              movingStartPosition.clone().add(movingLinearAxis),
+            ),
+            screenAxis = screenEnd.sub(screenStart),
+            pixelsPerUnit = screenAxis.length(),
+            pointerDelta = new THREE.Vector2(
+              e.clientX - movingStartPointer.x,
+              e.clientY - movingStartPointer.y,
+            ),
+            distance =
+              pixelsPerUnit > 3
+                ? pointerDelta.dot(screenAxis.normalize()) / pixelsPerUnit
+                : -(e.clientY - movingStartPointer.y) * 0.015,
+            snappedDistance = Math.round(distance / 0.1) * 0.1;
+          moving.mesh.position
+            .copy(movingStartPosition)
+            .addScaledVector(movingLinearAxis, snappedDistance);
+        } else if (e.shiftKey)
           moving.mesh.position.y =
             Math.round(
               (moving.mesh.position.y - (e.clientY - previous.y) * 0.0125) /
@@ -1698,12 +1722,8 @@ export default function Home() {
           state.simLog.events.push(
             `[${((Date.now() - Date.parse(state.simLog.startedAt)) / 1000).toFixed(3)}s] drag-end ${released.piece.part}; fuerza y par eliminados, velocidades limitadas`,
           );
-        scene.remove(released.line);
-        released.line.geometry.dispose();
-        (released.line.material as THREE.Material).dispose();
-        scene.remove(released.label);
-        released.label.material.map?.dispose();
-        released.label.material.dispose();
+        released.overlay.remove();
+        released.label.remove();
         spring = undefined;
       }
       if (orbit && !moved && altCandidate) toggleFixed(altCandidate);
@@ -1711,6 +1731,7 @@ export default function Home() {
       altCandidate = undefined;
       if (moving && moved) connect(moving);
       moving = undefined;
+      movingLinearAxis = undefined;
       setConnectionRevision((value) => value + 1);
       refreshDebug();
     };
@@ -1750,25 +1771,47 @@ export default function Home() {
       renderer.setSize(host.clientWidth, host.clientHeight);
     };
     const keydown = (e: KeyboardEvent) => {
-      if (e.key !== "Delete" || state.running || !state.selected) return;
       const target = e.target as HTMLElement | null;
       if (target?.matches("input, textarea, select, [contenteditable=true]"))
         return;
+      if (state.running || !state.selected) return;
+      const piece = state.selected,
+        key = e.key.toLowerCase();
+      if (e.key === "Delete") {
+        e.preventDefault();
+        scene.remove(piece.mesh);
+        if (piece.lockSprite) scene.remove(piece.lockSprite);
+        state.pieces = state.pieces.filter((item) => item !== piece);
+        state.connections = state.connections.filter(
+          (connection) => connection.a !== piece && connection.b !== piece,
+        );
+        rebalanceAllSmartDefaults(state);
+        state.selected = undefined;
+        refreshDebug();
+        setSelectedId(null);
+        setCount(state.pieces.length);
+        setConnectionRevision((value) => value + 1);
+        setMessage(`${piece.part} eliminada`);
+        return;
+      }
+      const rotation =
+        key === "w" || key === "arrowup"
+          ? { axis: "x" as const, angle: -Math.PI / 2 }
+          : key === "s" || key === "arrowdown"
+            ? { axis: "x" as const, angle: Math.PI / 2 }
+            : key === "a" || key === "arrowleft"
+              ? { axis: "y" as const, angle: -Math.PI / 2 }
+              : key === "d" || key === "arrowright"
+                ? { axis: "y" as const, angle: Math.PI / 2 }
+                : undefined;
+      if (!rotation) return;
       e.preventDefault();
-      const piece = state.selected;
-      scene.remove(piece.mesh);
-      if (piece.lockSprite) scene.remove(piece.lockSprite);
-      state.pieces = state.pieces.filter((item) => item !== piece);
-      state.connections = state.connections.filter(
-        (connection) => connection.a !== piece && connection.b !== piece,
-      );
-      rebalanceAllSmartDefaults(state);
-      state.selected = undefined;
+      if (rotation.axis === "x") piece.mesh.rotateX(rotation.angle);
+      else piece.mesh.rotateY(rotation.angle);
+      piece.mesh.updateMatrixWorld(true);
       refreshDebug();
-      setSelectedId(null);
-      setCount(state.pieces.length);
-      setConnectionRevision((value) => value + 1);
-      setMessage(`${piece.part} eliminada`);
+      setSelectedId(piece.id);
+      setMessage(`${piece.part} rotada 90° · ${rotation.axis.toUpperCase()}`);
     };
     const canvas = renderer.domElement;
     canvas.addEventListener("pointerdown", down);
@@ -1797,37 +1840,25 @@ export default function Home() {
             delta = spring.target.clone().sub(anchor);
           if (delta.length() > 3.5) delta.setLength(3.5);
           const dynamic = spring.component.filter((p) => p.body && !p.fixed),
-            averageVelocity = dynamic
-              .reduce((sum, p) => {
-                const v = p.body!.linvel();
-                return sum.add(new THREE.Vector3(v.x, v.y, v.z));
-              }, new THREE.Vector3())
-              .multiplyScalar(1 / Math.max(1, dynamic.length)),
+            velocity = spring.piece.body.linvel(),
             acceleration = delta
-              .multiplyScalar(36)
-              .addScaledVector(averageVelocity, -6);
-          if (acceleration.length() > 70) acceleration.setLength(70);
-          let totalForce = 0;
-          dynamic.forEach((p) => {
-            const mass = Math.max(0.25, p.body!.mass()),
-              force = acceleration.clone().multiplyScalar(mass),
-              w = p.body!.angvel();
-            p.body!.addForce(force, true);
-            totalForce += force.length();
-            p.body!.addTorque(
-              {
-                x: -w.x * mass * 1.5,
-                y: -w.y * mass * 1.5,
-                z: -w.z * mass * 1.5,
-              },
-              true,
+              .multiplyScalar(42)
+              .addScaledVector(
+                new THREE.Vector3(velocity.x, velocity.y, velocity.z),
+                -1.2,
+              ),
+            movingMass = dynamic.reduce(
+              (total, piece) => total + Math.max(0.25, piece.body!.mass()),
+              0,
             );
-            if (state.simLog)
-              state.simLog.maxSpringForce = Math.max(
-                state.simLog.maxSpringForce,
-                force.length(),
-              );
-          });
+          if (acceleration.length() > 90) acceleration.setLength(90);
+          const force = acceleration.multiplyScalar(Math.max(0.25, movingMass)),
+            totalForce = force.length();
+          spring.piece.body.addForceAtPoint(
+            { x: force.x, y: force.y, z: force.z },
+            { x: anchor.x, y: anchor.y, z: anchor.z },
+            true,
+          );
           spring.force = totalForce;
           if (state.simLog)
             state.simLog.maxSpringForce = Math.max(
@@ -2707,7 +2738,7 @@ export default function Home() {
         </div>
         <div className="camera-help">
           Arrastrar: mover · Ctrl+arrastrar: Connect manual · Shift: mover Y ·
-          Alt+clic: fijar · Alt+arrastrar/botón derecho: orbitar
+          WASD/flechas: rotar 90° · Alt+clic: fijar · Alt/botón derecho: orbitar
         </div>
       </section>
       <aside className="inspector">
