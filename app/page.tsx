@@ -144,6 +144,8 @@ type AppState = {
   preloadPart: (part: CatalogPart) => Promise<void>;
   renderImportPreview: (parts: PreparedImportPlacement[]) => Promise<string>;
   verifyConnections: () => number;
+  bulkLoading?: boolean;
+  largeSimulation?: boolean;
   pendingPlacement?: {
     pieces: Piece[];
     offsets: THREE.Vector3[];
@@ -1360,7 +1362,7 @@ export default function Home() {
       position: THREE.Vector3,
       rotation?: THREE.Quaternion,
     ) => {
-      setMessage(`Cargando ${p.part}…`);
+      if (!state.bulkLoading) setMessage(`Cargando ${p.part}…`);
       try {
         const exact = await loadPartModel(p);
         preloaded.add(`${p.part}:${p.color}`);
@@ -1394,14 +1396,16 @@ export default function Home() {
           const box = new THREE.Box3().setFromObject(wrapper);
           wrapper.position.y -= box.min.y;
         }
-        setCount(state.pieces.length);
-        setMessage(
-          `${p.part} · ${connectors.length} conectores · ${colliders.length} formas físicas`,
-        );
-        refreshDebug();
+        if (!state.bulkLoading) {
+          setCount(state.pieces.length);
+          setMessage(
+            `${p.part} · ${connectors.length} conectores · ${colliders.length} formas físicas`,
+          );
+          refreshDebug();
+        }
         return piece;
       } catch {
-        setMessage(`No se encontró ${p.part}.dat`);
+        if (!state.bulkLoading) setMessage(`No se encontró ${p.part}.dat`);
         return null;
       }
     };
@@ -2366,7 +2370,7 @@ export default function Home() {
       frame = requestAnimationFrame(animate);
       if (state.running && state.world) {
         state.pieces.forEach((p) => {
-          if (p.body && !p.fixed) {
+          if (p.body && !p.fixed && !p.body.isSleeping()) {
             p.body.resetForces(false);
             p.body.resetTorques(false);
           }
@@ -2450,11 +2454,15 @@ export default function Home() {
         state.world.timestep = Math.min(clock.getDelta(), 1 / 60);
         state.world.step();
         const startup = performance.now() - (state.simStartedMs ?? 0) < 350;
-        state.pieces.forEach((p) =>
-          clampMotion(p, startup ? 2 : 12, startup ? 3 : 14),
-        );
         state.pieces.forEach((p) => {
-          if (p.body) {
+          if (!p.body?.isSleeping())
+            clampMotion(p, startup ? 2 : 12, startup ? 3 : 14);
+        });
+        state.pieces.forEach((p) => {
+          if (
+            p.body &&
+            (!state.largeSimulation || startup || !p.body.isSleeping())
+          ) {
             const t = p.body.translation(),
               q = p.body.rotation(),
               bodyRotation = new THREE.Quaternion(q.x, q.y, q.z, q.w);
@@ -2496,7 +2504,7 @@ export default function Home() {
               ];
             });
             state.simLog.samples.push({ time, bodies });
-            state.nextLogSample = time + 0.2;
+            state.nextLogSample = time + (state.largeSimulation ? 0.75 : 0.2);
           }
         }
       } else clock.getDelta();
@@ -2677,9 +2685,11 @@ export default function Home() {
       };
       s.nextLogSample = 0;
       s.simStartedMs = performance.now();
-      const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
-      world.integrationParameters.numSolverIterations = 8;
-      world.integrationParameters.maxCcdSubsteps = 2;
+      const largeSimulation = s.pieces.length > 250,
+        world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+      s.largeSimulation = largeSimulation;
+      world.integrationParameters.numSolverIterations = largeSimulation ? 4 : 8;
+      world.integrationParameters.maxCcdSubsteps = largeSimulation ? 1 : 2;
       world.integrationParameters.contact_natural_frequency = 18;
       world.integrationParameters.normalizedAllowedLinearError = 0.01;
       world.createCollider(
@@ -2694,8 +2704,8 @@ export default function Home() {
           : RAPIER.RigidBodyDesc.dynamic()
               .setLinearDamping(0.35)
               .setAngularDamping(0.65)
-              .setCcdEnabled(true)
-              .setSoftCcdPrediction(0.1)
+              .setCcdEnabled(!largeSimulation)
+              .setSoftCcdPrediction(largeSimulation ? 0 : 0.1)
               .setAdditionalMass(p.kind === "motor" ? 2 : 0.65);
         desc.setTranslation(
           p.mesh.position.x,
@@ -2784,7 +2794,9 @@ export default function Home() {
       s.running = true;
       setRunning(true);
       setMessage(
-        `${s.connections.length} conexiones físicas activas · colisión pin/pieza desactivada`,
+        `${s.connections.length} conexiones físicas activas · ${
+          largeSimulation ? "modo de rendimiento para ensamblaje grande" : "precisión completa"
+        }`,
       );
     } else {
       s.running = false;
@@ -2810,6 +2822,7 @@ export default function Home() {
       });
       s.snapshot = undefined;
       s.world = undefined;
+      s.largeSimulation = undefined;
       s.simStartedMs = undefined;
       s.refreshDebug();
       setRunning(false);
@@ -3014,31 +3027,42 @@ export default function Home() {
     setImportDraft(null);
     reset();
     const pieces: Piece[] = [];
-    for (const placement of draft.placements) {
-      const piece = await s.addPart(
-        placement.catalog,
-        placement.position,
-        placement.rotation,
-      );
-      if (piece) pieces.push(piece);
+    s.bulkLoading = true;
+    try {
+      for (let index = 0; index < draft.placements.length; index++) {
+        const placement = draft.placements[index],
+          piece = await s.addPart(
+            placement.catalog,
+            placement.position,
+            placement.rotation,
+          );
+        if (piece) pieces.push(piece);
+        if (index % 40 === 39)
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => resolve()),
+          );
+      }
+    } finally {
+      s.bulkLoading = false;
     }
-    if (!pieces.length) return;
-    const bounds = new THREE.Box3();
-    pieces.forEach((piece) => bounds.expandByObject(piece.mesh));
-    const center = bounds.getCenter(new THREE.Vector3()),
-      anchor = new THREE.Vector3(center.x, bounds.min.y, center.z),
-      offsets = pieces.map((piece) => piece.mesh.position.clone().sub(anchor));
-    pieces.forEach((piece, index) => {
-      piece.mesh.position.copy(offsets[index]);
-      piece.mesh.updateMatrixWorld(true);
-    });
-    s.pendingPlacement = { pieces, offsets };
-    s.connections = [];
+    setCount(s.pieces.length);
+    if (!pieces.length) {
+      setMessage(
+        language === "es"
+          ? "No se pudo colocar ninguna pieza del modelo"
+          : "No model parts could be placed",
+      );
+      return;
+    }
+    // Temporary performance mode: imported models keep their LDraw position
+    // and are finalized immediately instead of following the pointer.
+    s.pendingPlacement = undefined;
+    const connections = s.verifyConnections();
     s.refreshDebug();
     setMessage(
       language === "es"
-        ? "Mueve el modelo con el cursor y haz clic para colocarlo"
-        : "Move the model with the pointer and click to place it",
+        ? `${pieces.length} piezas importadas directamente · ${connections} conexiones detectadas`
+        : `${pieces.length} parts imported directly · ${connections} connections detected`,
     );
   };
   const discardImport = () => {
