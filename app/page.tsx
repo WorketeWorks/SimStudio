@@ -193,6 +193,7 @@ type AppState = {
   performanceTrace: PerformanceTrace;
   pendingInputMs: number;
   pendingConnectionMs: number;
+  connectionScanVersion: number;
   pendingPlacement?: {
     pieces: Piece[];
     offsets: THREE.Vector3[];
@@ -1671,6 +1672,7 @@ export default function Home() {
       },
       pendingInputMs: 0,
       pendingConnectionMs: 0,
+      connectionScanVersion: 0,
       renderBatchItems: [],
       addPart,
       preloadPart,
@@ -1848,39 +1850,74 @@ export default function Home() {
       axis: THREE.Vector3;
       localAxisA: THREE.Vector3;
     };
+    type IndexedShaft = {
+      rod: Piece;
+      shaft: MeshConnector;
+      point: THREE.Vector3;
+      axis: THREE.Vector3;
+    };
     const connectionCellSize = 0.45,
       connectionCell = (point: THREE.Vector3) =>
         `${Math.floor(point.x / connectionCellSize)}:${Math.floor(point.y / connectionCellSize)}:${Math.floor(point.z / connectionCellSize)}`,
-      buildSocketGrid = () => {
-        const grid = new Map<string, IndexedSocket[]>();
-        state.pieces.forEach((host) => {
-          host.mesh.updateMatrixWorld(true);
-          host.connectors
-            .filter((connector) => connector.role === "socket")
-            .forEach((socket) => {
-              const point = socket.local.clone().applyMatrix4(host.mesh.matrixWorld),
-                axis = socket.axis
-                  .clone()
-                  .transformDirection(host.mesh.matrixWorld)
-                  .normalize(),
-                key = connectionCell(point),
-                entries = grid.get(key) ?? [];
-              entries.push({
-                host,
-                socket,
+      buildConnectionIndex = () => {
+        const sockets: IndexedSocket[] = [],
+          shaftGrid = new Map<string, IndexedShaft[]>(),
+          addShaftCell = (key: string, entry: IndexedShaft) => {
+            const entries = shaftGrid.get(key) ?? [];
+            entries.push(entry);
+            shaftGrid.set(key, entries);
+          };
+        state.pieces.forEach((piece) => {
+          piece.mesh.updateMatrixWorld(true);
+          piece.connectors.forEach((connector) => {
+            const point = connector.local.clone().applyMatrix4(piece.mesh.matrixWorld),
+              axis = connector.axis
+                .clone()
+                .transformDirection(piece.mesh.matrixWorld)
+                .normalize();
+            if (connector.role === "socket") {
+              sockets.push({
+                host: piece,
+                socket: connector,
                 point,
                 axis,
-                localAxisA: socket.axis.clone().normalize(),
+                localAxisA: connector.axis.clone().normalize(),
               });
-              grid.set(key, entries);
-            });
+              return;
+            }
+            const entry: IndexedShaft = {
+                rod: piece,
+                shaft: connector,
+                point,
+                axis,
+              },
+              occupiedCells = new Set<string>();
+            if (connector.kind === "round")
+              occupiedCells.add(connectionCell(point));
+            else {
+              const half = (connector.length ?? 0.5) / 2 + 0.12,
+                steps = Math.max(
+                  1,
+                  Math.ceil((half * 2) / (connectionCellSize * 0.5)),
+                );
+              for (let step = 0; step <= steps; step++)
+                occupiedCells.add(
+                  connectionCell(
+                    point
+                      .clone()
+                      .addScaledVector(axis, -half + (step / steps) * half * 2),
+                  ),
+                );
+            }
+            occupiedCells.forEach((key) => addShaftCell(key, entry));
+          });
         });
-        return grid;
+        return { sockets, shaftGrid };
       },
-      nearbySockets = (
-        grid: Map<string, IndexedSocket[]>,
+      nearbyShafts = (
+        grid: Map<string, IndexedShaft[]>,
         point: THREE.Vector3,
-        found: Set<IndexedSocket>,
+        found: Set<IndexedShaft>,
       ) => {
         const x = Math.floor(point.x / connectionCellSize),
           y = Math.floor(point.y / connectionCellSize),
@@ -1892,62 +1929,46 @@ export default function Home() {
                 .get(`${x + dx}:${y + dy}:${z + dz}`)
                 ?.forEach((entry) => found.add(entry));
       },
-      scanShaftPiece = (
-        shaftPiece: Piece,
-        grid: Map<string, IndexedSocket[]>,
+      scanSocketOnce = (
+        candidateSocket: IndexedSocket,
+        grid: Map<string, IndexedShaft[]>,
       ) => {
-        shaftPiece.mesh.updateMatrixWorld(true);
-        for (const shaft of shaftPiece.connectors.filter(
-          (connector) => connector.role === "shaft",
-        )) {
-          const shaftWorld = {
-              point: shaft.local.clone().applyMatrix4(shaftPiece.mesh.matrixWorld),
-              axis: shaft.axis
-                .clone()
-                .transformDirection(shaftPiece.mesh.matrixWorld)
-                .normalize(),
-            },
-            candidates = new Set<IndexedSocket>();
-          if (shaft.kind === "round")
-            nearbySockets(grid, shaftWorld.point, candidates);
-          else {
-            const half = (shaft.length ?? 0.5) / 2 + 0.12,
-              steps = Math.max(1, Math.ceil((half * 2) / connectionCellSize));
-            for (let step = 0; step <= steps; step++)
-              nearbySockets(
-                grid,
-                shaftWorld.point
-                  .clone()
-                  .addScaledVector(shaftWorld.axis, -half + (step / steps) * half * 2),
-                candidates,
-              );
+        const candidates = new Set<IndexedShaft>();
+        nearbyShafts(grid, candidateSocket.point, candidates);
+        let best:
+          | { candidate: IndexedShaft; score: number }
+          | undefined;
+        candidates.forEach((candidate) => {
+          const { rod, shaft, point, axis } = candidate,
+            profile = connectorProfile(shaft, candidateSocket.socket);
+          if (!profile || rod === candidateSocket.host) return;
+          if (Math.abs(candidateSocket.axis.dot(axis)) < 0.965) return;
+          let score: number;
+          if (shaft.kind === "round") {
+            score = point.distanceTo(candidateSocket.point);
+            if (score > 0.18) return;
+          } else {
+            const half = (shaft.length ?? 0.5) / 2,
+              delta = candidateSocket.point.clone().sub(point),
+              along = delta.dot(axis),
+              radial = delta.clone().addScaledVector(axis, -along).length();
+            if (radial > 0.16 || Math.abs(along) > half + 0.1) return;
+            score = radial + Math.abs(along) * 0.0001;
           }
-          candidates.forEach((candidate) => {
-            const { host, socket, point, axis, localAxisA } = candidate,
-              profile = connectorProfile(shaft, socket);
-            if (!profile || host === shaftPiece) return;
-            if (Math.abs(axis.dot(shaftWorld.axis)) < 0.965) return;
-            let overlaps: boolean;
-            if (shaft.kind === "round")
-              overlaps = shaftWorld.point.distanceTo(point) <= 0.18;
-            else {
-              const half = (shaft.length ?? 0.5) / 2,
-                delta = point.clone().sub(shaftWorld.point),
-                along = delta.dot(shaftWorld.axis),
-                radial = delta
-                  .clone()
-                  .addScaledVector(shaftWorld.axis, -along)
-                  .length();
-              overlaps = radial <= 0.16 && Math.abs(along) <= half + 0.1;
-            }
-            if (overlaps)
-              addConnection(host, shaftPiece, socket, shaft, {
-                point,
-                axis,
-                localAxisA,
-              });
-          });
-        }
+          if (!best || score < best.score) best = { candidate, score };
+        });
+        if (!best) return;
+        addConnection(
+          candidateSocket.host,
+          best.candidate.rod,
+          candidateSocket.socket,
+          best.candidate.shaft,
+          {
+            point: candidateSocket.point,
+            axis: candidateSocket.axis,
+            localAxisA: candidateSocket.localAxisA,
+          },
+        );
       },
       finishConnectionScan = () => {
         state.bulkConnecting = false;
@@ -1958,33 +1979,35 @@ export default function Home() {
     };
     const verifyConnections = () => {
       const started = performance.now();
+      state.connectionScanVersion++;
       state.connections = [];
       state.bulkConnecting = true;
-      const grid = buildSocketGrid();
-      state.pieces
-        .filter((piece) =>
-          piece.connectors.some((connector) => connector.role === "shaft"),
-        )
-        .forEach((piece) => scanShaftPiece(piece, grid));
+      const { sockets, shaftGrid } = buildConnectionIndex();
+      sockets.forEach((socket) => scanSocketOnce(socket, shaftGrid));
       const result = finishConnectionScan();
       state.pendingConnectionMs += performance.now() - started;
       return result;
     };
     const verifyConnectionsAsync = async () => {
+      const scanVersion = ++state.connectionScanVersion;
       let operationStarted = performance.now();
       state.connections = [];
       state.bulkConnecting = true;
-      const grid = buildSocketGrid(),
-        shafts = state.pieces.filter((piece) =>
-          piece.connectors.some((connector) => connector.role === "shaft"),
-        );
+      const { sockets, shaftGrid } = buildConnectionIndex();
       state.pendingConnectionMs += performance.now() - operationStarted;
       let sliceStarted = performance.now();
-      for (let index = 0; index < shafts.length; index++) {
+      for (let index = 0; index < sockets.length; index++) {
+        if (scanVersion !== state.connectionScanVersion)
+          return state.connections.length;
         operationStarted = performance.now();
-        scanShaftPiece(shafts[index], grid);
+        scanSocketOnce(sockets[index], shaftGrid);
         state.pendingConnectionMs += performance.now() - operationStarted;
         if (performance.now() - sliceStarted >= 6) {
+          setMessage(
+            language === "es"
+              ? `Conectando nodos ${index + 1}/${sockets.length}…`
+              : `Connecting nodes ${index + 1}/${sockets.length}…`,
+          );
           await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
           sliceStarted = performance.now();
         }
@@ -3139,6 +3162,8 @@ export default function Home() {
     const s = appRef.current;
     if (!s) return;
     s.running = false;
+    s.connectionScanVersion++;
+    s.bulkConnecting = false;
     s.disposeRenderBatches();
     s.pieces.forEach((p) => {
       s.scene.remove(p.mesh);
