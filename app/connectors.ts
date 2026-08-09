@@ -16,6 +16,7 @@ type Loop = {
   du: number;
   dv: number;
   points: number;
+  radialRatio: number;
 };
 const coord = (v: THREE.Vector3, i: number) =>
   i === 0 ? v.x : i === 1 ? v.y : v.z;
@@ -141,7 +142,19 @@ export function detectConnectorHoles(root: THREE.Object3D): MeshConnector[] {
           vmin = Math.min(...vs),
           vmax = Math.max(...vs),
           du = umax - umin,
-          dv = vmax - vmin;
+          dv = vmax - vmin,
+          centerU = (umin + umax) / 2,
+          centerV = (vmin + vmax) / 2,
+          radii = points.map((point) =>
+            Math.hypot(
+              coord(point, other[0]) - centerU,
+              coord(point, other[1]) - centerV,
+            ),
+          ),
+          maximumRadius = Math.max(...radii),
+          radialRatio = maximumRadius > 0
+            ? Math.min(...radii) / maximumRadius
+            : 1;
         if (
           du < 0.32 ||
           dv < 0.32 ||
@@ -158,6 +171,7 @@ export function detectConnectorHoles(root: THREE.Object3D): MeshConnector[] {
           du,
           dv,
           points: points.length,
+          radialRatio,
         });
       }
     }
@@ -187,7 +201,34 @@ export function detectConnectorHoles(root: THREE.Object3D): MeshConnector[] {
         ),
         diameter = (a.du + a.dv + b.du + b.dv) / 4,
         kind: MeshConnector["kind"] =
-          a.points + b.points < 18 ? "axle" : "round";
+          diameter < 0.75 || Math.min(a.radialRatio, b.radialRatio) < 0.78
+            ? "axle"
+            : "round";
+      const start = center.clone(),
+        end = center.clone(),
+        margin = 0.08;
+      start.setComponent(
+        a.axisIndex,
+        Math.min(a.plane, b.plane) - margin,
+      );
+      end.setComponent(
+        a.axisIndex,
+        Math.max(a.plane, b.plane) + margin,
+      );
+      const worldStart = root.localToWorld(start),
+        worldEnd = root.localToWorld(end),
+        worldDirection = worldEnd.clone().sub(worldStart),
+        rayLength = worldDirection.length(),
+        raycaster = new THREE.Raycaster(
+          worldStart,
+          worldDirection.normalize(),
+          margin * 0.25,
+          rayLength - margin * 0.25,
+        ),
+        centerLineBlocked = raycaster
+          .intersectObject(root, true)
+          .some((hit) => hit.object instanceof THREE.Mesh);
+      if (centerLineBlocked) continue;
       if (
         !result.some(
           (c) =>
@@ -197,6 +238,119 @@ export function detectConnectorHoles(root: THREE.Object3D): MeshConnector[] {
       )
         result.push({ local: center, axis, kind, role: "socket", diameter });
     }
+  // Cross holes placed at the end of a beam often share edges with the outer
+  // silhouette, so the line-loop pass above cannot close their contour. Probe
+  // LEGO-grid positions through the thinnest side of the part: the centre must
+  // be empty, material must surround it, and diagonal/cardinal samples tell a
+  // round opening from a cross opening.
+  const bounds = objectLocalBounds(root),
+    size = bounds.getSize(new THREE.Vector3()),
+    dimensions = [size.x, size.y, size.z],
+    raycaster = new THREE.Raycaster(),
+    probe = (
+      center: THREE.Vector3,
+      axisIndex: number,
+      uAxis: number,
+      vAxis: number,
+      offsetU = 0,
+      offsetV = 0,
+    ) => {
+      const start = center.clone(),
+        end = center.clone(),
+        margin = 0.06;
+      start.setComponent(uAxis, coord(start, uAxis) + offsetU);
+      start.setComponent(vAxis, coord(start, vAxis) + offsetV);
+      end.copy(start);
+      start.setComponent(axisIndex, coord(bounds.min, axisIndex) - margin);
+      end.setComponent(axisIndex, coord(bounds.max, axisIndex) + margin);
+      const worldStart = root.localToWorld(start),
+        worldEnd = root.localToWorld(end),
+        direction = worldEnd.clone().sub(worldStart),
+        length = direction.length();
+      raycaster.set(worldStart, direction.normalize());
+      raycaster.near = margin * 0.2;
+      raycaster.far = length - margin * 0.2;
+      return raycaster
+        .intersectObject(root, true)
+        .some((hit) => hit.object instanceof THREE.Mesh);
+    };
+  for (let axisIndex = 0; axisIndex < 3; axisIndex++) {
+    if (dimensions[axisIndex] > 1.25) continue;
+    const [uAxis, vAxis] = [0, 1, 2].filter((index) => index !== axisIndex),
+      minimumU = Math.ceil(coord(bounds.min, uAxis) - 0.001),
+      maximumU = Math.floor(coord(bounds.max, uAxis) + 0.001),
+      minimumV = Math.ceil(coord(bounds.min, vAxis) - 0.001),
+      maximumV = Math.floor(coord(bounds.max, vAxis) + 0.001),
+      axis = new THREE.Vector3().setComponent(axisIndex, 1);
+    for (let u = minimumU; u <= maximumU; u++)
+      for (let v = minimumV; v <= maximumV; v++) {
+        const center = vector(
+          axisIndex,
+          (coord(bounds.min, axisIndex) + coord(bounds.max, axisIndex)) / 2,
+          u,
+          v,
+        ),
+          existing = result.find(
+            (connector) =>
+              connector.local.distanceTo(center) < 0.18 &&
+              Math.abs(connector.axis.dot(axis)) > 0.9,
+          );
+        if (probe(center, axisIndex, uAxis, vAxis)) continue;
+        let surroundingMaterial = 0,
+          innerOpening = 0;
+        for (let sample = 0; sample < 8; sample++) {
+          const angle = (sample * Math.PI) / 4,
+            cosine = Math.cos(angle),
+            sine = Math.sin(angle);
+          if (
+            probe(
+              center,
+              axisIndex,
+              uAxis,
+              vAxis,
+              cosine * 0.47,
+              sine * 0.47,
+            )
+          )
+            surroundingMaterial++;
+          if (
+            !probe(
+              center,
+              axisIndex,
+              uAxis,
+              vAxis,
+              cosine * 0.22,
+              sine * 0.22,
+            )
+          )
+            innerOpening++;
+        }
+        const kind: MeshConnector["kind"] =
+          innerOpening >= 7 ? "round" : "axle";
+        if (
+          (kind === "round" && surroundingMaterial < 3) ||
+          (kind === "axle" &&
+            (surroundingMaterial < 1 ||
+              innerOpening < 3 ||
+              innerOpening > 5))
+        )
+          continue;
+        if (existing) {
+          existing.local.copy(center);
+          existing.kind = kind;
+          existing.diameter = kind === "round" ? 0.8 : 0.6;
+          existing.length = dimensions[axisIndex];
+        } else
+          result.push({
+            local: center,
+            axis: axis.clone(),
+            kind,
+            role: "socket",
+            diameter: kind === "round" ? 0.8 : 0.6,
+            length: dimensions[axisIndex],
+          });
+      }
+  }
   return result;
 }
 

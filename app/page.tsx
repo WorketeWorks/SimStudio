@@ -492,6 +492,7 @@ const translations = {
     mapHelp:
       "Las coordenadas son locales a la pieza. Al editar se muestra el mapa y se eliminan las uniones antiguas de esta referencia.",
     addPoint: "+ Punto",
+    regenerateMap: "Regenerar automáticamente",
     exportJson: "Exportar JSON",
     importJson: "Importar JSON",
     hole: "Hueco",
@@ -592,6 +593,7 @@ const translations = {
     mapHelp:
       "Coordinates are local to the part. Editing displays the map and removes old joints for this part number.",
     addPoint: "+ Point",
+    regenerateMap: "Regenerate automatically",
     exportJson: "Export JSON",
     importJson: "Import JSON",
     hole: "Socket",
@@ -1091,10 +1093,12 @@ export default function Home() {
         axis: connector.axis.clone(),
       }));
     const analyzePart = (wrapper: THREE.Object3D, p: CatalogPart) => {
-      let connectors: MeshConnector[] | undefined;
+      let connectors: MeshConnector[] | undefined,
+        hasSavedConnectorMap = false;
       try {
         const saved = localStorage.getItem(`sim-connectors-v4:${p.part}`);
-        if (saved)
+        if (saved) {
+          hasSavedConnectorMap = true;
           connectors = (
             JSON.parse(saved) as {
               local: number[];
@@ -1110,6 +1114,7 @@ export default function Home() {
             local: new THREE.Vector3().fromArray(connector.local),
             axis: new THREE.Vector3().fromArray(connector.axis).normalize(),
           }));
+        }
       } catch {}
       if (!connectors && preloadedConnectionMaps[p.part])
         connectors = preloadedConnectionMaps[p.part].map((connector) => ({
@@ -1180,7 +1185,15 @@ export default function Home() {
         size: primitive.size?.clone(),
         rotation: primitive.rotation.clone(),
       }));
-      if (!colliders && packagedParts[p.part])
+      // Corrected connection maps can change the topology used by the compound
+      // collider generator (notably small L beams). Do not reuse a collider that
+      // was packaged before that corrected map existed.
+      if (
+        !colliders &&
+        packagedParts[p.part] &&
+        !preloadedConnectionMaps[p.part] &&
+        !hasSavedConnectorMap
+      )
         colliders = packagedParts[p.part].colliders.map((primitive) => ({
           ...primitive,
           center: new THREE.Vector3().fromArray(primitive.center),
@@ -4160,12 +4173,18 @@ export default function Home() {
     }));
     for (const instance of state.pieces.filter(
       (item) => item.part === piece.part,
-    ))
+    )) {
       instance.connectors = normalized.map((connector) => ({
         ...connector,
         local: connector.local.clone(),
         axis: connector.axis.clone(),
       }));
+      instance.colliders = approximateCollisionPrimitives(
+        instance.mesh,
+        instance.name,
+        instance.connectors,
+      );
+    }
     state.connections = state.connections.filter(
       (connection) =>
         connection.a.part !== piece.part && connection.b.part !== piece.part,
@@ -4229,6 +4248,44 @@ export default function Home() {
       selected,
       next,
       `Mapa ${selected.part}: conector añadido`,
+    );
+  };
+  const regenerateConnectorMap = () => {
+    if (!selected || running) return;
+    const sockets = detectConnectorHoles(selected.mesh);
+    let connectors: MeshConnector[];
+    if (isPinPart(selected)) {
+      const shafts = /^Technic Axle Pin/i.test(selected.name)
+        ? hybridAxlePinConnectors(selected.mesh)
+        : rodConnectors(selected.mesh, "round");
+      connectors = [
+        ...shafts,
+        ...sockets.filter(
+          (socket) =>
+            !shafts.some(
+              (shaft) => shaft.local.distanceTo(socket.local) < 0.12,
+            ),
+        ),
+      ];
+    } else if (isAxlePart(selected)) {
+      const shafts = rodConnectors(selected.mesh, "axle");
+      connectors = [
+        ...shafts,
+        ...sockets.filter(
+          (socket) =>
+            !shafts.some(
+              (shaft) => shaft.local.distanceTo(socket.local) < 0.12,
+            ),
+        ),
+      ];
+    } else
+      connectors = sockets.length
+        ? sockets
+        : fallbackBeamConnectors(selected.mesh, selected.name);
+    commitConnectorMap(
+      selected,
+      connectors,
+      `Mapa ${selected.part}: ${connectors.length} conectores regenerados`,
     );
   };
   const removeConnector = (index: number) => {
@@ -4882,6 +4939,9 @@ export default function Home() {
                 </p>
                 <div className="map-actions">
                   <button onClick={addConnector}>{t.addPoint}</button>
+                  <button onClick={regenerateConnectorMap}>
+                    {t.regenerateMap}
+                  </button>
                   <button onClick={exportConnectorMap}>{t.exportJson}</button>
                   <button onClick={() => connectorFileRef.current?.click()}>
                     {t.importJson}
