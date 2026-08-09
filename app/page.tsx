@@ -110,6 +110,34 @@ type SimulationLog = {
   maxSpringForce: number;
   events: string[];
 };
+type FramePerformanceSample = {
+  elapsedMs: number;
+  frameIntervalMs: number;
+  totalMs: number;
+  inputMs: number;
+  forceResetMs: number;
+  springMs: number;
+  jointForcesMs: number;
+  worldStepMs: number;
+  syncMs: number;
+  physicsLogMs: number;
+  debugMs: number;
+  locksMs: number;
+  renderMs: number;
+  pieces: number;
+  connections: number;
+  activeBodies: number;
+  sleepingBodies: number;
+  drawCalls: number;
+  triangles: number;
+};
+type PerformanceTrace = {
+  startedAt: string;
+  startedAtMs: number;
+  samples: FramePerformanceSample[];
+  cursor: number;
+  totalFrames: number;
+};
 type AppState = {
   scene: THREE.Scene;
   renderer: THREE.WebGLRenderer;
@@ -146,6 +174,8 @@ type AppState = {
   verifyConnections: () => number;
   bulkLoading?: boolean;
   largeSimulation?: boolean;
+  performanceTrace: PerformanceTrace;
+  pendingInputMs: number;
   pendingPlacement?: {
     pieces: Piece[];
     offsets: THREE.Vector3[];
@@ -332,6 +362,10 @@ const translations = {
     downloadLog: "Descargar último log JSON",
     stopForLog: "Detén una simulación para generar el log",
     readLog: "Leer último log",
+    performanceLog: "DIAGNÓSTICO DE RENDIMIENTO",
+    downloadPerformance: "Descargar perfil de fotogramas JSON",
+    performanceHelp:
+      "Reproduce el lag y descarga el registro: conserva los últimos 600 fotogramas.",
     physicsEngine: "MOTOR DE FÍSICA",
     physicsHelp:
       "Cada unión de pin o eje puede configurarse según sus grados de libertad compatibles.",
@@ -424,6 +458,10 @@ const translations = {
     downloadLog: "Download latest JSON log",
     stopForLog: "Stop a simulation to generate a log",
     readLog: "Read latest log",
+    performanceLog: "PERFORMANCE DIAGNOSTICS",
+    downloadPerformance: "Download frame profile JSON",
+    performanceHelp:
+      "Reproduce the lag, then download the log: it keeps the latest 600 frames.",
     physicsEngine: "PHYSICS ENGINE",
     physicsHelp:
       "Each pin or axle joint can be configured using its compatible degrees of freedom.",
@@ -1427,6 +1465,14 @@ export default function Home() {
         }
       >(),
       running: false,
+      performanceTrace: {
+        startedAt: new Date().toISOString(),
+        startedAtMs: performance.now(),
+        samples: [],
+        cursor: 0,
+        totalFrames: 0,
+      },
+      pendingInputMs: 0,
       addPart,
       preloadPart,
       renderImportPreview,
@@ -2352,10 +2398,26 @@ export default function Home() {
       setMessage(`${piece.part} rotada 90° · ${rotation.axis.toUpperCase()}`);
     };
     const canvas = renderer.domElement;
+    let pointerMoveStarted = 0;
+    const beginMeasuredMove = () => {
+      pointerMoveStarted = performance.now();
+    };
+    const measuredMove = (event: PointerEvent) => {
+      const started = pointerMoveStarted || performance.now();
+      try {
+        move(event);
+      } finally {
+        state.pendingInputMs = Math.max(
+          state.pendingInputMs,
+          performance.now() - started,
+        );
+      }
+    };
     canvas.tabIndex = 0;
     canvas.style.outline = "none";
     canvas.addEventListener("pointerdown", down);
-    canvas.addEventListener("pointermove", move);
+    canvas.addEventListener("pointermove", beginMeasuredMove, true);
+    canvas.addEventListener("pointermove", measuredMove);
     canvas.addEventListener("pointerup", up);
     canvas.addEventListener("pointercancel", up);
     canvas.addEventListener("wheel", wheel, { passive: false });
@@ -2364,17 +2426,36 @@ export default function Home() {
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     window.addEventListener("resize", resize);
     window.addEventListener("keydown", keydown, true);
-    let frame = 0;
+    let frame = 0,
+      lastFrameStarted = performance.now();
     const clock = new THREE.Clock();
     const animate = () => {
       frame = requestAnimationFrame(animate);
+      const frameStarted = performance.now(),
+        frameIntervalMs = frameStarted - lastFrameStarted;
+      lastFrameStarted = frameStarted;
+      let forceResetMs = 0,
+        springMs = 0,
+        jointForcesMs = 0,
+        worldStepMs = 0,
+        syncMs = 0,
+        physicsLogMs = 0,
+        activeBodies = 0,
+        sleepingBodies = 0;
       if (state.running && state.world) {
+        let phaseStarted = performance.now();
         state.pieces.forEach((p) => {
-          if (p.body && !p.fixed && !p.body.isSleeping()) {
+          if (!p.body) return;
+          const sleeping = p.body.isSleeping();
+          if (sleeping) sleepingBodies++;
+          else activeBodies++;
+          if (!p.fixed && !sleeping) {
             p.body.resetForces(false);
             p.body.resetTorques(false);
           }
         });
+        forceResetMs = performance.now() - phaseStarted;
+        phaseStarted = performance.now();
         if (spring?.piece.body && !spring.piece.fixed) {
           const anchor = spring.piece.mesh.localToWorld(spring.anchor.clone()),
             delta = spring.target.clone().sub(anchor);
@@ -2407,6 +2488,8 @@ export default function Home() {
             );
           updateSpring();
         }
+        springMs = performance.now() - phaseStarted;
+        phaseStarted = performance.now();
         for (const connection of state.connections) {
           if (
             (connection.mode !== "linear" &&
@@ -2451,8 +2534,12 @@ export default function Home() {
               true,
             );
         }
+        jointForcesMs = performance.now() - phaseStarted;
+        phaseStarted = performance.now();
         state.world.timestep = Math.min(clock.getDelta(), 1 / 60);
         state.world.step();
+        worldStepMs = performance.now() - phaseStarted;
+        phaseStarted = performance.now();
         const startup = performance.now() - (state.simStartedMs ?? 0) < 350;
         state.pieces.forEach((p) => {
           if (!p.body?.isSleeping())
@@ -2472,6 +2559,8 @@ export default function Home() {
             );
           }
         });
+        syncMs = performance.now() - phaseStarted;
+        phaseStarted = performance.now();
         if (state.simLog) {
           const time = (Date.now() - Date.parse(state.simLog.startedAt)) / 1000;
           if (time >= (state.nextLogSample ?? 0)) {
@@ -2507,8 +2596,12 @@ export default function Home() {
             state.nextLogSample = time + (state.largeSimulation ? 0.75 : 0.2);
           }
         }
+        physicsLogMs = performance.now() - phaseStarted;
       } else clock.getDelta();
+      let phaseStarted = performance.now();
       state.updateDebug();
+      const debugMs = performance.now() - phaseStarted;
+      phaseStarted = performance.now();
       state.pieces.forEach((p) => {
         if (p.fixed && p.lockSprite) {
           const box = new THREE.Box3().setFromObject(p.mesh),
@@ -2516,7 +2609,39 @@ export default function Home() {
           p.lockSprite.position.set(center.x, box.max.y + 0.55, center.z);
         }
       });
+      const locksMs = performance.now() - phaseStarted;
+      phaseStarted = performance.now();
       renderer.render(scene, camera);
+      const renderMs = performance.now() - phaseStarted,
+        trace = state.performanceTrace,
+        sample: FramePerformanceSample = {
+          elapsedMs: performance.now() - trace.startedAtMs,
+          frameIntervalMs,
+          totalMs: performance.now() - frameStarted,
+          inputMs: state.pendingInputMs,
+          forceResetMs,
+          springMs,
+          jointForcesMs,
+          worldStepMs,
+          syncMs,
+          physicsLogMs,
+          debugMs,
+          locksMs,
+          renderMs,
+          pieces: state.pieces.length,
+          connections: state.connections.length,
+          activeBodies,
+          sleepingBodies,
+          drawCalls: renderer.info.render.calls,
+          triangles: renderer.info.render.triangles,
+        };
+      state.pendingInputMs = 0;
+      trace.totalFrames++;
+      if (trace.samples.length < 600) trace.samples.push(sample);
+      else {
+        trace.samples[trace.cursor] = sample;
+        trace.cursor = (trace.cursor + 1) % trace.samples.length;
+      }
     };
     animate();
     return () => {
@@ -3333,6 +3458,116 @@ export default function Home() {
     a.click();
     URL.revokeObjectURL(a.href);
   };
+  const downloadPerformanceLog = () => {
+    const state = appRef.current;
+    if (!state?.performanceTrace.samples.length) return;
+    const trace = state.performanceTrace,
+      samples =
+        trace.totalFrames > trace.samples.length
+          ? [
+              ...trace.samples.slice(trace.cursor),
+              ...trace.samples.slice(0, trace.cursor),
+            ]
+          : trace.samples.slice(),
+      metrics: (keyof FramePerformanceSample)[] = [
+        "frameIntervalMs",
+        "totalMs",
+        "inputMs",
+        "forceResetMs",
+        "springMs",
+        "jointForcesMs",
+        "worldStepMs",
+        "syncMs",
+        "physicsLogMs",
+        "debugMs",
+        "locksMs",
+        "renderMs",
+      ],
+      percentile = (values: number[], amount: number) =>
+        values[Math.min(values.length - 1, Math.floor(values.length * amount))] ?? 0,
+      summary = Object.fromEntries(
+        metrics.map((metric) => {
+          const values = samples
+              .map((sample) => Number(sample[metric]))
+              .sort((a, b) => a - b),
+            average = values.reduce((total, value) => total + value, 0) / values.length;
+          return [
+            metric,
+            {
+              average: +average.toFixed(3),
+              p50: +percentile(values, 0.5).toFixed(3),
+              p95: +percentile(values, 0.95).toFixed(3),
+              maximum: +(values.at(-1) ?? 0).toFixed(3),
+            },
+          ];
+        }),
+      ),
+      phaseNames = [
+        "inputMs",
+        "forceResetMs",
+        "springMs",
+        "jointForcesMs",
+        "worldStepMs",
+        "syncMs",
+        "physicsLogMs",
+        "debugMs",
+        "locksMs",
+        "renderMs",
+      ],
+      dominantPhase = phaseNames
+        .map((name) => ({
+          name,
+          p95: (summary[name] as { p95: number }).p95,
+        }))
+        .sort((a, b) => b.p95 - a.p95)[0],
+      payload = {
+        format: "sim-studio-frame-profile",
+        version: 1,
+        generatedAt: new Date().toISOString(),
+        recordingStartedAt: trace.startedAt,
+        retainedFrames: samples.length,
+        totalFramesObserved: trace.totalFrames,
+        scene: {
+          pieces: state.pieces.length,
+          connections: state.connections.length,
+          simulationRunning: state.running,
+          largeSimulation: !!state.largeSimulation,
+          diagnostics: state.debug,
+        },
+        environment: {
+          userAgent: navigator.userAgent,
+          hardwareConcurrency: navigator.hardwareConcurrency,
+          deviceMemory:
+            (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? null,
+          devicePixelRatio,
+        },
+        diagnosis: {
+          dominantPhaseByP95: dominantPhase,
+          framesOver16_7ms: samples.filter(
+            (sample) => sample.frameIntervalMs > 16.7,
+          ).length,
+          framesOver33_3ms: samples.filter(
+            (sample) => sample.frameIntervalMs > 33.3,
+          ).length,
+          framesOver50ms: samples.filter(
+            (sample) => sample.frameIntervalMs > 50,
+          ).length,
+        },
+        summary,
+        slowestFrames: samples
+          .slice()
+          .sort((a, b) => b.frameIntervalMs - a.frameIntervalMs)
+          .slice(0, 100),
+        samples,
+      },
+      anchor = document.createElement("a");
+    anchor.href = URL.createObjectURL(
+      new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }),
+    );
+    anchor.download = "sim-studio-performance-log.json";
+    anchor.click();
+    URL.revokeObjectURL(anchor.href);
+  };
   const importStatusText = importDraft
       ? {
           reading: t.importReading,
@@ -3931,6 +4166,13 @@ export default function Home() {
               <pre>{lastLog}</pre>
             </details>
           )}
+        </div>
+        <div className="log-tools">
+          <label>{t.performanceLog}</label>
+          <p>{t.performanceHelp}</p>
+          <button onClick={downloadPerformanceLog}>
+            {t.downloadPerformance}
+          </button>
         </div>
         <div className="physics">
           <b>{t.physicsEngine}</b>
