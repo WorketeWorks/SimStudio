@@ -36,8 +36,9 @@ async function search(query:string,family:string){
   return items;
 }
 export async function GET(request:Request){
-  const url=new URL(request.url),family=url.searchParams.get("family")||"",q=url.searchParams.get("q")?.trim().slice(0,80)||"";
+  const url=new URL(request.url),family=url.searchParams.get("family")||"",q=url.searchParams.get("q")?.trim().slice(0,80)||"",refs=(url.searchParams.get("refs")||"").split(",").map(x=>x.trim().replace(/\.dat$/i,"")).filter(Boolean).slice(0,120);
   try{
+    if(refs.length){const wanted=new Set(refs.map(x=>x.toLowerCase())),batches=await Promise.all(refs.map(x=>search(x,""))),seen=new Set<string>(),items=batches.flat().filter(x=>wanted.has(x.part.toLowerCase())&&!seen.has(x.part.toLowerCase())&&!!seen.add(x.part.toLowerCase()));return Response.json({items,query:refs},{headers:{"Cache-Control":"public, max-age=3600"}})}
     const translated=q?translate(q):"";const queries=q?[translated]:(familyQueries[family]??["Technic Beam"]);const batches=await Promise.all(queries.map(x=>search(x,family)));const seen=new Set<string>();let items=batches.flat().filter(x=>{if(seen.has(x.part))return false;seen.add(x.part);return true});
     if(family==="beams")items=items.filter(x=>/^Technic Beam/i.test(x.name));
     if(family==="axles")items=items.filter(x=>/^Technic Axle( |$)/i.test(x.name)&&!/Connector|Hole|Ball|Gear/i.test(x.name));

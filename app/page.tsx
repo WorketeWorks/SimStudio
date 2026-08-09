@@ -5,7 +5,7 @@ import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { LDrawLoader } from "three/addons/loaders/LDrawLoader.js";
 import { LDrawConditionalLineMaterial } from "three/addons/materials/LDrawConditionalLineMaterial.js";
-import { makeLDR, parseLDR } from "./ldraw";
+import { makeLDR, parseLDR, type LDrawPlacement } from "./ldraw";
 import {
   approximateCollisionPrimitives,
   detectConnectorHoles,
@@ -44,12 +44,31 @@ type Piece = CatalogPart & {
   body?: RAPIER.RigidBody;
   physicsBase?: THREE.Quaternion;
 };
+type PreparedImportPlacement = {
+  catalog: CatalogPart;
+  source: LDrawPlacement;
+  position: THREE.Vector3;
+  rotation: THREE.Quaternion;
+};
+type ImportDraft = {
+  fileName: string;
+  status: "reading" | "palette" | "external" | "preview" | "ready" | "error";
+  progress: number;
+  total: number;
+  paletteCount: number;
+  externalCount: number;
+  placements: PreparedImportPlacement[];
+  preview?: string;
+  error?: string;
+};
 type JointMode = "fixed" | "rotation" | "linear" | "rotation-linear" | "motor";
 type ConnectionProfile = "pin-round" | "axle-cross" | "axle-round";
 type Connection = {
   id: string;
   a: Piece;
   b: Piece;
+  socket: MeshConnector;
+  shaft: MeshConnector;
   mode: JointMode;
   profile: ConnectionProfile;
   point: THREE.Vector3;
@@ -122,6 +141,12 @@ type AppState = {
     rotation?: THREE.Quaternion,
   ) => Promise<Piece | null>;
   preloadPart: (part: CatalogPart) => Promise<void>;
+  renderImportPreview: (parts: PreparedImportPlacement[]) => Promise<string>;
+  verifyConnections: () => number;
+  pendingPlacement?: {
+    pieces: Piece[];
+    offsets: THREE.Vector3[];
+  };
   debug: DebugFlags;
   refreshDebug: () => void;
   updateDebug: () => void;
@@ -232,6 +257,18 @@ const translations = {
     mechanism: "Mi mecanismo",
     import: "Importar",
     export: "Exportar",
+    importTitle: "Importar modelo LDraw",
+    importReading: "Analizando referencias del archivo…",
+    importPalette: "Cargando piezas de la paleta local…",
+    importExternal: "Consultando y cargando piezas externas…",
+    importPreview: "Preparando previsualización…",
+    importReady: "Modelo preparado para colocar",
+    importParts: "piezas",
+    importUnique: "referencias únicas",
+    importFromPalette: "de la paleta",
+    importExternalParts: "externas",
+    discard: "Descartar",
+    place: "Colocar",
     stop: "■ Detener",
     simulate: "▶ Simular",
     palette: "PALETA STUDIO",
@@ -312,6 +349,18 @@ const translations = {
     mechanism: "My mechanism",
     import: "Import",
     export: "Export",
+    importTitle: "Import LDraw model",
+    importReading: "Analyzing file references…",
+    importPalette: "Loading local palette parts…",
+    importExternal: "Looking up and loading external parts…",
+    importPreview: "Preparing preview…",
+    importReady: "Model ready to place",
+    importParts: "parts",
+    importUnique: "unique part numbers",
+    importFromPalette: "from palette",
+    importExternalParts: "external",
+    discard: "Discard",
+    place: "Place",
     stop: "■ Stop",
     simulate: "▶ Simulate",
     palette: "STUDIO PALETTE",
@@ -538,6 +587,7 @@ export default function Home() {
   const mountRef = useRef<HTMLDivElement>(null),
     fileRef = useRef<HTMLInputElement>(null),
     connectorFileRef = useRef<HTMLInputElement>(null),
+    importTokenRef = useRef(0),
     appRef = useRef<AppState | null>(null);
   const [running, setRunning] = useState(false),
     [count, setCount] = useState(0),
@@ -558,7 +608,8 @@ export default function Home() {
   const [, setConnectionRevision] = useState(0);
   const [rotationAngle, setRotationAngle] = useState(15),
     [, setConnectorRevision] = useState(0),
-    [connectionMapOpen, setConnectionMapOpen] = useState(false);
+    [connectionMapOpen, setConnectionMapOpen] = useState(false),
+    [importDraft, setImportDraft] = useState<ImportDraft | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">("dark"),
     [language, setLanguage] = useState<Language>("es");
   const t = translations[language],
@@ -819,8 +870,9 @@ export default function Home() {
       return { connectors, colliders };
     };
     const preloadPart = async (p: CatalogPart) => {
-      if (preloaded.has(p.part)) return;
-      if (preloading.has(p.part)) return preloading.get(p.part);
+      const preloadKey = `${p.part}:${p.color}`;
+      if (preloaded.has(preloadKey)) return;
+      if (preloading.has(preloadKey)) return preloading.get(preloadKey);
       const task = loadPartModel(p)
         .then((exact) => {
           prepareModel(exact);
@@ -828,12 +880,53 @@ export default function Home() {
           wrapper.add(exact);
           wrapper.updateMatrixWorld(true);
           analyzePart(wrapper, p);
-          preloaded.add(p.part);
+          preloaded.add(preloadKey);
         })
         .catch(() => {})
-        .finally(() => preloading.delete(p.part));
-      preloading.set(p.part, task);
+        .finally(() => preloading.delete(preloadKey));
+      preloading.set(preloadKey, task);
       return task;
+    };
+    const renderImportPreview = async (parts: PreparedImportPlacement[]) => {
+      const previewScene = new THREE.Scene();
+      previewScene.background = new THREE.Color(darkTheme ? 0x202328 : 0xe8edf0);
+      previewScene.add(new THREE.HemisphereLight(0xffffff, 0x36404a, 2.4));
+      const light = new THREE.DirectionalLight(0xffffff, 3.2);
+      light.position.set(7, 10, 9);
+      previewScene.add(light);
+      const root = new THREE.Group();
+      previewScene.add(root);
+      for (const placement of parts) {
+        const exact = await loadPartModel(placement.catalog);
+        prepareModel(exact);
+        const wrapper = new THREE.Group();
+        wrapper.add(exact);
+        wrapper.position.copy(placement.position);
+        wrapper.quaternion.copy(placement.rotation);
+        root.add(wrapper);
+      }
+      root.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(root),
+        center = box.getCenter(new THREE.Vector3()),
+        size = box.getSize(new THREE.Vector3()),
+        radius = Math.max(size.x, size.y, size.z, 1),
+        previewCamera = new THREE.PerspectiveCamera(32, 16 / 9, 0.01, radius * 20);
+      previewCamera.position.copy(center).add(
+        new THREE.Vector3(radius * 1.35, radius * 1.05, radius * 1.55),
+      );
+      previewCamera.lookAt(center);
+      const previewRenderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: false,
+        preserveDrawingBuffer: true,
+      });
+      previewRenderer.setPixelRatio(1);
+      previewRenderer.setSize(640, 360, false);
+      previewRenderer.outputColorSpace = THREE.SRGBColorSpace;
+      previewRenderer.render(previewScene, previewCamera);
+      const image = previewRenderer.domElement.toDataURL("image/png");
+      previewRenderer.dispose();
+      return image;
     };
     const state = {} as AppState,
       debugRoot = new THREE.Group();
@@ -1112,7 +1205,7 @@ export default function Home() {
       setMessage(`Cargando ${p.part}…`);
       try {
         const exact = await loadPartModel(p);
-        preloaded.add(p.part);
+        preloaded.add(`${p.part}:${p.color}`);
         prepareModel(exact);
         exact.traverse((object) => {
           if (object instanceof THREE.Mesh) {
@@ -1174,6 +1267,7 @@ export default function Home() {
       running: false,
       addPart,
       preloadPart,
+      renderImportPreview,
       debug: { colliders: false, connectors: false, physics: false },
       refreshDebug,
       updateDebug,
@@ -1202,8 +1296,10 @@ export default function Home() {
         !profile ||
         state.connections.some(
           (connection) =>
-            (connection.a === host && connection.b === rod) ||
-            (connection.a === rod && connection.b === host),
+            connection.a === host &&
+            connection.b === rod &&
+            connection.socket === socket &&
+            connection.shaft === shaft,
         )
       )
         return false;
@@ -1211,7 +1307,9 @@ export default function Home() {
         hostWorldRotation = host.mesh.getWorldQuaternion(
           new THREE.Quaternion(),
         ),
-        id = `${host.id}:${rod.id}:${profile}`,
+        socketIndex = host.connectors.indexOf(socket),
+        shaftIndex = rod.connectors.indexOf(shaft),
+        id = `${host.id}:${socketIndex}:${rod.id}:${shaftIndex}:${profile}`,
         saved = state.connectionModes.get(id),
         mode =
           saved && allowedModes(profile).includes(saved.mode)
@@ -1224,6 +1322,8 @@ export default function Home() {
         id,
         a: host,
         b: rod,
+        socket,
+        shaft,
         mode,
         profile,
         point: world.point.clone(),
@@ -1279,6 +1379,25 @@ export default function Home() {
           sourceConnector.role === "shaft" ? sourceConnector : targetConnector;
       return addConnection(socketPiece, shaftPiece, socket, shaft);
     };
+    const connectorsOverlap = (
+      host: Piece,
+      socket: MeshConnector,
+      shaftPiece: Piece,
+      shaft: MeshConnector,
+    ) => {
+      if (!connectorProfile(shaft, socket)) return false;
+      const socketWorld = worldConnector(host, socket),
+        shaftWorld = worldConnector(shaftPiece, shaft),
+        shaftAxis = shaftWorld.axis;
+      if (Math.abs(socketWorld.axis.dot(shaftAxis)) < 0.965) return false;
+      if (shaft.kind === "round")
+        return shaftWorld.point.distanceTo(socketWorld.point) <= 0.18;
+      const half = (shaft.length ?? 0.5) / 2,
+        delta = socketWorld.point.clone().sub(shaftWorld.point),
+        along = delta.dot(shaftAxis),
+        radial = delta.clone().addScaledVector(shaftAxis, -along).length();
+      return radial <= 0.16 && Math.abs(along) <= half + 0.1;
+    };
     const attachRod = (rod: Piece) => {
       rod.mesh.updateMatrixWorld(true);
       const shafts = rod.connectors.filter(
@@ -1294,25 +1413,7 @@ export default function Home() {
           (connector) => connector.role === "socket",
         ))
           for (const shaft of shafts) {
-            const profile = connectorProfile(shaft, socket);
-            if (!profile) continue;
-            const socketWorld = worldConnector(host, socket),
-              shaftWorld = worldConnector(rod, shaft),
-              shaftAxis = shaftWorld.axis;
-            if (Math.abs(socketWorld.axis.dot(shaftAxis)) < 0.965) continue;
-            if (shaft.kind === "round") {
-              if (shaftWorld.point.distanceTo(socketWorld.point) > 0.18)
-                continue;
-            } else {
-              const half = (shaft.length ?? 0.5) / 2,
-                delta = socketWorld.point.clone().sub(shaftWorld.point),
-                along = delta.dot(shaftAxis),
-                radial = delta
-                  .clone()
-                  .addScaledVector(shaftAxis, -along)
-                  .length();
-              if (radial > 0.16 || Math.abs(along) > half + 0.1) continue;
-            }
+            if (!connectorsOverlap(host, socket, rod, shaft)) continue;
             if (addConnection(host, rod, socket, shaft)) {
               added++;
               break;
@@ -1323,6 +1424,28 @@ export default function Home() {
           `Connect: ${added} unión${added === 1 ? "" : "es"} compatible${added === 1 ? "" : "s"} en ${rod.part}`,
         );
     };
+    const verifyConnections = () => {
+      state.connections = [];
+      for (const shaftPiece of state.pieces.filter((piece) =>
+        piece.connectors.some((connector) => connector.role === "shaft"),
+      ))
+        for (const host of state.pieces) {
+          if (host === shaftPiece) continue;
+          for (const socket of host.connectors.filter(
+            (connector) => connector.role === "socket",
+          ))
+            for (const shaft of shaftPiece.connectors.filter(
+              (connector) => connector.role === "shaft",
+            ))
+              if (connectorsOverlap(host, socket, shaftPiece, shaft))
+                addConnection(host, shaftPiece, socket, shaft);
+        }
+      rebalanceAllSmartDefaults(state);
+      setConnectionRevision((value) => value + 1);
+      refreshDebug();
+      return state.connections.length;
+    };
+    state.verifyConnections = verifyConnections;
     const connect = (piece: Piece) => {
       if (isRod(piece)) {
         type Match = {
@@ -1650,6 +1773,15 @@ export default function Home() {
       previous = orbitStart = { x: e.clientX, y: e.clientY };
       moved = false;
       cast(e);
+      if (!state.running && state.pendingPlacement && e.button === 0) {
+        const placed = state.pendingPlacement.pieces.length;
+        state.pendingPlacement = undefined;
+        const connections = verifyConnections();
+        setMessage(
+          `${placed} piezas colocadas · ${connections} conexiones detectadas`,
+        );
+        return;
+      }
       const hit = ray.intersectObjects(
           state.pieces.map((p) => p.mesh),
           true,
@@ -1786,6 +1918,23 @@ export default function Home() {
       }
     };
     const move = (e: PointerEvent) => {
+      if (!state.running && state.pendingPlacement) {
+        cast(e);
+        const ground = ray.intersectObject(floor)[0];
+        if (ground) {
+          const target = new THREE.Vector3(
+            Math.round(ground.point.x / 0.4) * 0.4,
+            0,
+            Math.round(ground.point.z / 0.4) * 0.4,
+          );
+          state.pendingPlacement.pieces.forEach((piece, index) => {
+            piece.mesh.position.copy(target).add(state.pendingPlacement!.offsets[index]);
+            piece.mesh.updateMatrixWorld(true);
+          });
+          refreshDebug();
+        }
+        return;
+      }
       if (state.manualConnect) {
         moved = true;
         cast(e);
@@ -1916,6 +2065,7 @@ export default function Home() {
             best.piece,
             best.connector,
           );
+        const detected = connected ? verifyConnections() : state.connections.length;
         scene.remove(draft.line);
         draft.line.geometry.dispose();
         (draft.line.material as THREE.Material).dispose();
@@ -1923,7 +2073,7 @@ export default function Home() {
         setConnectionRevision((value) => value + 1);
         setMessage(
           connected && best
-            ? `Connect manual: ${draft.piece.part} ↔ ${best.piece.part}`
+            ? `Connect manual: ${draft.piece.part} ↔ ${best.piece.part} · ${detected} uniones verificadas`
             : "Connect manual cancelado: no hay un punto compatible a menos de 2 unidades",
         );
         refreshDebug();
@@ -1951,7 +2101,10 @@ export default function Home() {
       if (orbit && !moved && altCandidate) toggleFixed(altCandidate);
       orbit = false;
       altCandidate = undefined;
-      if (moving && moved) connect(moving);
+      if (moving && moved) {
+        connect(moving);
+        verifyConnections();
+      }
       moving = undefined;
       movingLinearAxis = undefined;
       setConnectionRevision((value) => value + 1);
@@ -2328,6 +2481,7 @@ export default function Home() {
     s.pieces = [];
     s.connections = [];
     s.connectionModes.clear();
+    s.pendingPlacement = undefined;
     s.snapshot = undefined;
     s.world = undefined;
     s.selected = undefined;
@@ -2506,48 +2660,228 @@ export default function Home() {
   };
   const importModel = async (file: File) => {
     const s = appRef.current;
-    if (!s) return;
-    reset();
-    const rows = parseLDR(await file.text());
-    for (const r of rows) {
-      const [a, b, c, d, e, f, g, h, i] = r.matrix,
-        m = new THREE.Matrix4().set(
-          a,
-          b,
-          c,
-          0,
-          d,
-          e,
-          f,
-          0,
-          g,
-          h,
-          i,
-          0,
-          0,
-          0,
-          0,
-          1,
+    if (!s || running) return;
+    const empty: ImportDraft = {
+      fileName: file.name,
+      status: "reading",
+      progress: 0,
+      total: 0,
+      paletteCount: 0,
+      externalCount: 0,
+      placements: [],
+    },
+      token = ++importTokenRef.current,
+      stillActive = () => importTokenRef.current === token;
+    setImportDraft(empty);
+    try {
+      const rows = parseLDR(await file.text());
+      if (!stillActive()) return;
+      if (!rows.length) throw new Error("El archivo no contiene piezas LDraw");
+      const references = [
+          ...new Set(rows.map((row) => row.part.toLowerCase())),
+        ],
+        paletteMatches = new Map<string, CatalogPart[]>();
+      for (const part of paletteParts) {
+        for (const reference of [part.part, part.modelPart].filter(Boolean)) {
+          const key = reference!.toLowerCase(),
+            matches = paletteMatches.get(key) ?? [];
+          matches.push(part);
+          paletteMatches.set(key, matches);
+        }
+      }
+      const paletteReferences = references.filter((reference) =>
+          paletteMatches.has(reference),
         ),
-        flip = new THREE.Matrix4().makeScale(1, -1, 1);
-      m.premultiply(flip).multiply(flip);
-      const p = {
-        part: r.part,
-        name: `LDraw ${r.part}`,
-        kind: kindFor("", r.part),
-        color: r.color,
-      };
-      await s.addPart(
-        p,
-        new THREE.Vector3(
-          r.position[0] / 20,
-          -r.position[1] / 20,
-          r.position[2] / 20,
-        ),
-        new THREE.Quaternion().setFromRotationMatrix(m),
+        externalReferences = references.filter(
+          (reference) => !paletteMatches.has(reference),
+        );
+      setImportDraft({
+        ...empty,
+        status: "palette",
+        total: references.length,
+        paletteCount: paletteReferences.length,
+        externalCount: externalReferences.length,
+      });
+      let paletteLoaded = 0;
+      const paletteToLoad = paletteReferences.flatMap(
+        (reference) => paletteMatches.get(reference) ?? [],
       );
+      await Promise.all(
+        [...new Map(paletteToLoad.map((part) => [`${part.part}:${part.color}`, part])).values()].map(
+          async (part) => {
+            await s.preloadPart(part);
+            if (!stillActive()) return;
+            paletteLoaded++;
+            setImportDraft((draft) =>
+              draft
+                ? {
+                    ...draft,
+                    progress: Math.min(paletteLoaded, paletteReferences.length),
+                  }
+                : draft,
+            );
+          },
+        ),
+      );
+      if (!stillActive()) return;
+      setImportDraft((draft) =>
+        draft ? { ...draft, status: "external", progress: paletteReferences.length } : draft,
+      );
+      let externalItems: CatalogPart[] = [];
+      if (externalReferences.length)
+        try {
+          const response = await fetch(
+            `/api/parts?refs=${encodeURIComponent(externalReferences.join(","))}`,
+          );
+          if (response.ok) {
+            const data = (await response.json()) as { items?: CatalogPart[] };
+            externalItems = data.items ?? [];
+          }
+        } catch {}
+      if (!stillActive()) return;
+      let externalLoaded = 0;
+      const externalMap = new Map(
+          externalItems.map((part) => [part.part.toLowerCase(), part]),
+        ),
+        catalogFor = (row: LDrawPlacement): CatalogPart => {
+          const reference = row.part.toLowerCase(),
+            paletteOptions = paletteMatches.get(reference),
+            exactPalette = paletteOptions?.find((part) => part.color === row.color),
+            palette = exactPalette ?? paletteOptions?.[0],
+            external = externalMap.get(reference);
+          if (palette)
+            return {
+              ...palette,
+              color: row.color,
+              geometry: exactPalette?.geometry,
+            };
+          return {
+            ...(external ?? {}),
+            part: row.part,
+            name: external?.name ?? `LDraw ${row.part}`,
+            kind: kindFor("", external?.name ?? row.part),
+            color: row.color,
+          };
+        },
+        externalToLoad = externalReferences.map((reference) => {
+          const item = externalMap.get(reference);
+          return {
+            ...(item ?? {}),
+            part: item?.part ?? reference,
+            name: item?.name ?? `LDraw ${reference}`,
+            kind: kindFor("", item?.name ?? reference),
+            color: item?.color ?? 71,
+          } as CatalogPart;
+        });
+      await Promise.all(
+        externalToLoad.map(async (part) => {
+          await s.preloadPart(part);
+          if (!stillActive()) return;
+          externalLoaded++;
+          setImportDraft((draft) =>
+            draft
+              ? {
+                  ...draft,
+                  progress: Math.min(
+                    paletteReferences.length + externalLoaded,
+                    draft.total,
+                  ),
+                }
+              : draft,
+          );
+        }),
+      );
+      if (!stillActive()) return;
+      const placements = rows.map((row) => {
+        const [a, b, c, d, e, f, g, h, i] = row.matrix,
+          matrix = new THREE.Matrix4().set(
+            a,
+            b,
+            c,
+            0,
+            d,
+            e,
+            f,
+            0,
+            g,
+            h,
+            i,
+            0,
+            0,
+            0,
+            0,
+            1,
+          ),
+          flip = new THREE.Matrix4().makeScale(1, -1, 1);
+        matrix.premultiply(flip).multiply(flip);
+        return {
+          catalog: catalogFor(row),
+          source: row,
+          position: new THREE.Vector3(
+            row.position[0] / 20,
+            -row.position[1] / 20,
+            row.position[2] / 20,
+          ),
+          rotation: new THREE.Quaternion().setFromRotationMatrix(matrix),
+        };
+      });
+      setImportDraft((draft) =>
+        draft
+          ? { ...draft, status: "preview", progress: draft.total, placements }
+          : draft,
+      );
+      const preview = await s.renderImportPreview(placements);
+      if (!stillActive()) return;
+      setImportDraft((draft) =>
+        draft ? { ...draft, status: "ready", placements, preview } : draft,
+      );
+    } catch (error) {
+      if (!stillActive()) return;
+      setImportDraft((draft) => ({
+        ...(draft ?? empty),
+        status: "error",
+        error: error instanceof Error ? error.message : "No se pudo importar el modelo",
+      }));
     }
-    setMessage(`${rows.length} piezas importadas`);
+  };
+  const placeImportedModel = async () => {
+    const draft = importDraft,
+      s = appRef.current;
+    if (!draft || draft.status !== "ready" || !s) return;
+    importTokenRef.current++;
+    setImportDraft(null);
+    reset();
+    const pieces: Piece[] = [];
+    for (const placement of draft.placements) {
+      const piece = await s.addPart(
+        placement.catalog,
+        placement.position,
+        placement.rotation,
+      );
+      if (piece) pieces.push(piece);
+    }
+    if (!pieces.length) return;
+    const bounds = new THREE.Box3();
+    pieces.forEach((piece) => bounds.expandByObject(piece.mesh));
+    const center = bounds.getCenter(new THREE.Vector3()),
+      anchor = new THREE.Vector3(center.x, bounds.min.y, center.z),
+      offsets = pieces.map((piece) => piece.mesh.position.clone().sub(anchor));
+    pieces.forEach((piece, index) => {
+      piece.mesh.position.copy(offsets[index]);
+      piece.mesh.updateMatrixWorld(true);
+    });
+    s.pendingPlacement = { pieces, offsets };
+    s.connections = [];
+    s.refreshDebug();
+    setMessage(
+      language === "es"
+        ? "Mueve el modelo con el cursor y haz clic para colocarlo"
+        : "Move the model with the pointer and click to place it",
+    );
+  };
+  const discardImport = () => {
+    importTokenRef.current++;
+    setImportDraft(null);
   };
   const exportModel = () => {
     const s = appRef.current;
@@ -2813,6 +3147,23 @@ export default function Home() {
     a.click();
     URL.revokeObjectURL(a.href);
   };
+  const importStatusText = importDraft
+      ? {
+          reading: t.importReading,
+          palette: t.importPalette,
+          external: t.importExternal,
+          preview: t.importPreview,
+          ready: t.importReady,
+          error: importDraft.error ?? "Error",
+        }[importDraft.status]
+      : "",
+    importProgress = importDraft
+      ? importDraft.status === "ready"
+        ? 100
+        : importDraft.total
+          ? Math.round((importDraft.progress / importDraft.total) * 100)
+          : 4
+      : 0;
 
   return (
     <main className={`studio ${theme}`}>
@@ -2863,9 +3214,11 @@ export default function Home() {
             type="file"
             hidden
             accept=".ldr,.mpd"
-            onChange={(e) =>
-              e.target.files?.[0] && void importModel(e.target.files[0])
-            }
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.currentTarget.value = "";
+              if (file) void importModel(file);
+            }}
           />
           <button className="ghost" onClick={() => fileRef.current?.click()}>
             {t.import}
@@ -2878,6 +3231,61 @@ export default function Home() {
           </button>
         </div>
       </header>
+      {importDraft && (
+        <div className="import-backdrop" role="presentation">
+          <section
+            className="import-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="import-title"
+          >
+            <div className="import-dialog-head">
+              <div>
+                <small>LDR / MPD</small>
+                <h2 id="import-title">{t.importTitle}</h2>
+              </div>
+              <b>{importDraft.fileName}</b>
+            </div>
+            <div className="import-preview">
+              {importDraft.preview ? (
+                <img src={importDraft.preview} alt={t.importTitle} />
+              ) : (
+                <div className="import-loader">
+                  <span />
+                  <b>{importProgress}%</b>
+                </div>
+              )}
+            </div>
+            <div className="import-status">
+              <b>{importStatusText}</b>
+              <div>
+                <i style={{ width: `${importProgress}%` }} />
+              </div>
+              <p>
+                {importDraft.placements.length || "—"} {t.importParts} ·{" "}
+                {importDraft.total || "—"} {t.importUnique}
+              </p>
+              <small>
+                {importDraft.paletteCount} {t.importFromPalette}
+                {" · "}
+                {importDraft.externalCount} {t.importExternalParts}
+              </small>
+            </div>
+            <div className="import-actions">
+              <button className="ghost" onClick={discardImport}>
+                {t.discard}
+              </button>
+              <button
+                className="play"
+                disabled={importDraft.status !== "ready"}
+                onClick={() => void placeImportedModel()}
+              >
+                {t.place}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       <aside className="library">
         <div className="panel-title">
           <span>{t.palette}</span>
