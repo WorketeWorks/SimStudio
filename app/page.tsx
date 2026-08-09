@@ -5,7 +5,6 @@ import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { LDrawLoader } from "three/addons/loaders/LDrawLoader.js";
 import { LDrawConditionalLineMaterial } from "three/addons/materials/LDrawConditionalLineMaterial.js";
-import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { makeLDR, parseLDR, type LDrawPlacement } from "./ldraw";
 import {
   approximateCollisionPrimitives,
@@ -211,7 +210,9 @@ type AppState = {
 const LDRAW =
     "https://cdn.jsdelivr.net/gh/remig/ldraw_parts@master/",
   LEGACY_LDRAW = "https://cdn.jsdelivr.net/gh/pybricks/ldraw@master/",
-  MODEL_LOAD_TIMEOUT = 20_000;
+  MODEL_LOAD_TIMEOUT = 20_000,
+  // Temporary switch: manual Ctrl connections remain available.
+  AUTO_CONNECTIONS_ENABLED = false;
 const packagedParts = preloadedCatalog.parts as Record<
   string,
   {
@@ -822,80 +823,6 @@ export default function Home() {
       connectorCache = new Map<string, MeshConnector[]>(),
       collisionCache = new Map<string, CollisionPrimitive[]>();
     const assetUrl = (path: string) => new URL(path, document.baseURI).href;
-    const optimizeLDrawModel = (source: THREE.Object3D) => {
-      source.updateMatrixWorld(true);
-      const inverseRoot = source.matrixWorld.clone().invert(),
-        groups = new Map<
-          string,
-          {
-            kind: "mesh" | "segments" | "line";
-            material: THREE.Material;
-            geometries: THREE.BufferGeometry[];
-          }
-        >();
-      source.traverse((child) => {
-        const isMesh = child instanceof THREE.Mesh,
-          isSegments = child instanceof THREE.LineSegments,
-          isLine = child instanceof THREE.Line;
-        if ((!isMesh && !isSegments && !isLine) || !("geometry" in child))
-          return;
-        const renderable = child as THREE.Mesh | THREE.LineSegments | THREE.Line,
-          material = renderable.material;
-        if (Array.isArray(material)) return;
-        const geometry = renderable.geometry.clone(),
-          transform = inverseRoot.clone().multiply(child.matrixWorld),
-          transformAttribute = (name: string, direction = false) => {
-            const attribute = geometry.getAttribute(name);
-            if (!attribute || attribute.itemSize < 3) return;
-            const value = new THREE.Vector3(),
-              linear = new THREE.Matrix3().setFromMatrix4(transform);
-            for (let index = 0; index < attribute.count; index++) {
-              value.set(attribute.getX(index), attribute.getY(index), attribute.getZ(index));
-              if (direction) value.applyMatrix3(linear);
-              else value.applyMatrix4(transform);
-              attribute.setXYZ(index, value.x, value.y, value.z);
-            }
-            attribute.needsUpdate = true;
-          };
-        geometry.applyMatrix4(transform);
-        // Conditional LDraw lines use custom position attributes which Three.js
-        // does not transform from BufferGeometry.applyMatrix4().
-        transformAttribute("control0");
-        transformAttribute("control1");
-        transformAttribute("direction", true);
-        const kind = isMesh ? "mesh" : isSegments ? "segments" : "line",
-          attributes = Object.entries(geometry.attributes)
-            .map(
-              ([name, attribute]) =>
-                `${name}:${attribute.itemSize}:${attribute.normalized}:${attribute.array.constructor.name}`,
-            )
-            .sort()
-            .join("|"),
-          key = `${kind}:${material.uuid}:${geometry.index ? geometry.index.array.constructor.name : "none"}:${attributes}`,
-          group = groups.get(key) ?? { kind, material, geometries: [] };
-        group.geometries.push(geometry);
-        groups.set(key, group);
-      });
-      if (!groups.size) return source;
-      const optimized = new THREE.Group();
-      optimized.name = source.name;
-      optimized.userData = { ...source.userData, optimizedLDraw: true };
-      groups.forEach(({ kind, material, geometries }) => {
-        const geometry =
-          geometries.length === 1
-            ? geometries[0]
-            : mergeGeometries(geometries, false) ?? geometries[0];
-        if (geometry !== geometries[0]) geometries.forEach((item) => item.dispose());
-        let renderable: THREE.Object3D;
-        if (kind === "mesh") renderable = new THREE.Mesh(geometry, material);
-        else if (kind === "segments")
-          renderable = new THREE.LineSegments(geometry, material);
-        else renderable = new THREE.Line(geometry, material);
-        renderable.userData.optimizedLDraw = true;
-        optimized.add(renderable);
-      });
-      return optimized;
-    };
     const loadPartModel = async (p: CatalogPart) => {
       const key = `${p.part}:${p.color}`,
         cached = modelCache.get(key);
@@ -934,7 +861,6 @@ export default function Home() {
             }
           }
         }
-        exact = optimizeLDrawModel(exact);
         sourceModelCache.set(sourceKey, exact.clone(true));
       }
       if (sourceColor !== p.color) {
@@ -1526,10 +1452,7 @@ export default function Home() {
       scene.add(root);
       const groups = new Map<string, Piece[]>();
       batchPieces.forEach((piece) => {
-        // Outlines are useful for small builds, but hundreds of independent
-        // LDraw line objects overwhelm the renderer in large assemblies.
         piece.mesh.traverse((child) => {
-          if (child instanceof THREE.Line) child.visible = false;
           if (child instanceof THREE.Mesh) child.castShadow = false;
         });
         const key = `${piece.geometry ?? piece.modelPart ?? piece.part}:${piece.color}`,
@@ -1978,6 +1901,13 @@ export default function Home() {
         return state.connections.length;
     };
     const verifyConnections = () => {
+      if (!AUTO_CONNECTIONS_ENABLED) {
+        state.connectionScanVersion++;
+        state.bulkConnecting = false;
+        setConnectionRevision((value) => value + 1);
+        refreshDebug();
+        return state.connections.length;
+      }
       const started = performance.now();
       state.connectionScanVersion++;
       state.connections = [];
@@ -1989,6 +1919,7 @@ export default function Home() {
       return result;
     };
     const verifyConnectionsAsync = async () => {
+      if (!AUTO_CONNECTIONS_ENABLED) return state.connections.length;
       const scanVersion = ++state.connectionScanVersion;
       let operationStarted = performance.now();
       state.connections = [];
@@ -2020,6 +1951,7 @@ export default function Home() {
     state.verifyConnections = verifyConnections;
     state.verifyConnectionsAsync = verifyConnectionsAsync;
     const connect = (piece: Piece) => {
+      if (!AUTO_CONNECTIONS_ENABLED) return;
       if (isRod(piece)) {
         type Match = {
           host: Piece;
@@ -3583,17 +3515,24 @@ export default function Home() {
     // and are finalized immediately instead of following the pointer.
     s.pendingPlacement = undefined;
     s.rebuildRenderBatches(pieces);
-    setMessage(
-      language === "es"
-        ? "Optimizando conexiones por lotes…"
-        : "Optimizing connections in batches…",
-    );
-    const connections = await s.verifyConnectionsAsync();
+    let connections = s.connections.length;
+    if (AUTO_CONNECTIONS_ENABLED) {
+      setMessage(
+        language === "es"
+          ? "Optimizando conexiones por lotes…"
+          : "Optimizing connections in batches…",
+      );
+      connections = await s.verifyConnectionsAsync();
+    }
     s.refreshDebug();
     setMessage(
       language === "es"
-        ? `${pieces.length} piezas importadas directamente · ${connections} conexiones detectadas`
-        : `${pieces.length} parts imported directly · ${connections} connections detected`,
+        ? AUTO_CONNECTIONS_ENABLED
+          ? `${pieces.length} piezas importadas directamente · ${connections} conexiones detectadas`
+          : `${pieces.length} piezas importadas · conexiones automáticas desactivadas`
+        : AUTO_CONNECTIONS_ENABLED
+          ? `${pieces.length} parts imported directly · ${connections} connections detected`
+          : `${pieces.length} parts imported · automatic connections disabled`,
     );
   };
   const discardImport = () => {
