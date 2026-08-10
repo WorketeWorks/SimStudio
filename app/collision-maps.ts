@@ -287,3 +287,9 @@ export const preloadedCollisionMaps: Record<string, StoredCollisionPrimitive[]> 
     }
   ]
 };
+
+// Optional second layer used exclusively for gear-to-gear contacts.
+export const preloadedGearCollisionMaps: Record<
+  string,
+  StoredCollisionPrimitive[]
+> = {};

@@ -4,6 +4,7 @@ import test from "node:test";
 import * as THREE from "three";
 import {
   approximateCollisionPrimitives,
+  approximateGearCollisionPrimitives,
   detectConnectorHoles,
 } from "../app/connectors.ts";
 import { preloadedConnectionMaps } from "../app/connection-maps.ts";
@@ -77,12 +78,84 @@ test("builds the small L collider from two orthogonal boxes", () => {
     [0, 0, -1],
   ));
   boxes.forEach((box) => {
-    assert.ok(box.size.y <= 0.9);
-    assert.equal(box.size.z, 0.9);
+    assert.equal(box.size.y, 0.5);
+    assert.equal(box.size.z, 1);
   });
   colliders
     .filter((collider) => collider.shape === "cylinder")
-    .forEach((cylinder) => assert.equal(cylinder.radius, 0.45));
+    .forEach((cylinder) => {
+      assert.equal(cylinder.radius, 0.5);
+      assert.equal(cylinder.halfHeight, 0.25);
+    });
+});
+
+test("full beams use a one-unit cross section", () => {
+  const root = loadPart("32523-71"),
+    connectors = detectConnectorHoles(root),
+    colliders = approximateCollisionPrimitives(
+      root,
+      "Technic Beam 3",
+      connectors,
+    );
+  colliders.filter((item) => item.shape === "box").forEach((box) => {
+    assert.equal(box.size.y, 1);
+    assert.equal(box.size.z, 1);
+  });
+  colliders.filter((item) => item.shape === "cylinder").forEach((cylinder) => {
+    assert.equal(cylinder.radius, 0.5);
+    assert.equal(cylinder.halfHeight, 0.5);
+  });
+  const singleRoot = loadPart("18654-71"),
+    single = approximateCollisionPrimitives(
+      singleRoot,
+      "Technic Beam 1",
+      detectConnectorHoles(singleRoot),
+    );
+  assert.equal(single.length, 1);
+  assert.equal(single[0].radius, 0.5);
+  assert.equal(single[0].halfHeight, 0.5);
+});
+
+test("gear contact colliders sit inside the normal tooth envelope", () => {
+  const normal = [{
+      shape: "cylinder",
+      center: new THREE.Vector3(),
+      radius: 2,
+      halfHeight: 0.5,
+      rotation: new THREE.Quaternion(),
+    }],
+    gear = approximateGearCollisionPrimitives(normal);
+  assert.equal(gear.length, 1);
+  assert.ok(gear[0].radius < normal[0].radius);
+  assert.ok(gear[0].halfHeight < normal[0].halfHeight);
+});
+
+test("gears, tyres and axle connector shells use a 0.95 envelope", () => {
+  for (const [asset, name] of [
+    ["6589-19", "Technic Gear 12 Tooth Bevel"],
+    ["4185-71", "Technic Wedge Belt Wheel"],
+  ]) {
+    const root = loadPart(asset),
+      size = new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3()),
+      dimensions = size.toArray(),
+      thicknessAxis = dimensions.indexOf(Math.min(...dimensions)),
+      radialDiameter = Math.max(
+        ...dimensions.filter((_, index) => index !== thicknessAxis),
+      ),
+      [collider] = approximateCollisionPrimitives(root, name, []);
+    assert.ok(Math.abs((collider.radius * 2) / radialDiameter - 0.95) < 1e-6);
+    assert.ok(
+      Math.abs(
+        (collider.halfHeight * 2) / dimensions[thicknessAxis] - 0.95,
+      ) < 1e-6,
+    );
+  }
+  const joiner = approximateCollisionPrimitives(
+    loadPart("6538c-71"),
+    "Technic Axle Joiner Inline Smooth",
+    [],
+  );
+  assert.equal(joiner[0].radius, 0.475);
 });
 
 test("keeps every restored correction map preloaded", () => {

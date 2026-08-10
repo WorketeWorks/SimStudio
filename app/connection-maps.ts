@@ -1,7 +1,7 @@
 export type StoredConnector = {
   local: [number, number, number];
   axis: [number, number, number];
-  kind: "round" | "axle";
+  kind: "round" | "axle" | "half";
   role: "socket" | "shaft";
   diameter: number;
   length?: number;

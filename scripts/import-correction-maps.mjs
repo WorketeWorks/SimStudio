@@ -9,7 +9,8 @@ const correctionsDir = resolve(correctionsArg),
   outputDir = resolve(outputArg),
   files = (await readdir(correctionsDir)).sort(),
   connectionMaps = {},
-  collisionMaps = {};
+  collisionMaps = {},
+  gearCollisionMaps = {};
 
 for (const file of files) {
   const connectionMatch = file.match(/^(.+)-connections\.json$/i),
@@ -27,13 +28,15 @@ for (const file of files) {
     if (!Array.isArray(payload.colliders))
       throw new Error(`${file} does not contain a colliders array`);
     collisionMaps[part] = payload.colliders;
+    if (Array.isArray(payload.gearColliders))
+      gearCollisionMaps[part] = payload.gearColliders;
   }
 }
 
 const connectionSource = `export type StoredConnector = {
   local: [number, number, number];
   axis: [number, number, number];
-  kind: "round" | "axle";
+  kind: "round" | "axle" | "half";
   role: "socket" | "shaft";
   diameter: number;
   length?: number;
@@ -54,6 +57,9 @@ const collisionSource = `export type StoredCollisionPrimitive = {
 
 // Generated from the reviewed maps exported by Sim Studio's collider editor.
 export const preloadedCollisionMaps: Record<string, StoredCollisionPrimitive[]> = ${JSON.stringify(collisionMaps, null, 2)};
+
+// Optional second layer used exclusively for gear-to-gear contacts.
+export const preloadedGearCollisionMaps: Record<string, StoredCollisionPrimitive[]> = ${JSON.stringify(gearCollisionMaps, null, 2)};
 `;
 
 await Promise.all([
@@ -62,5 +68,5 @@ await Promise.all([
 ]);
 
 console.log(
-  `Imported ${Object.keys(connectionMaps).length} connection maps and ${Object.keys(collisionMaps).length} collision maps.`,
+  `Imported ${Object.keys(connectionMaps).length} connection maps, ${Object.keys(collisionMaps).length} collision maps and ${Object.keys(gearCollisionMaps).length} gear collision maps.`,
 );

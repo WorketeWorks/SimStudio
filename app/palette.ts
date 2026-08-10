@@ -38,7 +38,7 @@ const thumbId:Record<string,number>={
 };
 
 export const paletteParts=Object.entries(groups).flatMap(([family,entries])=>entries.map(([part,name,bricklinkColor])=>{const modelPart=modelAlias[part]??part,id=thumbId[modelPart],thumbPart=thumbAlias[part]??modelPart;return{
-  part,name,family:family as PaletteFamily,color:ldrawColor[bricklinkColor]??71,kind:(family==="gears"||family==="wheels"?"wheel":"beam") as "beam"|"wheel"|"motor",modelPart,rawThumb:true,
+  part,name,family:family as PaletteFamily,color:ldrawColor[bricklinkColor]??71,kind:(family==="gears"||family==="wheels"?"wheel":"beam") as "beam"|"wheel"|"motor",gear:family==="gears",modelPart,rawThumb:true,
   geometry:`catalog/geometry/${part}-${ldrawColor[bricklinkColor]??71}.json`,
   thumb:id?`catalog/renders/${modelPart}.png`:undefined,
   sourceThumb:id?`https://library.ldraw.org/media/parts/${id}/conversions/${thumbPart}-thumb.png`:undefined

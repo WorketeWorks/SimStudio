@@ -3,7 +3,7 @@ import * as THREE from "three";
 export type MeshConnector = {
   local: THREE.Vector3;
   axis: THREE.Vector3;
-  kind: "round" | "axle";
+  kind: "round" | "axle" | "half";
   role: "socket" | "shaft";
   diameter: number;
   length?: number;
@@ -445,13 +445,22 @@ export function approximateCollisionPrimitives(
     center = bounds.getCenter(new THREE.Vector3()),
     dimensions = [size.x, size.y, size.z],
     axisIndex = dimensions.indexOf(Math.max(...dimensions)),
-    longAxis = new THREE.Vector3();
+    longAxis = new THREE.Vector3(),
+    beamOrPanel = /^Technic (Beam|Panel)/i.test(name),
+    beamThickness = /(?:\bx\s*0\.5\b|\b0\.5\b|\bhalf\b)/i.test(name)
+      ? 0.5
+      : 1;
   longAxis.setComponent(axisIndex, 1);
   if (/^Technic (Axle|Pin)/i.test(name)) {
     const others = dimensions.filter((_, index) => index !== axisIndex),
+      axleConnectorShell = /^Technic Axle(?: and Pin)? (?:Joiner|Connector)/i.test(
+        name,
+      ),
       actualRadius = Math.min(...others) / 2,
-      radius = Math.max(0.12, actualRadius * 0.82),
-      length = dimensions[axisIndex] * 0.94,
+      radius = axleConnectorShell
+        ? 0.475
+        : Math.max(0.12, actualRadius * 0.82),
+      length = dimensions[axisIndex] * (axleConnectorShell ? 0.95 : 0.94),
       rotation = new THREE.Quaternion().setFromUnitVectors(
         new THREE.Vector3(0, 1, 0),
         longAxis,
@@ -470,13 +479,14 @@ export function approximateCollisionPrimitives(
     const wheelAxisIndex = dimensions.indexOf(Math.min(...dimensions)),
       wheelAxis = new THREE.Vector3();
     wheelAxis.setComponent(wheelAxisIndex, 1);
-    const others = dimensions.filter((_, index) => index !== wheelAxisIndex);
+    const others = dimensions.filter((_, index) => index !== wheelAxisIndex),
+      envelopeScale = 0.95;
     return [
       {
         shape: "cylinder",
         center,
-        radius: Math.max(...others) * 0.46,
-        halfHeight: dimensions[wheelAxisIndex] * 0.45,
+        radius: Math.max(...others) * envelopeScale * 0.5,
+        halfHeight: dimensions[wheelAxisIndex] * envelopeScale * 0.5,
         rotation: new THREE.Quaternion().setFromUnitVectors(
           new THREE.Vector3(0, 1, 0),
           wheelAxis,
@@ -581,14 +591,18 @@ export function approximateCollisionPrimitives(
           depth =
             Math.abs(connector.axis.x) * size.x +
             Math.abs(connector.axis.y) * size.y +
-            Math.abs(connector.axis.z) * size.z;
+            Math.abs(connector.axis.z) * size.z,
+          colliderDepth = beamOrPanel
+            ? beamThickness
+            : Math.min(0.9, Math.max(0.25, depth * 0.96)),
+          colliderHeight = beamOrPanel ? 1 : 0.9;
         result.push({
           shape: "box",
           center: line.origin.clone(),
           size: new THREE.Vector3(
             line.span,
-            Math.min(0.9, Math.max(0.25, depth * 0.96)),
-            0.9,
+            colliderDepth,
+            colliderHeight,
           ),
           rotation,
         });
@@ -612,8 +626,10 @@ export function approximateCollisionPrimitives(
         result.push({
           shape: "cylinder",
           center: connector.local.clone(),
-          radius: 0.45,
-          halfHeight: Math.min(0.45, Math.max(0.12, depth * 0.48)),
+          radius: beamOrPanel ? 0.5 : 0.45,
+          halfHeight: beamOrPanel
+            ? beamThickness / 2
+            : Math.min(0.45, Math.max(0.12, depth * 0.48)),
           rotation,
         });
       }
@@ -621,7 +637,21 @@ export function approximateCollisionPrimitives(
     }
   }
   if (points.length === 1) {
-    const connector = sockets[0],
+    const connector = sockets[0];
+    if (beamOrPanel)
+      return [
+        {
+          shape: "cylinder",
+          center: connector.local.clone(),
+          radius: 0.5,
+          halfHeight: beamThickness / 2,
+          rotation: new THREE.Quaternion().setFromUnitVectors(
+            new THREE.Vector3(0, 1, 0),
+            connector.axis,
+          ),
+        },
+      ];
+    const
       crossSection = Math.max(
         0.42,
         Math.min(0.72, [...dimensions].sort((a, b) => a - b)[1] * 0.72),
@@ -653,4 +683,34 @@ export function approximateCollisionPrimitives(
       rotation: new THREE.Quaternion(),
     },
   ];
+}
+
+/** Secondary volume used only for gear-to-gear contacts. */
+export function approximateGearCollisionPrimitives(
+  colliders: CollisionPrimitive[],
+): CollisionPrimitive[] {
+  return colliders.map((primitive) => {
+    if (primitive.shape === "cylinder")
+      return {
+        ...primitive,
+        center: primitive.center.clone(),
+        radius: Math.max(0.01, (primitive.radius ?? 0.5) * 0.88),
+        halfHeight: Math.max(0.01, (primitive.halfHeight ?? 0.5) * 0.96),
+        rotation: primitive.rotation.clone(),
+      };
+    const size = primitive.size?.clone() ?? new THREE.Vector3(1, 1, 1),
+      values = size.toArray(),
+      thicknessAxis = values.indexOf(Math.min(...values));
+    for (let axis = 0; axis < 3; axis++)
+      size.setComponent(
+        axis,
+        size.getComponent(axis) * (axis === thicknessAxis ? 0.96 : 0.88),
+      );
+    return {
+      ...primitive,
+      center: primitive.center.clone(),
+      size,
+      rotation: primitive.rotation.clone(),
+    };
+  });
 }

@@ -7,6 +7,7 @@ import { LDrawLoader } from "three/addons/loaders/LDrawLoader.js";
 import { LDrawConditionalLineMaterial } from "three/addons/materials/LDrawConditionalLineMaterial.js";
 import {
   approximateCollisionPrimitives,
+  approximateGearCollisionPrimitives,
   detectConnectorHoles,
   fallbackBeamConnectors,
   hybridAxlePinConnectors,
@@ -264,7 +265,21 @@ try {
         },
       ];
     }
+    if (
+      /^Technic (Beam|Panel)/i.test(part.name) &&
+      /(?:\bx\s*0\.5\b|\b0\.5\b|\bhalf\b)/i.test(part.name)
+    )
+      connectors = connectors.map((connector) => ({
+        ...connector,
+        kind:
+          connector.role === "socket" && connector.kind === "round"
+            ? "half"
+            : connector.kind,
+      }));
     const colliders = approximateCollisionPrimitives(wrapper, part.name, connectors),
+      gearColliders = part.gear
+        ? approximateGearCollisionPrimitives(colliders)
+        : [],
       box = new THREE.Box3().setFromObject(wrapper),
       rootFile = resolvedFiles.get(`${(part.modelPart ?? part.part).toLowerCase()}.dat`);
     catalog.parts[part.part] ??= {
@@ -274,6 +289,8 @@ try {
       modelFile: rootFile?.candidate ?? `parts/${part.modelPart ?? part.part}.dat`,
       connectors: connectors.map(serializeConnector),
       colliders: colliders.map(serializeCollider),
+      gear: part.gear === true,
+      gearColliders: gearColliders.map(serializeCollider),
       bounds: { min: box.min.toArray(), max: box.max.toArray() },
     };
     catalog.assets[assetKey] = {
