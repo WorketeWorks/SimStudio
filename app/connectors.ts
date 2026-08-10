@@ -585,7 +585,11 @@ export function approximateCollisionPrimitives(
         result.push({
           shape: "box",
           center: line.origin.clone(),
-          size: new THREE.Vector3(line.span, Math.max(0.25, depth * 0.96), 1),
+          size: new THREE.Vector3(
+            line.span,
+            Math.min(0.9, Math.max(0.25, depth * 0.96)),
+            0.9,
+          ),
           rotation,
         });
       }
@@ -608,8 +612,8 @@ export function approximateCollisionPrimitives(
         result.push({
           shape: "cylinder",
           center: connector.local.clone(),
-          radius: 0.5,
-          halfHeight: Math.max(0.12, depth * 0.48),
+          radius: 0.45,
+          halfHeight: Math.min(0.45, Math.max(0.12, depth * 0.48)),
           rotation,
         });
       }

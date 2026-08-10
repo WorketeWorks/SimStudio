@@ -32,6 +32,11 @@ import {
 } from "./connectors";
 import { paletteParts } from "./palette";
 import { preloadedConnectionMaps } from "./connection-maps";
+import { preloadedCollisionMaps } from "./collision-maps";
+import {
+  buildConnectorContactExclusions,
+  contactPairKey,
+} from "./physics-contact-filter";
 import preloadedCatalog from "./preloaded-catalog.json";
 
 type PieceKind = "beam" | "wheel" | "motor";
@@ -92,6 +97,7 @@ type ImportDraft = {
   error?: string;
 };
 type JointMode = "fixed" | "rotation" | "linear" | "rotation-linear" | "motor";
+type StructuralMode = "rigid" | "flexible";
 type ConnectionProfile = "pin-round" | "axle-cross" | "axle-round";
 type Connection = {
   id: string;
@@ -183,6 +189,9 @@ type AppState = {
   selected?: Piece;
   running: boolean;
   world?: RAPIER.World;
+  physicsHooks?: RAPIER.PhysicsHooks;
+  physicsEventQueue?: RAPIER.EventQueue;
+  contactFilterStats?: { tested: number; rejected: number };
   connections: Connection[];
   manualConnect?: ManualConnectDraft;
   snapshot?: {
@@ -246,7 +255,8 @@ const LDRAW =
     "https://cdn.jsdelivr.net/gh/remig/ldraw_parts@master/",
   LEGACY_LDRAW = "https://cdn.jsdelivr.net/gh/pybricks/ldraw@master/",
   MODEL_LOAD_TIMEOUT = 20_000,
-  AUTO_CONNECTIONS_ENABLED = true;
+  AUTO_CONNECTIONS_ENABLED = true,
+  CORRECTION_MAP_REVISION = "2026-08-10-corrections-1";
 const packagedParts = preloadedCatalog.parts as Record<
   string,
   {
@@ -552,6 +562,14 @@ const translations = {
     physicsEngine: "MOTOR DE FÍSICA",
     physicsHelp:
       "Cada unión de pin o eje puede configurarse según sus grados de libertad compatibles.",
+    structuralBehavior: "COMPORTAMIENTO ESTRUCTURAL",
+    rigidStructure: "Rígido",
+    flexibleStructure: "Flexible",
+    structuralStiffness: "Rigidez de uniones",
+    rigidStructureHelp:
+      "Las conexiones fijas se fusionan. La rigidez controla las articulaciones móviles.",
+    flexibleStructureHelp:
+      "Cada pieza conserva su cuerpo y las conexiones fijas pueden flexionarse ligeramente.",
     grid: "Cuadrícula 0.4 u",
     cache: "caché local activa",
     ldrawCredit: "Usa The LDraw Parts Library",
@@ -668,6 +686,14 @@ const translations = {
     physicsEngine: "PHYSICS ENGINE",
     physicsHelp:
       "Each pin or axle joint can be configured using its compatible degrees of freedom.",
+    structuralBehavior: "STRUCTURAL BEHAVIOR",
+    rigidStructure: "Rigid",
+    flexibleStructure: "Flexible",
+    structuralStiffness: "Joint stiffness",
+    rigidStructureHelp:
+      "Fixed connections are merged. Stiffness controls the moving joints.",
+    flexibleStructureHelp:
+      "Every part keeps its own body and fixed connections may flex slightly.",
     grid: "0.4 u grid",
     cache: "local cache active",
     ldrawCredit: "Uses The LDraw Parts Library",
@@ -714,6 +740,98 @@ const connectorProfile = (
         : shaft.kind === "axle" && socket.kind === "round"
           ? "axle-round"
           : undefined;
+const detectShaftTraversals = (pieces: Piece[]) => {
+  type SocketEntry = {
+    host: Piece;
+    connector: MeshConnector;
+    point: THREE.Vector3;
+    axis: THREE.Vector3;
+  };
+  const cellSize = 0.45,
+    cellKey = (point: THREE.Vector3) =>
+      `${Math.floor(point.x / cellSize)}:${Math.floor(point.y / cellSize)}:${Math.floor(point.z / cellSize)}`,
+    socketGrid = new Map<string, SocketEntry[]>(),
+    worldPose = (piece: Piece, connector: MeshConnector) => ({
+      point: connector.local.clone().applyMatrix4(piece.mesh.matrixWorld),
+      axis: connector.axis
+        .clone()
+        .transformDirection(piece.mesh.matrixWorld)
+        .normalize(),
+    });
+  pieces.forEach((piece) => {
+    piece.mesh.updateMatrixWorld(true);
+    piece.connectors.forEach((connector) => {
+      if (connector.role !== "socket") return;
+      const pose = worldPose(piece, connector),
+        entry = { host: piece, connector, ...pose },
+        key = cellKey(pose.point),
+        entries = socketGrid.get(key) ?? [];
+      entries.push(entry);
+      socketGrid.set(key, entries);
+    });
+  });
+  const traversals: { shaft: Piece; host: Piece }[] = [],
+    traversedPairs = new Set<string>();
+  pieces.forEach((shaftPiece) => {
+    shaftPiece.mesh.updateMatrixWorld(true);
+    shaftPiece.connectors.forEach((shaft) => {
+      if (shaft.role !== "shaft") return;
+      const shaftPose = worldPose(shaftPiece, shaft),
+        halfLength = Math.max(0.08, (shaft.length ?? 0.5) / 2),
+        searchHalfLength = halfLength + 0.18,
+        steps = Math.max(
+          1,
+          Math.ceil((searchHalfLength * 2) / (cellSize * 0.5)),
+        ),
+        candidates = new Set<SocketEntry>();
+      for (let step = 0; step <= steps; step++) {
+        const sample = shaftPose.point
+            .clone()
+            .addScaledVector(
+              shaftPose.axis,
+              -searchHalfLength + (step / steps) * searchHalfLength * 2,
+            ),
+          x = Math.floor(sample.x / cellSize),
+          y = Math.floor(sample.y / cellSize),
+          z = Math.floor(sample.z / cellSize);
+        for (let dx = -1; dx <= 1; dx++)
+          for (let dy = -1; dy <= 1; dy++)
+            for (let dz = -1; dz <= 1; dz++)
+              socketGrid
+                .get(`${x + dx}:${y + dy}:${z + dz}`)
+                ?.forEach((entry) => candidates.add(entry));
+      }
+      candidates.forEach((candidate) => {
+        if (
+          candidate.host === shaftPiece ||
+          !connectorProfile(shaft, candidate.connector) ||
+          Math.abs(candidate.axis.dot(shaftPose.axis)) < 0.94
+        )
+          return;
+        const delta = candidate.point.clone().sub(shaftPose.point),
+          along = delta.dot(shaftPose.axis),
+          radial = delta
+            .clone()
+            .addScaledVector(shaftPose.axis, -along)
+            .length(),
+          radialTolerance = Math.max(
+            0.18,
+            Math.min(shaft.diameter, candidate.connector.diameter) * 0.22,
+          );
+        if (
+          radial > radialTolerance ||
+          Math.abs(along) > searchHalfLength
+        )
+          return;
+        const pair = `${shaftPiece.id}:${candidate.host.id}`;
+        if (traversedPairs.has(pair)) return;
+        traversedPairs.add(pair);
+        traversals.push({ shaft: shaftPiece, host: candidate.host });
+      });
+    });
+  });
+  return traversals;
+};
 const pairProfile = (a: MeshConnector, b: MeshConnector) =>
   a.role === "shaft" && b.role === "socket"
     ? connectorProfile(a, b)
@@ -866,7 +984,9 @@ export default function Home() {
     [importDraft, setImportDraft] = useState<ImportDraft | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">("dark"),
     [language, setLanguage] = useState<Language>("es"),
-    [inspectorWidth, setInspectorWidth] = useState(270);
+    [inspectorWidth, setInspectorWidth] = useState(270),
+    [structuralMode, setStructuralMode] = useState<StructuralMode>("rigid"),
+    [structuralStiffness, setStructuralStiffness] = useState(85);
   const t = translations[language],
     modeLabels: Record<JointMode, string> =
       language === "es"
@@ -896,6 +1016,16 @@ export default function Home() {
       setLanguage(
         localStorage.getItem("sim-studio:language") === "en" ? "en" : "es",
       );
+      setStructuralMode(
+        localStorage.getItem("sim-studio:structural-mode") === "flexible"
+          ? "flexible"
+          : "rigid",
+      );
+      const savedStiffness = Number(
+        localStorage.getItem("sim-studio:structural-stiffness"),
+      );
+      if (Number.isFinite(savedStiffness) && savedStiffness >= 1)
+        setStructuralStiffness(THREE.MathUtils.clamp(savedStiffness, 1, 100));
     } catch {}
   }, []);
   useEffect(() => {
@@ -909,6 +1039,15 @@ export default function Home() {
     } catch {}
     document.documentElement.lang = language;
   }, [language]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("sim-studio:structural-mode", structuralMode);
+      localStorage.setItem(
+        "sim-studio:structural-stiffness",
+        String(structuralStiffness),
+      );
+    } catch {}
+  }, [structuralMode, structuralStiffness]);
 
   useEffect(() => {
     const source =
@@ -1141,8 +1280,11 @@ export default function Home() {
       let connectors: MeshConnector[] | undefined,
         hasSavedConnectorMap = false;
       try {
-        const saved = localStorage.getItem(`sim-connectors-v4:${p.part}`);
-        if (saved) {
+        const saved = localStorage.getItem(`sim-connectors-v4:${p.part}`),
+          savedIsCurrent =
+            localStorage.getItem(`sim-connectors-revision:${p.part}`) ===
+            CORRECTION_MAP_REVISION;
+        if (saved && (!preloadedConnectionMaps[p.part] || savedIsCurrent)) {
           hasSavedConnectorMap = true;
           connectors = (
             JSON.parse(saved) as {
@@ -1226,8 +1368,11 @@ export default function Home() {
       connectorCache.set(p.part, cloneConnectors(connectors));
       let colliders: CollisionPrimitive[] | undefined;
       try {
-        const saved = localStorage.getItem(`sim-colliders-v1:${p.part}`);
-        if (saved) {
+        const saved = localStorage.getItem(`sim-colliders-v1:${p.part}`),
+          savedIsCurrent =
+            localStorage.getItem(`sim-colliders-revision:${p.part}`) ===
+            CORRECTION_MAP_REVISION;
+        if (saved && (!preloadedCollisionMaps[p.part] || savedIsCurrent)) {
           const stored = JSON.parse(saved) as {
             shape: "box" | "cylinder";
             center: number[];
@@ -1264,6 +1409,15 @@ export default function Home() {
               }));
         }
       } catch {}
+      if (!colliders && preloadedCollisionMaps[p.part])
+        colliders = preloadedCollisionMaps[p.part].map((primitive) => ({
+          ...primitive,
+          center: new THREE.Vector3().fromArray(primitive.center),
+          size: primitive.size
+            ? new THREE.Vector3().fromArray(primitive.size)
+            : undefined,
+          rotation: new THREE.Quaternion().fromArray(primitive.rotation),
+        }));
       if (!colliders)
         colliders = collisionCache.get(p.part)?.map((primitive) => ({
           ...primitive,
@@ -1300,6 +1454,28 @@ export default function Home() {
           })),
         );
       }
+      if (/^Technic (Beam|Panel|Pin Connector)/i.test(p.name))
+        colliders = colliders.map((primitive) => {
+          if (primitive.shape === "cylinder")
+            return {
+              ...primitive,
+              radius:
+                Math.abs((primitive.radius ?? 0) - 0.5) < 0.025
+                  ? 0.45
+                  : primitive.radius,
+              halfHeight:
+                (primitive.halfHeight ?? 0) >= 0.46 &&
+                (primitive.halfHeight ?? 0) <= 0.52
+                  ? 0.45
+                  : primitive.halfHeight,
+            };
+          const size = primitive.size?.clone();
+          if (size) {
+            if (Math.abs(size.y - 1) < 0.05) size.y = 0.9;
+            if (Math.abs(size.z - 1) < 0.05) size.z = 0.9;
+          }
+          return { ...primitive, size };
+        });
       return { connectors, colliders };
     };
     const preloadPart = async (p: CatalogPart) => {
@@ -2618,6 +2794,74 @@ export default function Home() {
       }
       return undefined;
     };
+    const pickPiece = () => {
+      let best:
+        | { piece: Piece; point: THREE.Vector3; distance: number }
+        | undefined;
+      const visualHits = ray.intersectObjects(
+        [
+          ...state.pieces
+            .filter((piece) => !piece.renderBatched)
+            .map((piece) => piece.mesh),
+          ...(state.renderBatchRoot ? [state.renderBatchRoot] : []),
+        ],
+        true,
+      );
+      for (const candidate of visualHits) {
+        const piece = pieceFrom(
+          candidate.object,
+          candidate.instanceId ??
+            (candidate as THREE.Intersection & { batchId?: number }).batchId,
+        );
+        if (piece) {
+          best = {
+            piece,
+            point: candidate.point.clone(),
+            distance: candidate.distance,
+          };
+          break;
+        }
+      }
+      if (best) return best;
+      const unitScale = new THREE.Vector3(1, 1, 1);
+      for (const piece of state.pieces) {
+        piece.mesh.updateMatrixWorld(true);
+        for (const primitive of piece.colliders) {
+          const primitiveMatrix = piece.mesh.matrixWorld
+              .clone()
+              .multiply(
+                new THREE.Matrix4().compose(
+                  primitive.center,
+                  primitive.rotation,
+                  unitScale,
+                ),
+              ),
+            inverse = primitiveMatrix.clone().invert(),
+            localRay = new THREE.Ray(
+              ray.ray.origin.clone().applyMatrix4(inverse),
+              ray.ray.direction.clone().transformDirection(inverse),
+            ),
+            halfSize =
+              primitive.shape === "box"
+                ? primitive.size!.clone().multiplyScalar(0.5)
+                : new THREE.Vector3(
+                    primitive.radius!,
+                    primitive.halfHeight!,
+                    primitive.radius!,
+                  ),
+            localHit = localRay.intersectBox(
+              new THREE.Box3(halfSize.clone().negate(), halfSize),
+              new THREE.Vector3(),
+            );
+          if (!localHit) continue;
+          const point = localHit.applyMatrix4(primitiveMatrix),
+            distance = ray.ray.origin.distanceTo(point);
+          if (!best || distance < best.distance)
+            best = { piece, point, distance };
+        }
+      }
+      return best;
+    };
     const paintForceLabel = (label: HTMLDivElement, force: number) => {
       const text = `${force.toFixed(1)} N`;
       if (label.textContent !== text) label.textContent = text;
@@ -2767,27 +3011,8 @@ export default function Home() {
         );
         return;
       }
-      const hits = ray.intersectObjects(
-          [
-            ...state.pieces
-              .filter((piece) => !piece.renderBatched)
-              .map((piece) => piece.mesh),
-            ...(state.renderBatchRoot ? [state.renderBatchRoot] : []),
-          ],
-          true,
-        ),
-        hitMatch = hits
-          .map((candidate) => ({
-            hit: candidate,
-            piece: pieceFrom(
-              candidate.object,
-              candidate.instanceId ??
-                (candidate as THREE.Intersection & { batchId?: number }).batchId,
-            ),
-          }))
-          .find((candidate) => !!candidate.piece),
-        hit = hitMatch?.hit,
-        hitPiece = hitMatch?.piece;
+      const hit = pickPiece(),
+        hitPiece = hit?.piece;
       orbit = e.button === 2 || e.altKey;
       altCandidate = e.altKey && e.button === 0 ? hitPiece : undefined;
       if (orbit) return;
@@ -3436,7 +3661,7 @@ export default function Home() {
         jointForcesMs = performance.now() - phaseStarted;
         phaseStarted = performance.now();
         state.world.timestep = Math.min(clock.getDelta(), 1 / 60);
-        state.world.step();
+        state.world.step(state.physicsEventQueue, state.physicsHooks);
         worldStepMs = performance.now() - phaseStarted;
         phaseStarted = performance.now();
         const startup = performance.now() - (state.simStartedMs ?? 0) < 350;
@@ -3585,6 +3810,8 @@ export default function Home() {
       resizeObserver.disconnect();
       window.removeEventListener("keydown", keydown, true);
       renderer.dispose();
+      state.physicsEventQueue?.free();
+      state.physicsEventQueue = undefined;
       host.removeChild(canvas);
       appRef.current = null;
     };
@@ -3731,7 +3958,11 @@ export default function Home() {
     s.connectionModes.clear();
     s.pendingPlacement = undefined;
     s.snapshot = undefined;
+    s.physicsEventQueue?.free();
+    s.physicsEventQueue = undefined;
     s.world = undefined;
+    s.physicsHooks = undefined;
+    s.contactFilterStats = undefined;
     s.selected = undefined;
     s.refreshDebug();
     setRunning(false);
@@ -3786,7 +4017,7 @@ export default function Home() {
           if (rootA !== rootB) parent.set(rootB, rootA);
         };
       s.connections.forEach((connection) => {
-        if (connection.mode === "fixed")
+        if (structuralMode === "rigid" && connection.mode === "fixed")
           mergeRigidPieces(connection.a, connection.b);
       });
       const rigidIslandMap = new Map<Piece, Piece[]>();
@@ -3797,13 +4028,23 @@ export default function Home() {
         rigidIslandMap.set(root, island);
       });
       const rigidIslands = [...rigidIslandMap.values()],
-        fixedConnectionCount = s.connections.filter(
+        rigidIslandByPiece = new Map<Piece, Piece[]>();
+      rigidIslands.forEach((island) =>
+        island.forEach((piece) => rigidIslandByPiece.set(piece, island)),
+      );
+      const fixedConnectionCount = s.connections.filter(
           (connection) => connection.mode === "fixed",
         ).length,
+        stiffnessRatio = structuralStiffness / 100,
         largeSimulation =
           rigidIslands.length > 250 || s.pieces.length > 800,
-        solverIterations = largeSimulation ? 8 : 12,
-        internalPgsIterations = largeSimulation ? 4 : 2,
+        solverIterations = largeSimulation
+          ? 5 + Math.round(stiffnessRatio * 5)
+          : 4 + Math.round(stiffnessRatio * 12),
+        internalPgsIterations = 1 + Math.round(stiffnessRatio * 3),
+        additionalSolverIterations = largeSimulation
+          ? Math.round(stiffnessRatio * 2)
+          : Math.round(stiffnessRatio * 4),
         world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
       s.largeSimulation = largeSimulation;
       world.integrationParameters.numSolverIterations = solverIterations;
@@ -3811,13 +4052,50 @@ export default function Home() {
         internalPgsIterations;
       world.integrationParameters.maxCcdSubsteps = largeSimulation ? 1 : 2;
       world.integrationParameters.contact_natural_frequency = 18;
-      world.integrationParameters.normalizedAllowedLinearError = 0.004;
+      world.integrationParameters.normalizedAllowedLinearError =
+        THREE.MathUtils.lerp(0.025, 0.002, stiffnessRatio);
       s.simLog.events[0] =
         `Inicio con ${s.pieces.length} piezas agrupadas en ${rigidIslands.length} cuerpos rígidos y ${s.connections.length} uniones`;
       s.simLog.events.push(
-        `Solver rígido: ${solverIterations} iteraciones × ${internalPgsIterations} PGS interno`,
-        `${fixedConnectionCount} conexiones fijas fusionadas en islas rígidas compuestas`,
+        `Modo estructural ${structuralMode}; rigidez ${structuralStiffness}%`,
+        `Solver: ${solverIterations} iteraciones × ${internalPgsIterations} PGS interno + ${additionalSolverIterations} adicionales`,
+        structuralMode === "rigid"
+          ? `${fixedConnectionCount} conexiones fijas fusionadas en islas rígidas compuestas`
+          : `${fixedConnectionCount} conexiones fijas conservadas como joints entre piezas`,
       );
+      const colliderOwners = new Map<number, Piece>(),
+        traversedConnectorPairs = detectShaftTraversals(s.pieces),
+        noContactPiecePairs = buildConnectorContactExclusions(
+          s.connections,
+          rigidIslandByPiece,
+          traversedConnectorPairs,
+        );
+      s.simLog.events.push(
+        `${traversedConnectorPairs.length} pares eje/pin ↔ pieza atravesada detectados geométricamente`,
+        `${noContactPiecePairs.size} pares pin/eje ↔ grupo excluidos de colisión`,
+      );
+      s.physicsEventQueue?.free();
+      s.physicsEventQueue = new RAPIER.EventQueue(true);
+      s.contactFilterStats = { tested: 0, rejected: 0 };
+      s.physicsHooks = {
+        filterContactPair(colliderA, colliderB) {
+          const pieceA = colliderOwners.get(colliderA),
+            pieceB = colliderOwners.get(colliderB);
+          if (s.contactFilterStats) s.contactFilterStats.tested++;
+          if (
+            pieceA &&
+            pieceB &&
+            noContactPiecePairs.has(contactPairKey(pieceA, pieceB))
+          ) {
+            if (s.contactFilterStats) s.contactFilterStats.rejected++;
+            return null;
+          }
+          return RAPIER.SolverFlags.COMPUTE_IMPULSE;
+        },
+        filterIntersectionPair() {
+          return true;
+        },
+      };
       world.createCollider(
         RAPIER.ColliderDesc.cuboid(20, 0.15, 20)
           .setTranslation(0, -0.2, 0)
@@ -3840,7 +4118,7 @@ export default function Home() {
               .setAngularDamping(0.95)
               .setCcdEnabled(!largeSimulation)
               .setSoftCcdPrediction(largeSimulation ? 0 : 0.1)
-              .setAdditionalSolverIterations(largeSimulation ? 1 : 3)
+              .setAdditionalSolverIterations(additionalSolverIterations)
               .setAdditionalMass(additionalMass);
         desc.setTranslation(origin.x, origin.y, origin.z);
         const rb = world.createRigidBody(desc);
@@ -3873,11 +4151,13 @@ export default function Home() {
               .setRotation(rotation)
               .setFriction(p.kind === "wheel" ? 1.6 : 0.75)
               .setRestitution(0)
+              .setActiveHooks(RAPIER.ActiveHooks.FILTER_CONTACT_PAIRS)
               .setDensity(
                 (p.kind === "motor" ? 1.7 : 1) /
                   Math.max(1, p.colliders.length),
               );
-            world.createCollider(collider, rb);
+            const createdCollider = world.createCollider(collider, rb);
+            colliderOwners.set(createdCollider.handle, p);
           }
         });
       });
@@ -3885,7 +4165,7 @@ export default function Home() {
         redundantMovingJoints = 0;
       s.connections.forEach((c) => {
         if (!c.a.body || !c.b.body) return;
-        if (c.mode === "fixed") return;
+        if (structuralMode === "rigid" && c.mode === "fixed") return;
         if (c.a.body === c.b.body) {
           redundantMovingJoints++;
           return;
@@ -3914,7 +4194,13 @@ export default function Home() {
               RAPIER.JointAxesMask.AngY |
               RAPIER.JointAxesMask.AngZ,
           );
-        else return;
+        else
+          joint = RAPIER.JointData.fixed(
+            a,
+            { x: 0, y: 0, z: 0, w: 1 },
+            b,
+            { x: 0, y: 0, z: 0, w: 1 },
+          );
         const created = world.createImpulseJoint(
           joint,
           c.a.body,
@@ -3922,7 +4208,7 @@ export default function Home() {
           true,
         );
         movingJointCount++;
-        created.setContactsEnabled(false);
+        created.setContactsEnabled(true);
         if (c.mode === "motor")
           (created as RAPIER.RevoluteImpulseJoint).configureMotorVelocity(
             c.motorSpeed,
@@ -3960,6 +4246,10 @@ export default function Home() {
         s.simLog.events.push(
           `Fin: velocidad lineal máxima ${s.simLog.maxLinearSpeed.toFixed(3)}, angular ${s.simLog.maxAngularSpeed.toFixed(3)}, fuerza de resorte ${s.simLog.maxSpringForce.toFixed(3)}`,
         );
+        if (s.contactFilterStats)
+          s.simLog.events.push(
+            `Filtro de contactos: ${s.contactFilterStats.tested} pares comprobados; ${s.contactFilterStats.rejected} contactos eje/pin ↔ pieza anulados`,
+          );
         const encoded = JSON.stringify(s.simLog, null, 2);
         try {
           localStorage.setItem("sim-studio:physics-log", encoded);
@@ -3977,7 +4267,11 @@ export default function Home() {
       });
       s.renderBatchesDirty = true;
       s.snapshot = undefined;
+      s.physicsEventQueue?.free();
+      s.physicsEventQueue = undefined;
       s.world = undefined;
+      s.physicsHooks = undefined;
+      s.contactFilterStats = undefined;
       s.largeSimulation = undefined;
       s.simStartedMs = undefined;
       s.refreshDebug();
@@ -4383,6 +4677,10 @@ export default function Home() {
         `sim-connectors-v4:${piece.part}`,
         JSON.stringify(connectorData({ ...piece, connectors: normalized })),
       );
+      localStorage.setItem(
+        `sim-connectors-revision:${piece.part}`,
+        CORRECTION_MAP_REVISION,
+      );
     } catch {}
     state.debug.connectors = true;
     setDebugViews((current) => ({ ...current, connectors: true }));
@@ -4600,6 +4898,10 @@ export default function Home() {
       localStorage.setItem(
         `sim-colliders-v1:${piece.part}`,
         JSON.stringify(colliderData(normalized)),
+      );
+      localStorage.setItem(
+        `sim-colliders-revision:${piece.part}`,
+        CORRECTION_MAP_REVISION,
       );
     } catch {}
     state.debug.colliders = true;
@@ -5829,6 +6131,42 @@ export default function Home() {
           </button>
         </div>
         <div className="physics">
+          <label className="structural-title">{t.structuralBehavior}</label>
+          <div className="structural-mode" role="group" aria-label={t.structuralBehavior}>
+            <button
+              className={structuralMode === "rigid" ? "active" : ""}
+              disabled={running}
+              onClick={() => setStructuralMode("rigid")}
+            >
+              {t.rigidStructure}
+            </button>
+            <button
+              className={structuralMode === "flexible" ? "active" : ""}
+              disabled={running}
+              onClick={() => setStructuralMode("flexible")}
+            >
+              {t.flexibleStructure}
+            </button>
+          </div>
+          <div className="stiffness-head">
+            <span>{t.structuralStiffness}</span>
+            <output>{structuralStiffness}%</output>
+          </div>
+          <input
+            className="stiffness-range"
+            type="range"
+            min="1"
+            max="100"
+            step="1"
+            value={structuralStiffness}
+            disabled={running}
+            onChange={(event) => setStructuralStiffness(+event.target.value)}
+          />
+          <p className="structural-help">
+            {structuralMode === "rigid"
+              ? t.rigidStructureHelp
+              : t.flexibleStructureHelp}
+          </p>
           <b>{t.physicsEngine}</b>
           <span>
             <i /> Rapier + LDraw Connect
