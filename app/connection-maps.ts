@@ -10,6 +10,318 @@ export type StoredConnector = {
 // Mapas revisados exportados desde el editor de Sim Studio. Las medidas están
 // expresadas en unidades Studio: un tramo Technic (1L) equivale a 1 unidad.
 export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
+  "32065": [
+    {
+      local: [0, 0, 0],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.7089799970388413,
+    },
+    {
+      local: [0, 0.010000000000000009, 1],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+    },
+    {
+      local: [0, 0.010000000000000009, 2],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8000000000000002,
+    },
+    {
+      local: [0, 0.010000000000000009, 3],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8000000000000002,
+    },
+    {
+      local: [0, -0.010000000000000009, -3],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8000000000000002,
+    },
+    {
+      local: [0, -0.010000000000000009, -2],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8000000000000002,
+    },
+    {
+      local: [0, -0.010000000000000009, -1],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+    }
+  ],
+  "32063": [
+    {
+      local: [0, 0.010000000000000009, 0.5],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+    },
+    {
+      local: [0, 0.010000000000000009, 1.5],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+    },
+    {
+      local: [0, 0.010000000000000009, 2.5],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8000000000000002,
+    },
+    {
+      local: [0, -0.010000000000000009, -2.5],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8000000000000002,
+    },
+    {
+      local: [0, -0.010000000000000009, -1.5],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+    },
+    {
+      local: [0, 0.039999999999999994, -0.5076099991798402],
+      axis: [0, 1, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.7923900008201599,
+    }
+  ],
+  "32014": [
+    {
+      local: [0, 0, 0],
+      axis: [1, 0, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+    },
+    {
+      local: [0, 1, -1.1102230246251565e-16],
+      axis: [0, 1, 0],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.6000000000000001,
+    },
+    {
+      local: [0, 0, 1],
+      axis: [0, 0, 1],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.6000000000000001,
+    }
+  ],
+  "26287": [
+    {
+      local: [0, 1.1102230246251565e-16, 1],
+      axis: [0, 0, 1],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.6000000000000001,
+    },
+    {
+      local: [0, -1.1102230246251565e-16, -1],
+      axis: [0, 0, 1],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.6000000000000001,
+    }
+  ],
+  "4185": [
+    {
+      local: [0, 1, -0.009999999999999995],
+      axis: [0, 0, 1],
+      kind: "round",
+      role: "socket",
+      diameter: 0.6000000000000001,
+    },
+    {
+      local: [0.8660500049591064, 0.5148829996585846, -0.009999999999999995],
+      axis: [0, 0, 1],
+      kind: "round",
+      role: "socket",
+      diameter: 0.5803550183773043,
+    },
+    {
+      local: [-0.8660500049591064, 0.5148829996585846, -0.009999999999999995],
+      axis: [0, 0, 1],
+      kind: "round",
+      role: "socket",
+      diameter: 0.5803550183773043,
+    },
+    {
+      local: [0.8660500049591064, -0.5, 0.009999999999999995],
+      axis: [0, 0, 1],
+      kind: "round",
+      role: "socket",
+      diameter: 0.5952380180358887,
+    },
+    {
+      local: [0, -1, 0.009999999999999995],
+      axis: [0, 0, 1],
+      kind: "round",
+      role: "socket",
+      diameter: 0.6000000000000001,
+    },
+    {
+      local: [-0.8660500049591064, -0.5, 0.009999999999999995],
+      axis: [0, 0, 1],
+      kind: "round",
+      role: "socket",
+      diameter: 0.5952380180358887,
+    },
+    {
+      local: [0, 0, 0],
+      axis: [0, 0, 1],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.8,
+      length: 1,
+    }
+  ],
+  "46372": [
+    {
+      local: [0, 0, 0],
+      axis: [0, 0, 1],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.7000000000000001,
+    },
+    {
+      local: [0, -1, 0],
+      axis: [0, 0, 1],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8000000000000002,
+    },
+    {
+      local: [1, 0, 0],
+      axis: [0, 0, 1],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+    },
+    {
+      local: [0, 1, 0],
+      axis: [0, 0, 1],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+    },
+    {
+      local: [-1, 0, 0],
+      axis: [0, 0, 1],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+    }
+  ],
+  "10928": [
+    {
+      local: [0, 0, 0],
+      axis: [0, 0, 1],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.6000000000000001,
+    }
+  ],
+  "3648": [
+    {
+      local: [0.5, -0.5, 0],
+      axis: [0, 0, 1],
+      kind: "round",
+      role: "socket",
+      diameter: 0.6000000000000001,
+    },
+    {
+      local: [-0.5, -0.5, 0],
+      axis: [0, 0, 1],
+      kind: "round",
+      role: "socket",
+      diameter: 0.6000000000000001,
+    },
+    {
+      local: [-0.5, 0.5, 0],
+      axis: [0, 0, 1],
+      kind: "round",
+      role: "socket",
+      diameter: 0.6000000000000001,
+    },
+    {
+      local: [0.5, 0.5, 0],
+      axis: [0, 0, 1],
+      kind: "round",
+      role: "socket",
+      diameter: 0.6000000000000001,
+    },
+    {
+      local: [0, 0, 0],
+      axis: [0, 0, 1],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.8,
+      length: 1,
+    }
+  ],
+  "32498": [
+    {
+      local: [1, 0, 0],
+      axis: [0, 0, 1],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+      length: 1.0000000000000007,
+    },
+    {
+      local: [-1, 0, 0],
+      axis: [0, 0, 1],
+      kind: "round",
+      role: "socket",
+      diameter: 0.8,
+      length: 1.0000000000000007,
+    },
+    {
+      local: [0, -1, 0],
+      axis: [0, 0, 1],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.6,
+      length: 1.0000000000000007,
+    },
+    {
+      local: [0, 0, 0],
+      axis: [0, 0, 1],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.6,
+      length: 1.0000000000000007,
+    },
+    {
+      local: [0, 1, 0],
+      axis: [0, 0, 1],
+      kind: "axle",
+      role: "socket",
+      diameter: 0.6,
+      length: 1.0000000000000007,
+    }
+  ],
   "11214": [
     {
       local: [-1, 0, 0],
@@ -300,7 +612,7 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
     {
       local: [0, 0, -1],
       axis: [0, 1, 0],
-      kind: "round",
+      kind: "axle",
       role: "socket",
       diameter: 0.8,
       length: 0.5,
@@ -312,7 +624,7 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
       role: "socket",
       diameter: 0.8,
       length: 0.5,
-    },
+    }
   ],
   "60483": [
     {
@@ -505,12 +817,12 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
   "32269": [
     {
       local: [0, 0, 0],
-      axis: [0, 1, 0],
+      axis: [0, 0, 1],
       kind: "axle",
       role: "socket",
-      diameter: 0.6,
+      diameter: 0.8,
       length: 1,
-    },
+    }
   ],
   "32270": [
     {
