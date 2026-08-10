@@ -4897,13 +4897,36 @@ export default function Home() {
         }
         const positionA = c.a.body.translation(),
           positionB = c.b.body.translation(),
+          rotationA = c.a.body.rotation(),
+          rotationB = c.b.body.rotation(),
+          inverseRotationA = new THREE.Quaternion(
+            rotationA.x,
+            rotationA.y,
+            rotationA.z,
+            rotationA.w,
+          ).invert(),
+          inverseRotationB = new THREE.Quaternion(
+            rotationB.x,
+            rotationB.y,
+            rotationB.z,
+            rotationB.w,
+          ).invert(),
           a = c.point
             .clone()
-            .sub(new THREE.Vector3(positionA.x, positionA.y, positionA.z)),
+            .sub(new THREE.Vector3(positionA.x, positionA.y, positionA.z))
+            .applyQuaternion(inverseRotationA),
           b = c.point
             .clone()
-            .sub(new THREE.Vector3(positionB.x, positionB.y, positionB.z)),
-          axis = c.axis.clone().normalize(),
+            .sub(new THREE.Vector3(positionB.x, positionB.y, positionB.z))
+            .applyQuaternion(inverseRotationB),
+          worldAxis = c.axis.clone().normalize(),
+          axis = worldAxis.clone().applyQuaternion(inverseRotationA),
+          worldFrame = new THREE.Quaternion().setFromUnitVectors(
+            new THREE.Vector3(1, 0, 0),
+            worldAxis,
+          ),
+          frameA = inverseRotationA.clone().multiply(worldFrame),
+          frameB = inverseRotationB.clone().multiply(worldFrame),
           dynamicAxle =
             (c.profile === "axle-cross" || c.profile === "axle-round") &&
             c.b.dynamicAxleConnections;
@@ -4925,10 +4948,12 @@ export default function Home() {
         else
           joint = RAPIER.JointData.fixed(
             a,
-            { x: 0, y: 0, z: 0, w: 1 },
+            frameA,
             b,
-            { x: 0, y: 0, z: 0, w: 1 },
+            frameB,
           );
+        joint.frame1 = frameA;
+        joint.frame2 = frameB;
         const created = world.createImpulseJoint(
           joint,
           c.a.body,
