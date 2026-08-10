@@ -215,6 +215,7 @@ type AppState = {
   physicsJoints: Map<string, RAPIER.ImpulseJoint>;
   dynamicNoContactPairs: Set<string>;
   contactExclusions: Set<string>;
+  contactCandidates: Map<string, { a: Piece; b: Piece }>;
   rigidIslandByPiece?: Map<Piece, Piece[]>;
   createPhysicsJoint?: (connection: Connection) => RAPIER.ImpulseJoint | undefined;
   dynamicConnectionFrame: number;
@@ -2492,6 +2493,7 @@ export default function Home() {
       physicsJoints: new Map(),
       dynamicNoContactPairs: new Set(),
       contactExclusions: new Set(),
+      contactCandidates: new Map(),
       dynamicConnectionFrame: 0,
       connectionModes: new Map<
         string,
@@ -2556,22 +2558,11 @@ export default function Home() {
       host: Piece,
       socket: MeshConnector,
     ) => {
-      const bounds = objectLocalBounds(host.mesh),
-        size = bounds.getSize(new THREE.Vector3()),
-        axis = socket.axis.clone().normalize(),
-        geometrySupport =
-          (Math.abs(axis.x) * size.x +
-            Math.abs(axis.y) * size.y +
-            Math.abs(axis.z) * size.z) /
-          2,
-        mapped = (socket.length ?? 0) / 2;
-      // Limit the global bounds contribution because bent/irregular pieces can
-      // extend far along the same direction away from this particular hole.
-      return THREE.MathUtils.clamp(
-        Math.max(mapped, Math.min(0.55, geometrySupport)),
-        0.12,
-        0.6,
-      );
+      const mapped = (socket.length ?? 0) / 2,
+        nominal = isHalfBeamPart(host) ? 0.25 : 0.5;
+      // Connection-map lengths win when present; otherwise LEGO's full/half
+      // beam thickness gives the collider surface without traversing the mesh.
+      return THREE.MathUtils.clamp(Math.max(mapped, nominal), 0.12, 0.6);
     };
     const addConnection = (
       host: Piece,
@@ -2587,14 +2578,13 @@ export default function Home() {
       const profile = connectorProfile(shaft, socket);
       if (
         !profile ||
-        (!state.bulkConnecting &&
-          state.connections.some(
-            (connection) =>
-              connection.a === host &&
-              connection.b === rod &&
-              connection.socket === socket &&
-              connection.shaft === shaft,
-          ))
+        state.connections.some(
+          (connection) =>
+            connection.a === host &&
+            connection.b === rod &&
+            connection.socket === socket &&
+            connection.shaft === shaft,
+        )
       )
         return false;
       const world = preparedSocket ?? worldConnector(host, socket),
@@ -2824,7 +2814,10 @@ export default function Home() {
               entranceCapture =
                 candidateSocket.socket.kind === "axle" || !axleEndCapture
                   ? 0
-                  : (candidateSocket.socket.length ?? 0.5) / 2 + 0.06;
+                  : socketSurfaceHalfThickness(
+                      candidateSocket.host,
+                      candidateSocket.socket,
+                    ) + 0.06;
             if (
               radial > (entranceCapture ? 0.13 : 0.16) ||
               Math.abs(along) > half + 0.1 + entranceCapture
@@ -2905,13 +2898,17 @@ export default function Home() {
     state.verifyConnections = verifyConnections;
     state.verifyConnectionsAsync = verifyConnectionsAsync;
     const updateDynamicMechanisms = () => {
+      const dynamicScanStarted = performance.now();
       const previousGearLinks = state.gearLinks.length;
       state.gearLinks = detectGearLinks(state.pieces);
       if (state.simLog && previousGearLinks !== state.gearLinks.length)
         state.simLog.events.push(
           `Engranajes dinámicos: ${previousGearLinks} → ${state.gearLinks.length} enlaces`,
         );
-      if (!state.world || !state.createPhysicsJoint) return;
+      if (!state.world || !state.createPhysicsJoint) {
+        state.pendingConnectionMs += performance.now() - dynamicScanStarted;
+        return;
+      }
 
       let changed = previousGearLinks !== state.gearLinks.length;
       const retained: Connection[] = [],
@@ -2978,52 +2975,41 @@ export default function Home() {
           state.dynamicNoContactPairs.delete(contactPairKey(a, b));
       });
 
-      const existingIds = new Set(state.connections.map((connection) => connection.id)),
-        { sockets, shaftGrid } = buildConnectionIndex(0.6);
-      sockets.forEach((socket) => scanSocketOnce(socket, shaftGrid, 0.6));
-      // Direct endpoint-to-surface capture. Unlike the spatial index this
-      // explicitly treats +axis and -axis identically and cannot miss an entry
-      // because the tip and socket centre occupy adjacent grid cells.
-      for (const rod of state.pieces.filter(
-        (piece) => piece.dynamicAxleConnections,
-      ))
-        for (const shaft of rod.connectors.filter(
-          (connector) =>
-            connector.role === "shaft" && connector.kind === "axle",
-        )) {
-          const shaftWorld = worldConnector(rod, shaft),
-            halfShaft = (shaft.length ?? 0.5) / 2;
-          for (const host of state.pieces) {
-            if (host === rod) continue;
+      const existingIds = new Set(
+        state.connections.map((connection) => connection.id),
+      );
+      state.bulkConnecting = true;
+      for (const pair of state.contactCandidates.values())
+        for (const [rod, host] of [
+          [pair.a, pair.b],
+          [pair.b, pair.a],
+        ] as [Piece, Piece][]) {
+          if (!rod.dynamicAxleConnections) continue;
+          for (const shaft of rod.connectors.filter(
+            (connector) =>
+              connector.role === "shaft" && connector.kind === "axle",
+          )) {
+            const shaftWorld = worldConnector(rod, shaft),
+              halfShaft = (shaft.length ?? 0.5) / 2;
             for (const socket of host.connectors.filter(
-              (connector) =>
-                connector.role === "socket" && connector.kind !== "axle",
+              (connector) => connector.role === "socket",
             )) {
-              if (
-                state.connections.some(
-                  (connection) =>
-                    connection.a === host &&
-                    connection.b === rod &&
-                    connection.socket === socket &&
-                    connection.shaft === shaft,
-                )
-              )
-                continue;
+              if (!connectorProfile(shaft, socket)) continue;
               const socketWorld = worldConnector(host, socket),
                 alignment = Math.abs(
                   socketWorld.axis.dot(shaftWorld.axis),
                 );
-              if (alignment < 0.96) continue;
+              if (alignment < 0.94) continue;
               const delta = socketWorld.point.clone().sub(shaftWorld.point),
                 along = delta.dot(shaftWorld.axis),
                 radial = delta
                   .clone()
                   .addScaledVector(shaftWorld.axis, -along)
                   .length(),
-                halfSocket = socketSurfaceHalfThickness(host, socket);
+                surface = socketSurfaceHalfThickness(host, socket);
               if (
-                radial > 0.14 ||
-                Math.abs(along) > halfShaft + halfSocket + 0.1
+                radial > 0.16 ||
+                Math.abs(along) > halfShaft + surface + 0.12
               )
                 continue;
               addConnection(host, rod, socket, shaft, {
@@ -3034,6 +3020,12 @@ export default function Home() {
             }
           }
         }
+      state.contactCandidates.clear();
+      state.bulkConnecting = false;
+      const hasNewConnections = state.connections.some(
+        (connection) => !existingIds.has(connection.id),
+      );
+      if (hasNewConnections) rebalanceAllSmartDefaults(state);
       const accepted: Connection[] = [];
       for (const connection of state.connections) {
         if (existingIds.has(connection.id)) {
@@ -3049,6 +3041,50 @@ export default function Home() {
         state.dynamicNoContactPairs.add(
           contactPairKey(connection.a, connection.b),
         );
+        const hostBody = connection.a.body,
+          axleBody = connection.b.body;
+        if (hostBody && axleBody && hostBody !== axleBody) {
+          const axis = worldConnector(
+              connection.a,
+              connection.socket,
+            ).axis,
+            hostVelocity = hostBody.linvel(),
+            axleVelocity = axleBody.linvel(),
+            relativeAxial = THREE.MathUtils.clamp(
+              (axleVelocity.x - hostVelocity.x) * axis.x +
+                (axleVelocity.y - hostVelocity.y) * axis.y +
+                (axleVelocity.z - hostVelocity.z) * axis.z,
+              -3,
+              3,
+            ),
+            hostAngular = hostBody.angvel(),
+            axleAngular = axleBody.angvel(),
+            relativeSpin = THREE.MathUtils.clamp(
+              (axleAngular.x - hostAngular.x) * axis.x +
+                (axleAngular.y - hostAngular.y) * axis.y +
+                (axleAngular.z - hostAngular.z) * axis.z,
+              -14,
+              14,
+            );
+          axleBody.resetForces(true);
+          axleBody.resetTorques(true);
+          axleBody.setLinvel(
+            {
+              x: hostVelocity.x + axis.x * relativeAxial,
+              y: hostVelocity.y + axis.y * relativeAxial,
+              z: hostVelocity.z + axis.z * relativeAxial,
+            },
+            true,
+          );
+          axleBody.setAngvel(
+            {
+              x: hostAngular.x + axis.x * relativeSpin,
+              y: hostAngular.y + axis.y * relativeSpin,
+              z: hostAngular.z + axis.z * relativeSpin,
+            },
+            true,
+          );
+        }
         state.createPhysicsJoint(connection);
         changed = true;
         state.simLog?.events.push(
@@ -3056,7 +3092,7 @@ export default function Home() {
         );
       }
       state.connections = accepted;
-      if (state.rigidIslandByPiece) {
+      if (changed && state.rigidIslandByPiece) {
         const refreshed = buildConnectorContactExclusions(
           state.connections,
           state.rigidIslandByPiece,
@@ -3066,10 +3102,10 @@ export default function Home() {
         refreshed.forEach((key) => state.contactExclusions.add(key));
       }
       if (changed) {
-        rebalanceAllSmartDefaults(state);
         setConnectionRevision((value) => value + 1);
         refreshDebug();
       }
+      state.pendingConnectionMs += performance.now() - dynamicScanStarted;
     };
     const connect = (piece: Piece) => {
       if (!AUTO_CONNECTIONS_ENABLED) return;
@@ -4582,6 +4618,7 @@ export default function Home() {
     s.physicsJoints.clear();
     s.dynamicNoContactPairs.clear();
     s.contactExclusions.clear();
+    s.contactCandidates.clear();
     s.rigidIslandByPiece = undefined;
     s.createPhysicsJoint = undefined;
     s.connectionModes.clear();
@@ -4716,15 +4753,26 @@ export default function Home() {
           const pieceA = colliderOwners.get(colliderA),
             pieceB = colliderOwners.get(colliderB);
           if (s.contactFilterStats) s.contactFilterStats.tested++;
+          const pairKey =
+            pieceA && pieceB ? contactPairKey(pieceA, pieceB) : undefined;
           if (
             pieceA &&
             pieceB &&
-            (s.contactExclusions.has(contactPairKey(pieceA, pieceB)) ||
-              s.dynamicNoContactPairs.has(contactPairKey(pieceA, pieceB)))
+            pairKey &&
+            (s.contactExclusions.has(pairKey) ||
+              s.dynamicNoContactPairs.has(pairKey))
           ) {
             if (s.contactFilterStats) s.contactFilterStats.rejected++;
             return null;
           }
+          if (
+            pieceA &&
+            pieceB &&
+            pairKey &&
+            (pieceA.dynamicAxleConnections ||
+              pieceB.dynamicAxleConnections)
+          )
+            s.contactCandidates.set(pairKey, { a: pieceA, b: pieceB });
           return RAPIER.SolverFlags.COMPUTE_IMPULSE;
         },
         filterIntersectionPair() {
@@ -4834,6 +4882,7 @@ export default function Home() {
         redundantMovingJoints = 0;
       s.physicsJoints.clear();
       s.dynamicNoContactPairs.clear();
+      s.contactCandidates.clear();
       const createPhysicsJoint = (c: Connection) => {
         if (!c.a.body || !c.b.body) return;
         if (
@@ -4925,6 +4974,7 @@ export default function Home() {
       s.physicsJoints.clear();
       s.dynamicNoContactPairs.clear();
       s.contactExclusions.clear();
+      s.contactCandidates.clear();
       s.rigidIslandByPiece = undefined;
       s.createPhysicsJoint = undefined;
       if (s.simLog) {
@@ -5307,7 +5357,7 @@ export default function Home() {
   const setMotorSpeed = (id: string, motorSpeed: number) => {
     const state = appRef.current,
       connection = state?.connections.find((item) => item.id === id);
-    if (!state || !connection || running) return;
+    if (!state || !connection) return;
     connection.motorSpeed = motorSpeed;
     state.connectionModes.set(id, {
       mode: connection.mode,
@@ -5315,13 +5365,19 @@ export default function Home() {
       motorForce: connection.motorForce,
       userConfigured: connection.userConfigured,
     });
+    const activeJoint = state.physicsJoints.get(id);
+    if (running && activeJoint)
+      (activeJoint as RAPIER.RevoluteImpulseJoint).configureMotorVelocity(
+        motorSpeed,
+        connection.motorForce,
+      );
     setConnectionRevision((value) => value + 1);
     setMessage(`Motor ${motorSpeed.toFixed(1)} rad/s`);
   };
   const setMotorForce = (id: string, motorForce: number) => {
     const state = appRef.current,
       connection = state?.connections.find((item) => item.id === id);
-    if (!state || !connection || running) return;
+    if (!state || !connection) return;
     connection.motorForce = motorForce;
     state.connectionModes.set(id, {
       mode: connection.mode,
@@ -5329,6 +5385,12 @@ export default function Home() {
       motorForce,
       userConfigured: connection.userConfigured,
     });
+    const activeJoint = state.physicsJoints.get(id);
+    if (running && activeJoint)
+      (activeJoint as RAPIER.RevoluteImpulseJoint).configureMotorVelocity(
+        connection.motorSpeed,
+        motorForce,
+      );
     setConnectionRevision((value) => value + 1);
     setMessage(`Fuerza del motor ${motorForce.toFixed(0)}`);
   };
@@ -6478,7 +6540,6 @@ export default function Home() {
                                 max="30"
                                 step=".5"
                                 value={connection.motorSpeed}
-                                disabled={running}
                                 onChange={(event) =>
                                   setMotorSpeed(
                                     connection.id,
@@ -6497,7 +6558,6 @@ export default function Home() {
                                 max="400"
                                 step="5"
                                 value={connection.motorForce}
-                                disabled={running}
                                 onChange={(event) =>
                                   setMotorForce(
                                     connection.id,
