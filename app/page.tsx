@@ -32,7 +32,6 @@ import {
 } from "./connectors";
 import { paletteParts } from "./palette";
 import { preloadedConnectionMaps } from "./connection-maps";
-import { preloadedCollisionMaps } from "./collision-maps";
 import preloadedCatalog from "./preloaded-catalog.json";
 
 type PieceKind = "beam" | "wheel" | "motor";
@@ -695,8 +694,6 @@ const frictionPinRefs = new Set(["2780", "6558", "32054", "43093"]);
 const isPinPart = (p: CatalogPart) =>
   /^Technic (Axle )?Pin/i.test(p.name) || frictionPinRefs.has(p.part);
 const isAxlePart = (p: CatalogPart) => /^Technic Axle(?! Pin)/i.test(p.name);
-const isHalfBeamPart = (p: CatalogPart) =>
-  p.family === "beams" && /\b0\.5\b/i.test(p.name);
 const hasPinFriction = (p: CatalogPart) =>
   isPinPart(p) &&
   !/without friction|frictionless/i.test(p.name) &&
@@ -1297,15 +1294,6 @@ export default function Home() {
           center: primitive.center.clone(),
           size: primitive.size?.clone(),
           rotation: primitive.rotation.clone(),
-        }));
-      if (!colliders && preloadedCollisionMaps[p.part])
-        colliders = preloadedCollisionMaps[p.part].map((primitive) => ({
-          ...primitive,
-          center: new THREE.Vector3().fromArray(primitive.center),
-          size: primitive.size
-            ? new THREE.Vector3().fromArray(primitive.size)
-            : undefined,
-          rotation: new THREE.Quaternion().fromArray(primitive.rotation),
         }));
       // Corrected connection maps can change the topology used by the compound
       // collider generator (notably small L beams). Do not reuse a collider that
@@ -2173,61 +2161,6 @@ export default function Home() {
           .normalize(),
       };
     };
-    const nearestPoint = (
-        points: THREE.Vector3[],
-        reference: THREE.Vector3,
-      ) =>
-        points.reduce((nearest, point) =>
-          point.distanceToSquared(reference) <
-          nearest.distanceToSquared(reference)
-            ? point
-            : nearest,
-        ),
-      roundSocketTargets = (
-        socketPiece: Piece,
-        shaftPoint: THREE.Vector3,
-        shaftAxis: THREE.Vector3,
-      ) =>
-        (isHalfBeamPart(socketPiece) ? [-0.5, 0.5] : [0]).map((offset) =>
-          shaftPoint.clone().addScaledVector(shaftAxis, offset),
-        ),
-      roundShaftTargets = (
-        socketPiece: Piece,
-        socketPoint: THREE.Vector3,
-        shaftAxis: THREE.Vector3,
-      ) =>
-        (isHalfBeamPart(socketPiece) ? [-0.5, 0.5] : [0]).map((offset) =>
-          socketPoint.clone().addScaledVector(shaftAxis, -offset),
-        ),
-      availableRoundSocketTargets = (
-        socketPiece: Piece,
-        shaftPiece: Piece,
-        shaft: MeshConnector,
-        shaftPoint: THREE.Vector3,
-        shaftAxis: THREE.Vector3,
-      ) => {
-        const targets = roundSocketTargets(
-            socketPiece,
-            shaftPoint,
-            shaftAxis,
-          ),
-          available = targets.filter((target) =>
-            state.connections
-              .filter(
-                (connection) =>
-                  connection.b === shaftPiece &&
-                  connection.shaft === shaft &&
-                  connection.a !== socketPiece,
-              )
-              .every(
-                (connection) =>
-                  worldConnector(connection.a, connection.socket).point.distanceTo(
-                    target,
-                  ) > 0.2,
-              ),
-          );
-        return available.length ? available : targets;
-      };
     const addConnection = (
       host: Piece,
       rod: Piece,
@@ -2308,34 +2241,10 @@ export default function Home() {
       );
       sourcePiece.mesh.quaternion.premultiply(alignment).normalize();
       sourcePiece.mesh.updateMatrixWorld(true);
-      const currentSourcePoint = worldConnector(
-          sourcePiece,
-          sourceConnector,
-        ).point,
-        desiredSourcePoint =
-          profile === "pin-round" && sourceConnector.role === "socket"
-            ? nearestPoint(
-                availableRoundSocketTargets(
-                  sourcePiece,
-                  targetPiece,
-                  targetConnector,
-                  targetWorld.point,
-                  targetWorld.axis,
-                ),
-                currentSourcePoint,
-              )
-            : profile === "pin-round" && sourceConnector.role === "shaft"
-              ? nearestPoint(
-                  roundShaftTargets(
-                    targetPiece,
-                    targetWorld.point,
-                    targetWorld.axis,
-                  ),
-                  currentSourcePoint,
-                )
-              : targetWorld.point;
       sourcePiece.mesh.position.add(
-        desiredSourcePoint.clone().sub(currentSourcePoint),
+        targetWorld.point
+          .clone()
+          .sub(worldConnector(sourcePiece, sourceConnector).point),
       );
       sourcePiece.mesh.updateMatrixWorld(true);
       state.renderBatchesDirty = true;
@@ -2403,15 +2312,9 @@ export default function Home() {
                 axis,
               },
               occupiedCells = new Set<string>();
-            if (connector.kind === "round") {
+            if (connector.kind === "round")
               occupiedCells.add(connectionCell(point));
-              occupiedCells.add(
-                connectionCell(point.clone().addScaledVector(axis, 0.5)),
-              );
-              occupiedCells.add(
-                connectionCell(point.clone().addScaledVector(axis, -0.5)),
-              );
-            } else {
+            else {
               const half = (connector.length ?? 0.5) / 2 + 0.12,
                 steps = Math.max(
                   1,
@@ -2462,11 +2365,7 @@ export default function Home() {
           if (Math.abs(candidateSocket.axis.dot(axis)) < 0.965) return;
           let score: number;
           if (shaft.kind === "round") {
-            score = Math.min(
-              ...roundSocketTargets(candidateSocket.host, point, axis).map(
-                (target) => target.distanceTo(candidateSocket.point),
-              ),
-            );
+            score = point.distanceTo(candidateSocket.point);
             if (score > 0.18) return;
           } else {
             const half = (shaft.length ?? 0.5) / 2,
@@ -2556,7 +2455,6 @@ export default function Home() {
           socket: MeshConnector;
           shaft: MeshConnector;
           score: number;
-          targetPoint: THREE.Vector3;
         };
         let best: Match | undefined;
         for (const host of state.pieces.filter((part) => part !== piece))
@@ -2570,15 +2468,10 @@ export default function Home() {
               const socketWorld = worldConnector(host, socket),
                 shaftWorld = worldConnector(piece, shaft),
                 axis = shaftWorld.axis;
-              let score: number,
-                targetPoint = socketWorld.point;
-              if (shaft.kind === "round") {
-                targetPoint = nearestPoint(
-                  roundShaftTargets(host, socketWorld.point, axis),
-                  shaftWorld.point,
-                );
-                score = shaftWorld.point.distanceTo(targetPoint);
-              } else {
+              let score: number;
+              if (shaft.kind === "round")
+                score = shaftWorld.point.distanceTo(socketWorld.point);
+              else {
                 const delta = socketWorld.point
                     .clone()
                     .sub(shaftWorld.point),
@@ -2589,7 +2482,7 @@ export default function Home() {
                   Math.max(0, Math.abs(along) - (shaft.length ?? 0.5) / 2);
               }
               if (score < 0.75 && (!best || score < best.score))
-                best = { host, socket, shaft, score, targetPoint };
+                best = { host, socket, shaft, score };
             }
         if (best) {
           let targetAxis = worldConnector(best.host, best.socket).axis,
@@ -2605,9 +2498,7 @@ export default function Home() {
           const socketPoint = worldConnector(best.host, best.socket).point;
           if (best.shaft.kind === "round") {
             piece.mesh.position.add(
-              best.targetPoint
-                .clone()
-                .sub(worldConnector(piece, best.shaft).point),
+              socketPoint.sub(worldConnector(piece, best.shaft).point),
             );
           } else {
             const shaftPoint = worldConnector(piece, best.shaft).point,
@@ -2629,7 +2520,6 @@ export default function Home() {
         socket: MeshConnector;
         shaft: MeshConnector;
         score: number;
-        targetPoint: THREE.Vector3;
       };
       let best: HostMatch | undefined;
       for (const rod of state.pieces.filter(
@@ -2645,21 +2535,10 @@ export default function Home() {
             const socketWorld = worldConnector(piece, socket),
               shaftWorld = worldConnector(rod, shaft),
               axis = shaftWorld.axis;
-            let score: number,
-              targetPoint = shaftWorld.point;
-            if (shaft.kind === "round") {
-              targetPoint = nearestPoint(
-                availableRoundSocketTargets(
-                  piece,
-                  rod,
-                  shaft,
-                  shaftWorld.point,
-                  axis,
-                ),
-                socketWorld.point,
-              );
-              score = socketWorld.point.distanceTo(targetPoint);
-            } else {
+            let score: number;
+            if (shaft.kind === "round")
+              score = socketWorld.point.distanceTo(shaftWorld.point);
+            else {
               const delta = socketWorld.point.clone().sub(shaftWorld.point),
                 along = delta.dot(axis),
                 radial = delta.clone().addScaledVector(axis, -along).length();
@@ -2668,7 +2547,7 @@ export default function Home() {
                 Math.max(0, Math.abs(along) - (shaft.length ?? 0.5) / 2);
             }
             if (score < 0.75 && (!best || score < best.score))
-              best = { rod, socket, shaft, score, targetPoint };
+              best = { rod, socket, shaft, score };
           }
       if (!best) return;
       let targetAxis = worldConnector(best.rod, best.shaft).axis,
@@ -2687,7 +2566,7 @@ export default function Home() {
       const socketPoint = worldConnector(piece, best.socket).point;
       if (best.shaft.kind === "round")
         piece.mesh.position.add(
-          best.targetPoint.clone().sub(socketPoint),
+          worldConnector(best.rod, best.shaft).point.sub(socketPoint),
         );
       else {
         const delta = worldConnector(best.rod, best.shaft).point.sub(socketPoint),
@@ -2762,58 +2641,6 @@ export default function Home() {
         o = o.parent;
       }
       return undefined;
-    };
-    const pickPiece = () => {
-      const primaryHits = ray.intersectObjects(
-          [
-            ...state.pieces
-              .filter((piece) => !piece.renderBatched)
-              .map((piece) => piece.mesh),
-            ...(state.renderBatchRoot ? [state.renderBatchRoot] : []),
-          ],
-          true,
-        ),
-        primary = primaryHits
-          .map((hit) => ({
-            hit,
-            piece: pieceFrom(
-              hit.object,
-              hit.instanceId ??
-                (hit as THREE.Intersection & { batchId?: number }).batchId,
-            ),
-          }))
-          .find((candidate) => !!candidate.piece);
-      if (primary) return primary;
-
-      // LDraw faces are normally front-sided. For picking, retry against the
-      // retained detailed meshes with both sides enabled so a piece remains
-      // selectable through every valid view and not only through its front faces.
-      const owners = new Map<THREE.Mesh, Piece>(),
-        sides = new Map<THREE.Material, THREE.Side>();
-      state.pieces.forEach((piece) => {
-        piece.mesh.updateMatrixWorld(true);
-        piece.mesh.traverse((object) => {
-          if (!(object instanceof THREE.Mesh)) return;
-          owners.set(object, piece);
-          const materials = Array.isArray(object.material)
-            ? object.material
-            : [object.material];
-          materials.forEach((material) => {
-            if (!sides.has(material)) sides.set(material, material.side);
-            material.side = THREE.DoubleSide;
-          });
-        });
-      });
-      const fallbackHits = ray.intersectObjects([...owners.keys()], false);
-      sides.forEach((side, material) => {
-        material.side = side;
-      });
-      const fallback = fallbackHits.find((hit) =>
-        owners.has(hit.object as THREE.Mesh),
-      );
-      return fallback
-        ? { hit: fallback, piece: owners.get(fallback.object as THREE.Mesh) }
-        : undefined;
     };
     const paintForceLabel = (label: HTMLDivElement, force: number) => {
       const text = `${force.toFixed(1)} N`;
@@ -2958,7 +2785,25 @@ export default function Home() {
         );
         return;
       }
-      const hitMatch = pickPiece(),
+      const hits = ray.intersectObjects(
+          [
+            ...state.pieces
+              .filter((piece) => !piece.renderBatched)
+              .map((piece) => piece.mesh),
+            ...(state.renderBatchRoot ? [state.renderBatchRoot] : []),
+          ],
+          true,
+        ),
+        hitMatch = hits
+          .map((candidate) => ({
+            hit: candidate,
+            piece: pieceFrom(
+              candidate.object,
+              candidate.instanceId ??
+                (candidate as THREE.Intersection & { batchId?: number }).batchId,
+            ),
+          }))
+          .find((candidate) => !!candidate.piece),
         hit = hitMatch?.hit,
         hitPiece = hitMatch?.piece;
       orbit = e.button === 2 || e.altKey;
@@ -3521,6 +3366,7 @@ export default function Home() {
         if (spring?.piece.body && !spring.piece.fixed) {
           const anchor = spring.piece.mesh.localToWorld(spring.anchor.clone()),
             delta = spring.target.clone().sub(anchor);
+          if (delta.length() > 3.5) delta.setLength(3.5);
           const dynamic = spring.component.filter((p) => p.body && !p.fixed),
             velocity = spring.piece.body.linvel(),
             acceleration = delta
@@ -3532,9 +3378,14 @@ export default function Home() {
             movingMass = dynamic.reduce(
               (total, piece) => total + Math.max(0.25, piece.body!.mass()),
               0,
-            );
+            ),
+            // A large rigid assembly must not multiply the cursor spring by the
+            // mass of hundreds of pieces. That produced impulses above 47 kN
+            // in real logs and overwhelmed every joint in the island.
+            effectiveMovingMass = Math.min(movingMass, 40);
+          if (acceleration.length() > 90) acceleration.setLength(90);
           const force = acceleration.multiplyScalar(
-              Math.max(0.25, movingMass),
+              Math.max(0.25, effectiveMovingMass),
             ),
             totalForce = force.length();
           spring.piece.body.addForceAtPoint(

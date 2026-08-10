@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { extname, join, normalize, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
 import * as THREE from "three";
 import { LDrawLoader } from "three/addons/loaders/LDrawLoader.js";
 import { LDrawConditionalLineMaterial } from "three/addons/materials/LDrawConditionalLineMaterial.js";
@@ -14,7 +14,6 @@ import {
   rodConnectors,
 } from "../app/connectors.ts";
 import { preloadedConnectionMaps } from "../app/connection-maps.ts";
-import { preloadedCollisionMaps } from "../app/collision-maps.ts";
 import { paletteParts } from "../app/palette.ts";
 
 globalThis.ProgressEvent ??= class ProgressEvent extends Event {
@@ -26,32 +25,13 @@ globalThis.ProgressEvent ??= class ProgressEvent extends Event {
   }
 };
 
-const commandArguments = process.argv.slice(2),
-  repositoryArgument = commandArguments.find((argument) => !argument.startsWith("--")),
-  selectedArgument = commandArguments.find((argument) => argument.startsWith("--parts=")),
-  selectedReferences = new Set(
-    (selectedArgument?.slice("--parts=".length) ?? "")
-      .split(",")
-      .map((reference) => reference.trim().toLowerCase())
-      .filter(Boolean),
-  ),
-  selective = selectedReferences.size > 0,
-  repositoryRoot = resolve(
-    repositoryArgument || fileURLToPath(new URL("..", import.meta.url)),
-  ),
+const repositoryRoot = resolve(process.argv[2] || new URL("..", import.meta.url).pathname),
   publicRoot = join(repositoryRoot, "public"),
   ldrawRoot = join(publicRoot, "ldraw"),
   catalogRoot = join(publicRoot, "catalog"),
   geometryRoot = join(catalogRoot, "geometry"),
   renderRoot = join(catalogRoot, "renders"),
-  sourceBase = "https://cdn.jsdelivr.net/gh/remig/ldraw_parts@master/",
-  partsToProcess = selective
-    ? paletteParts.filter(
-        (part) =>
-          selectedReferences.has(part.part.toLowerCase()) ||
-          selectedReferences.has((part.modelPart ?? part.part).toLowerCase()),
-      )
-    : paletteParts;
+  sourceBase = "https://cdn.jsdelivr.net/gh/pybricks/ldraw@master/";
 
 await Promise.all(
   [ldrawRoot, catalogRoot, geometryRoot, renderRoot].map((directory) =>
@@ -94,6 +74,15 @@ const referencedFiles = (text) =>
 const fetchLibraryFile = async (reference) => {
   if (resolvedFiles.has(reference)) return resolvedFiles.get(reference);
   const existingPath = fileMap[reference];
+  if (existingPath) {
+    try {
+      const text = await readFile(join(ldrawRoot, ...existingPath.split("/")), "utf8"),
+        result = { candidate: existingPath, text };
+      referencedFiles(text).forEach(enqueue);
+      resolvedFiles.set(reference, result);
+      return result;
+    } catch {}
+  }
   let result = null;
   for (const candidate of candidatesFor(reference)) {
     const response = await fetch(sourceBase + candidate);
@@ -109,13 +98,6 @@ const fetchLibraryFile = async (reference) => {
     referencedFiles(text).forEach(enqueue);
     break;
   }
-  if (!result && existingPath) {
-    try {
-      const text = await readFile(join(ldrawRoot, ...existingPath.split("/")), "utf8");
-      result = { candidate: existingPath, text };
-      referencedFiles(text).forEach(enqueue);
-    } catch {}
-  }
   resolvedFiles.set(reference, result);
   return result;
 };
@@ -125,18 +107,11 @@ if (!materialResponse.ok) throw new Error("No se pudo descargar LDConfig.ldr");
 await writeFile(join(ldrawRoot, "LDConfig.ldr"), await materialResponse.text(), "utf8");
 for (const legalFile of ["CAreadme.txt", "CAlicense.txt", "CAlicense4.txt"]) {
   const response = await fetch(sourceBase + legalFile);
-  if (response.ok)
-    await writeFile(join(ldrawRoot, legalFile), await response.text(), "utf8");
-  else {
-    try {
-      await readFile(join(ldrawRoot, legalFile));
-    } catch {
-      throw new Error(`No se pudo obtener ${legalFile}`);
-    }
-  }
+  if (!response.ok) throw new Error(`No se pudo descargar ${legalFile}`);
+  await writeFile(join(ldrawRoot, legalFile), await response.text(), "utf8");
 }
 
-for (const part of partsToProcess) enqueue(`${part.modelPart ?? part.part}.dat`);
+for (const part of paletteParts) enqueue(`${part.modelPart ?? part.part}.dat`);
 let cursor = 0;
 while (cursor < queue.length) {
   const batch = queue.slice(cursor, cursor + 12);
@@ -150,7 +125,7 @@ await writeFile(
 );
 
 await Promise.all(
-  [...new Map(partsToProcess.map((part) => [part.modelPart ?? part.part, part])).values()].map(
+  [...new Map(paletteParts.map((part) => [part.modelPart ?? part.part, part])).values()].map(
     async (part) => {
       if (!part.sourceThumb?.startsWith("http")) return;
       const response = await fetch(part.sourceThumb);
@@ -225,16 +200,9 @@ const modelText = (part) =>
     rotation: collider.rotation.toArray(),
   });
 
-let catalog = { version: 1, parts: {}, assets: {} };
-if (selective) {
-  try {
-    catalog = JSON.parse(
-      await readFile(join(repositoryRoot, "app", "preloaded-catalog.json"), "utf8"),
-    );
-  } catch {}
-}
+const catalog = { version: 1, parts: {}, assets: {} };
 try {
-  for (const part of partsToProcess) {
+  for (const part of paletteParts) {
     const assetKey = `${part.part}-${part.color}`,
       geometryFile = `catalog/geometry/${assetKey}.json`;
     let exact = await loader.loadAsync(
@@ -296,19 +264,10 @@ try {
         },
       ];
     }
-    const colliders = preloadedCollisionMaps[part.part]
-        ? preloadedCollisionMaps[part.part].map((primitive) => ({
-            ...primitive,
-            center: new THREE.Vector3().fromArray(primitive.center),
-            size: primitive.size
-              ? new THREE.Vector3().fromArray(primitive.size)
-              : undefined,
-            rotation: new THREE.Quaternion().fromArray(primitive.rotation),
-          }))
-        : approximateCollisionPrimitives(wrapper, part.name, connectors),
+    const colliders = approximateCollisionPrimitives(wrapper, part.name, connectors),
       box = new THREE.Box3().setFromObject(wrapper),
       rootFile = resolvedFiles.get(`${(part.modelPart ?? part.part).toLowerCase()}.dat`);
-    catalog.parts[part.part] = {
+    catalog.parts[part.part] ??= {
       name: part.name,
       family: part.family,
       modelPart: part.modelPart ?? part.part,
@@ -338,5 +297,5 @@ await writeFile(
   "utf8",
 );
 console.log(
-  `Catálogo generado: ${partsToProcess.length} variantes actualizadas, ${resolvedFiles.size} archivos LDraw resueltos.`,
+  `Catálogo generado: ${Object.keys(catalog.assets).length} variantes, ${resolvedFiles.size} archivos LDraw.`,
 );

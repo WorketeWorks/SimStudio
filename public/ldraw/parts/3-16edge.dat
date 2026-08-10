@@ -1,8 +1,0 @@
-0 Circle 0.1875
-0 Name: 3-16edge.dat
-0 Author: Donald Sutter [technog]
-0 !LICENSE Licensed under CC BY 4.0 : see CAreadme.txt
-0 BFC CERTIFY CCW
-2 24 1 0 0 0.9239 0 0.3827
-2 24 0.9239 0 0.3827 0.7071 0 0.7071
-2 24 0.7071 0 0.7071 0.3827 0 0.9239
