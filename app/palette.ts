@@ -28,6 +28,7 @@ const groups:Record<PaletteFamily,Entry[]>={
 };
 
 const ldrawColor:Record<number,number>={2:19,5:4,7:1,11:0,85:72,86:71,88:70};
+const defaultColorOverride:Record<string,number>={"4265c":14,"15458":72};
 const modelAlias:Record<string,string>={"4265c":"32123b","4185":"4185b","6538c":"59443","3648":"3648b"};
 const thumbAlias:Record<string,string>={"32556":"32556b"};
 const thumbId:Record<string,number>={
@@ -37,10 +38,10 @@ const thumbId:Record<string,number>={
   "6558":11816,"87082":13102,"32054":5532,"32556":43906,"48989":9789,"87408":13112,"15100":782,"2780":3099,"3673":6706
 };
 
-export const paletteParts=Object.entries(groups).flatMap(([family,entries])=>entries.map(([part,name,bricklinkColor])=>{const modelPart=modelAlias[part]??part,id=thumbId[modelPart],thumbPart=thumbAlias[part]??modelPart;return{
-  part,name,family:family as PaletteFamily,color:ldrawColor[bricklinkColor]??71,kind:(family==="gears"||family==="wheels"?"wheel":"beam") as "beam"|"wheel"|"motor",gear:family==="gears",modelPart,rawThumb:true,
+export const paletteParts=Object.entries(groups).flatMap(([family,entries])=>entries.map(([part,name,bricklinkColor])=>{const modelPart=modelAlias[part]??part,id=thumbId[modelPart],thumbPart=thumbAlias[part]??modelPart,sourceColor=ldrawColor[bricklinkColor]??71,color=defaultColorOverride[part]??sourceColor;return{
+  part,name,family:family as PaletteFamily,color,sourceColor,kind:(family==="gears"||family==="wheels"?"wheel":"beam") as "beam"|"wheel"|"motor",gear:family==="gears",modelPart,rawThumb:true,
   origin:"default-palette" as const,sourceKind:"packaged-cache" as const,requestedPart:part,catalogReturnedPart:part,resolvedPart:modelPart,
-  geometry:`catalog/geometry/${part}-${ldrawColor[bricklinkColor]??71}.json`,
+  geometry:`catalog/geometry/${part}-${sourceColor}.json`,
   thumb:id?`catalog/renders/${modelPart}.png`:undefined,
   sourceThumb:id?`https://library.ldraw.org/media/parts/${id}/conversions/${thumbPart}-thumb.png`:undefined
 }}));

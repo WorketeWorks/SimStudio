@@ -27,7 +27,7 @@ const commonColor=(family:string,part:string,name:string)=>{
   if(family==="gears")return 72;
   if(family==="wheels")return 0;
   if(family==="motors")return 71;
-  return 72;
+  return 71;
 };
 async function search(query:string,family:string){
   const response=await fetch(`https://library.ldraw.org/parts/list?tableSearch=${encodeURIComponent(query)}`,{headers:{"User-Agent":"Sim-Studio/0.3"}});if(!response.ok)return[];

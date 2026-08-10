@@ -71,6 +71,8 @@ type CatalogPart = {
   resolvedPart?: string;
   catalogQuery?: string;
   importFile?: string;
+  downloadUrl?: string;
+  downloadSource?: "local" | "primary" | "legacy";
 };
 type Piece = CatalogPart & {
   id: number;
@@ -211,7 +213,7 @@ type AppState = {
   renderer: THREE.WebGLRenderer;
   camera: THREE.PerspectiveCamera;
   floor: THREE.Mesh;
-  grid: THREE.GridHelper;
+  grid: THREE.Group;
   pieces: Piece[];
   selected?: Piece;
   running: boolean;
@@ -293,6 +295,7 @@ const LDRAW =
   MODEL_LOAD_TIMEOUT = 20_000,
   AUTO_CONNECTIONS_ENABLED = true,
   CORRECTION_MAP_REVISION = "2026-08-10-corrections-1";
+const invalidPackagedGeometry = new Set(["14720"]);
 const packagedParts = preloadedCatalog.parts as Record<
   string,
   {
@@ -535,7 +538,7 @@ const translations = {
     ready: "Catálogo local listo",
     running: "SIMULACIÓN: arrastra una pieza para aplicarle fuerza",
     cameraHelp:
-      "Arrastrar: mover · Ctrl+arrastrar: Connect manual · Shift: mover Y · WASD/flechas: rotar 90° · Alt+clic: fijar · Alt/botón derecho: orbitar",
+      "Arrastrar: mover · Rueda central: desplazar cámara · Doble rueda: centrar/restaurar · Alt/botón derecho: orbitar · Rueda: zoom · Ctrl+arrastrar: Connect manual · Shift: mover Y · WASD/flechas: rotar 90° · Alt+clic: fijar",
     properties: "PROPIEDADES",
     piece: "PIEZA",
     color: "COLOR",
@@ -668,7 +671,7 @@ const translations = {
     ready: "Local catalog ready",
     running: "SIMULATION: drag a part to apply force",
     cameraHelp:
-      "Drag: move · Ctrl+drag: manual Connect · Shift: move Y · WASD/arrows: rotate 90° · Alt+click: fix · Alt/right button: orbit",
+      "Drag: move · Middle drag: pan camera · Middle double-click: focus/reset · Alt/right button: orbit · Wheel: zoom · Ctrl+drag: manual Connect · Shift: move Y · WASD/arrows: rotate 90° · Alt+click: fix",
     properties: "PROPERTIES",
     piece: "PART",
     color: "COLOR",
@@ -851,8 +854,66 @@ const isHalfBeamPart = (p: CatalogPart) =>
 const COLLISION_GROUP_NON_GEAR = 0x0001,
   COLLISION_GROUP_GEAR_NORMAL = 0x0002,
   COLLISION_GROUP_GEAR_MESH = 0x0004,
+  GRID_SIZE = 240,
+  GRID_DIVISIONS = 240,
+  GRID_RECENTER_STEP = 20,
   interactionGroups = (membership: number, filter: number) =>
     (membership << 16) | filter;
+const createStudioGrid = (dark: boolean) => {
+  const group = new THREE.Group(),
+    minor = new THREE.GridHelper(
+      GRID_SIZE,
+      GRID_DIVISIONS,
+      dark ? 0x41484f : 0xb3c1ca,
+      dark ? 0x41484f : 0xb3c1ca,
+    ),
+    major = new THREE.GridHelper(
+      GRID_SIZE,
+      GRID_DIVISIONS / 10,
+      dark ? 0x78838d : 0x8297a5,
+      dark ? 0x78838d : 0x8297a5,
+    ),
+    axisMaterial = new THREE.LineBasicMaterial({
+      color: dark ? 0xd5dbe0 : 0x4e6574,
+      linewidth: 3,
+      depthTest: true,
+      depthWrite: false,
+    }),
+    axisX = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(-GRID_SIZE / 2, 0, 0),
+        new THREE.Vector3(GRID_SIZE / 2, 0, 0),
+      ]),
+      axisMaterial,
+    ),
+    axisZ = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, -GRID_SIZE / 2),
+        new THREE.Vector3(0, 0, GRID_SIZE / 2),
+      ]),
+      axisMaterial.clone(),
+    );
+  const configure = (helper: THREE.GridHelper, y: number, order: number) => {
+    helper.position.y = y;
+    helper.renderOrder = order;
+    const materials = Array.isArray(helper.material)
+      ? helper.material
+      : [helper.material];
+    materials.forEach((material) => {
+      material.transparent = true;
+      material.opacity = order === 1 ? 0.72 : 0.95;
+      material.depthWrite = false;
+    });
+  };
+  configure(minor, 0.002, 1);
+  configure(major, 0.007, 2);
+  axisX.name = "grid-axis-x";
+  axisZ.name = "grid-axis-z";
+  axisX.position.y = axisZ.position.y = 0.014;
+  axisX.renderOrder = axisZ.renderOrder = 3;
+  group.add(minor, major, axisX, axisZ);
+  return group;
+};
 const hasPinFriction = (p: CatalogPart) =>
   isPinPart(p) &&
   !/without friction|frictionless/i.test(p.name) &&
@@ -1236,9 +1297,12 @@ export default function Home() {
       host.clientWidth / host.clientHeight,
       0.1,
       160,
-    );
-    camera.position.set(13, 12, 17);
-    camera.lookAt(0, 1.5, 0);
+    ),
+      defaultCameraPosition = new THREE.Vector3(13, 12, 17),
+      defaultCameraTarget = new THREE.Vector3(0, 2, 0),
+      cameraTarget = defaultCameraTarget.clone();
+    camera.position.copy(defaultCameraPosition);
+    camera.lookAt(cameraTarget);
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
       powerPreference: "high-performance",
@@ -1274,24 +1338,22 @@ export default function Home() {
     sun.position.set(8, 16, 10);
     sun.castShadow = true;
     scene.add(sun);
-    const grid = new THREE.GridHelper(
-      40,
-      40,
-      darkTheme ? 0x697078 : 0x8297a5,
-      darkTheme ? 0x3d4248 : 0xb3c1ca,
-    );
+    const grid = createStudioGrid(darkTheme);
     scene.add(grid);
     const floor = new THREE.Mesh(
-      new THREE.BoxGeometry(40, 0.3, 40),
+      new THREE.BoxGeometry(GRID_SIZE, 0.3, GRID_SIZE),
       new THREE.MeshStandardMaterial({
         color: darkTheme ? 0x2b3035 : 0xcbd6dd,
         roughness: 0.86,
+        transparent: true,
+        opacity: 1,
       }),
     );
     floor.position.y = -0.2;
     floor.receiveShadow = true;
     floor.userData.floor = true;
     scene.add(floor);
+    let floorViewedFromBelow = false;
     const withTimeout = <T,>(promise: Promise<T>, ms: number, label: string) =>
         new Promise<T>((resolve, reject) => {
           const timer = window.setTimeout(
@@ -1320,49 +1382,108 @@ export default function Home() {
         ).catch(() => undefined);
         return { instance, materials };
       },
-      primary = makeLoader(LDRAW),
-      legacy = makeLoader(LEGACY_LDRAW);
+      makeLoaderPool = (base: string, size: number) => {
+        const lanes = Array.from({ length: size }, () => ({
+          loader: makeLoader(base),
+          tail: Promise.resolve() as Promise<unknown>,
+        }));
+        let cursor = 0;
+        return {
+          primary: lanes[0].loader,
+          load(source: string, label: string) {
+            const lane = lanes[cursor++ % lanes.length],
+              result = lane.tail.then(async () => {
+                await lane.loader.materials;
+                return withTimeout(
+                  lane.loader.instance.loadAsync(source),
+                  MODEL_LOAD_TIMEOUT,
+                  label,
+                );
+              });
+            lane.tail = result.then(
+              () => undefined,
+              () => undefined,
+            );
+            return result;
+          },
+        };
+      },
+      primaryPool = makeLoaderPool(LDRAW, 3),
+      legacyPool = makeLoaderPool(LEGACY_LDRAW, 2),
+      primary = primaryPool.primary,
+      legacy = legacyPool.primary;
     const preloaded = new Set<string>(),
       preloading = new Map<string, Promise<void>>(),
       modelCache = new Map<string, THREE.Object3D>(),
       sourceModelCache = new Map<string, THREE.Object3D>(),
+      modelSourceCache = new Map<
+        string,
+        { downloadUrl: string; downloadSource: "local" | "primary" | "legacy" }
+      >(),
       connectorCache = new Map<string, MeshConnector[]>(),
       collisionCache = new Map<string, CollisionPrimitive[]>(),
       gearCollisionCache = new Map<string, CollisionPrimitive[]>();
     const assetUrl = (path: string) => new URL(path, document.baseURI).href;
     const loadPartModel = async (p: CatalogPart) => {
+      if (p.geometry && invalidPackagedGeometry.has(p.part)) {
+        p.geometry = undefined;
+        p.sourceKind = "ldraw-network";
+      }
       const key = `${p.part}:${p.color}`,
-        cached = modelCache.get(key);
-      if (cached) return cached.clone(true);
-      const sourceColor = p.sourceColor ?? p.color,
+        sourceColor = p.sourceColor ?? p.color,
         sourceKey = p.geometry
           ? `asset:${p.geometry}`
-          : `ldraw:${p.modelPart ?? p.part}`;
+          : `ldraw:${p.modelPart ?? p.part}`,
+        cachedSource = modelSourceCache.get(sourceKey),
+        resolvedFile = `${p.modelPart ?? p.part}.dat`;
+      Object.assign(
+        p,
+        cachedSource ??
+          (p.geometry
+            ? {
+                downloadUrl: assetUrl(p.geometry),
+                downloadSource: "local" as const,
+              }
+            : {
+                downloadUrl: `${LDRAW}parts/${resolvedFile}`,
+                downloadSource: "primary" as const,
+              }),
+      );
+      const cached = modelCache.get(key);
+      if (cached) return cached.clone(true);
       let exact = sourceModelCache.get(sourceKey)?.clone(true);
       if (!exact) {
         if (p.geometry)
           try {
             exact = await new THREE.ObjectLoader().loadAsync(assetUrl(p.geometry));
+            const source = {
+              downloadUrl: assetUrl(p.geometry),
+              downloadSource: "local" as const,
+            };
+            Object.assign(p, source);
+            modelSourceCache.set(sourceKey, source);
           } catch {}
         if (!exact) {
           const source = `data:text/plain;charset=utf-8,${encodeURIComponent(
             modelText({ ...p, color: sourceColor }),
           )}`;
           try {
-            await primary.materials;
-            exact = await withTimeout(
-              primary.instance.loadAsync(source),
-              MODEL_LOAD_TIMEOUT,
-              `La pieza ${p.part}`,
-            );
+            exact = await primaryPool.load(source, `La pieza ${p.part}`);
+            const loadedSource = {
+              downloadUrl: `${LDRAW}parts/${resolvedFile}`,
+              downloadSource: "primary" as const,
+            };
+            Object.assign(p, loadedSource);
+            modelSourceCache.set(sourceKey, loadedSource);
           } catch (primaryError) {
             try {
-              await legacy.materials;
-              exact = await withTimeout(
-                legacy.instance.loadAsync(source),
-                MODEL_LOAD_TIMEOUT,
-                `La pieza ${p.part}`,
-              );
+              exact = await legacyPool.load(source, `La pieza ${p.part}`);
+              const loadedSource = {
+                downloadUrl: `${LEGACY_LDRAW}parts/${resolvedFile}`,
+                downloadSource: "legacy" as const,
+              };
+              Object.assign(p, loadedSource);
+              modelSourceCache.set(sourceKey, loadedSource);
             } catch {
               throw primaryError;
             }
@@ -3318,6 +3439,7 @@ export default function Home() {
     const ray = new THREE.Raycaster(),
       pointer = new THREE.Vector2();
     let orbit = false,
+      pan = false,
       moved = false,
       shiftHeld = false,
       moving: Piece | undefined,
@@ -3328,6 +3450,7 @@ export default function Home() {
       movingStartPosition = new THREE.Vector3(),
       movingStartPointer = new THREE.Vector2(),
       movingLinearAxis: THREE.Vector3 | undefined;
+    let lastMiddleDown = { time: 0, x: 0, y: 0 };
     let spring:
       | {
           piece: Piece;
@@ -3673,6 +3796,69 @@ export default function Home() {
       previous = orbitStart = { x: e.clientX, y: e.clientY };
       moved = false;
       cast(e);
+      if (e.button === 1) {
+        e.preventDefault();
+        const now = performance.now(),
+          isDoubleMiddle =
+            now - lastMiddleDown.time < 380 &&
+            Math.hypot(
+              e.clientX - lastMiddleDown.x,
+              e.clientY - lastMiddleDown.y,
+            ) < 8;
+        lastMiddleDown = isDoubleMiddle
+          ? { time: 0, x: 0, y: 0 }
+          : { time: now, x: e.clientX, y: e.clientY };
+        if (isDoubleMiddle) {
+          pan = false;
+          const hit = pickPiece();
+          if (hit) {
+            const bounds = new THREE.Box3().setFromObject(hit.piece.mesh),
+              center = bounds.isEmpty()
+                ? hit.point.clone()
+                : bounds.getCenter(new THREE.Vector3()),
+              sphere = bounds.isEmpty()
+                ? new THREE.Sphere(center, 0.5)
+                : bounds.getBoundingSphere(new THREE.Sphere()),
+              verticalFov = THREE.MathUtils.degToRad(camera.fov),
+              horizontalFov =
+                2 * Math.atan(Math.tan(verticalFov / 2) * camera.aspect),
+              limitingFov = Math.min(verticalFov, horizontalFov),
+              focusDistance = Math.max(
+                1.6,
+                (sphere.radius / Math.sin(limitingFov / 2)) * 1.18,
+              ),
+              viewDirection = camera.position
+                .clone()
+                .sub(cameraTarget)
+                .normalize();
+            if (viewDirection.lengthSq() < 0.5)
+              viewDirection.set(0.55, 0.45, 0.7).normalize();
+            cameraTarget.copy(center);
+            camera.position.copy(center).addScaledVector(
+              viewDirection,
+              focusDistance,
+            );
+            camera.lookAt(cameraTarget);
+            setMessage(
+              language === "es"
+                ? `Cámara centrada en ${hit.piece.part}`
+                : `Camera focused on ${hit.piece.part}`,
+            );
+          } else if (ray.intersectObject(floor)[0]) {
+            cameraTarget.copy(defaultCameraTarget);
+            camera.position.copy(defaultCameraPosition);
+            camera.lookAt(cameraTarget);
+            setMessage(
+              language === "es"
+                ? "Cámara restaurada a la vista original"
+                : "Camera restored to the original view",
+            );
+          }
+          return;
+        }
+        pan = true;
+        return;
+      }
       if (!state.running && state.pendingPlacement && e.button === 0) {
         const placed = state.pendingPlacement.pieces.length;
         state.pendingPlacement = undefined;
@@ -3871,6 +4057,26 @@ export default function Home() {
         updateSpring();
         return;
       }
+      if (pan) {
+        camera.updateMatrixWorld(true);
+        const dx = e.clientX - previous.x,
+          dy = e.clientY - previous.y,
+          distance = camera.position.distanceTo(cameraTarget),
+          worldPerPixel =
+            (2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) /
+            Math.max(1, canvas.clientHeight),
+          right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0),
+          up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1),
+          translation = right
+            .multiplyScalar(-dx * worldPerPixel)
+            .add(up.multiplyScalar(dy * worldPerPixel));
+        previous = { x: e.clientX, y: e.clientY };
+        if (Math.hypot(dx, dy) > 0) moved = true;
+        camera.position.add(translation);
+        cameraTarget.add(translation);
+        camera.lookAt(cameraTarget);
+        return;
+      }
       if (orbit) {
         const distance = Math.hypot(
             e.clientX - orbitStart.x,
@@ -3881,16 +4087,20 @@ export default function Home() {
         previous = { x: e.clientX, y: e.clientY };
         if (distance <= 5) return;
         moved = true;
-        const target = new THREE.Vector3(0, 2, 0),
-          s = new THREE.Spherical().setFromVector3(
-            camera.position.clone().sub(target),
+        const s = new THREE.Spherical().setFromVector3(
+            camera.position.clone().sub(cameraTarget),
           );
         s.theta -= dx * 0.006;
-        s.phi = THREE.MathUtils.clamp(s.phi - dy * 0.006, 0.25, 1.45);
-        camera.position.copy(
-          target.add(new THREE.Vector3().setFromSpherical(s)),
+        s.phi = THREE.MathUtils.clamp(
+          s.phi - dy * 0.006,
+          0.03,
+          Math.PI - 0.03,
         );
-        camera.lookAt(0, 2, 0);
+        const nextPosition = cameraTarget
+          .clone()
+          .add(new THREE.Vector3().setFromSpherical(s));
+        camera.position.copy(nextPosition);
+        camera.lookAt(cameraTarget);
         return;
       }
       if (moving) {
@@ -4021,6 +4231,7 @@ export default function Home() {
       }
       if (orbit && !moved && altCandidate) toggleFixed(altCandidate);
       orbit = false;
+      pan = false;
       altCandidate = undefined;
       const movedPiece = moving;
       if (moving && moved) {
@@ -4069,7 +4280,16 @@ export default function Home() {
     };
     const wheel = (e: WheelEvent) => {
       e.preventDefault();
-      camera.position.multiplyScalar(e.deltaY > 0 ? 1.08 : 0.92);
+      const offset = camera.position.clone().sub(cameraTarget),
+        nextDistance = THREE.MathUtils.clamp(
+          offset.length() * (e.deltaY > 0 ? 1.08 : 0.92),
+          0.5,
+          120,
+        );
+      camera.position.copy(
+        cameraTarget.clone().add(offset.setLength(nextDistance)),
+      );
+      camera.lookAt(cameraTarget);
     };
     const resize = () => {
       camera.aspect = host.clientWidth / host.clientHeight;
@@ -4161,6 +4381,7 @@ export default function Home() {
     canvas.addEventListener("dragover", (e) => e.preventDefault());
     canvas.addEventListener("drop", drop);
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+    canvas.addEventListener("auxclick", (e) => e.preventDefault());
     window.addEventListener("resize", resize);
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(host);
@@ -4442,6 +4663,33 @@ export default function Home() {
       });
       const locksMs = performance.now() - phaseStarted;
       phaseStarted = performance.now();
+      const gridX =
+          Math.round(camera.position.x / GRID_RECENTER_STEP) *
+          GRID_RECENTER_STEP,
+        gridZ =
+          Math.round(camera.position.z / GRID_RECENTER_STEP) *
+          GRID_RECENTER_STEP;
+      if (state.grid.position.x !== gridX || state.grid.position.z !== gridZ) {
+        state.grid.position.x = gridX;
+        state.grid.position.z = gridZ;
+        const axisX = state.grid.getObjectByName("grid-axis-x"),
+          axisZ = state.grid.getObjectByName("grid-axis-z");
+        if (axisX) axisX.position.z = -gridZ;
+        if (axisZ) axisZ.position.x = -gridX;
+        floor.position.x = gridX;
+        floor.position.z = gridZ;
+        state.grid.updateMatrixWorld();
+        floor.updateMatrixWorld();
+      }
+      const viewingFloorFromBelow = camera.position.y < 0;
+      if (viewingFloorFromBelow !== floorViewedFromBelow) {
+        floorViewedFromBelow = viewingFloorFromBelow;
+        const floorMaterial = floor.material as THREE.MeshStandardMaterial;
+        floorMaterial.opacity = viewingFloorFromBelow ? 0.06 : 1;
+        floorMaterial.depthWrite = !viewingFloorFromBelow;
+        floor.receiveShadow = !viewingFloorFromBelow;
+        floorMaterial.needsUpdate = true;
+      }
       const gpuQuery =
         gpuTimerExtension &&
         state.performanceTrace.totalFrames % 4 === 0 &&
@@ -4524,17 +4772,20 @@ export default function Home() {
       dark ? 0x2b3035 : 0xcbd6dd,
     );
     state.scene.remove(state.grid);
-    state.grid.geometry.dispose();
-    const materials = Array.isArray(state.grid.material)
-      ? state.grid.material
-      : [state.grid.material];
-    materials.forEach((material) => material.dispose());
-    state.grid = new THREE.GridHelper(
-      40,
-      40,
-      dark ? 0x697078 : 0x8297a5,
-      dark ? 0x3d4248 : 0xb3c1ca,
-    );
+    state.grid.traverse((object) => {
+      const renderable = object as THREE.Object3D & {
+        geometry?: THREE.BufferGeometry;
+        material?: THREE.Material | THREE.Material[];
+      };
+      renderable.geometry?.dispose();
+      const materials = renderable.material
+        ? Array.isArray(renderable.material)
+          ? renderable.material
+          : [renderable.material]
+        : [];
+      materials.forEach((material) => material.dispose());
+    });
+    state.grid = createStudioGrid(dark);
     state.scene.add(state.grid);
     state.renderer.setClearColor(background);
   }, [theme]);
@@ -4834,7 +5085,7 @@ export default function Home() {
         },
       };
       world.createCollider(
-        RAPIER.ColliderDesc.cuboid(20, 0.15, 20)
+        RAPIER.ColliderDesc.cuboid(5000, 0.15, 5000)
           .setTranslation(0, -0.2, 0)
           .setFriction(0.9)
           .setCollisionGroups(
@@ -6560,6 +6811,26 @@ export default function Home() {
                 <div className="data-row">
                   <span>{language === "es" ? "Recurso local" : "Local resource"}</span>
                   <b title={selected.geometry}>{selected.geometry}</b>
+                </div>
+              )}
+              {selected.downloadUrl && (
+                <div className="data-row">
+                  <span>
+                    {language === "es" ? "Enlace de carga usado" : "Download source used"}
+                  </span>
+                  <a
+                    className="model-source-link"
+                    href={selected.downloadUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={selected.downloadUrl}
+                  >
+                    {selected.downloadSource === "local"
+                      ? language === "es" ? "Recurso local ↗" : "Local asset ↗"
+                      : selected.downloadSource === "legacy"
+                        ? language === "es" ? "CDN de respaldo ↗" : "Fallback CDN ↗"
+                        : language === "es" ? "CDN principal ↗" : "Primary CDN ↗"}
+                  </a>
                 </div>
               )}
             </div>
