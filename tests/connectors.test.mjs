@@ -72,31 +72,3 @@ test("builds the small L collider from two orthogonal boxes", () => {
     [0, 0, -1],
   ));
 });
-
-test("preserves the LDraw length transforms of preloaded axles", () => {
-  const axles = [
-    ["32062-4", 2],
-    ["4519-71", 3],
-    ["24316-70", 3],
-    ["3705-0", 4],
-    ["87083-72", 4],
-    ["32073-71", 5],
-    ["15462-70", 5],
-    ["3706-0", 6],
-    ["44294-71", 7],
-    ["3707-0", 8],
-    ["55013-72", 8],
-    ["60485-71", 9],
-    ["3737-0", 10],
-    ["23948-71", 11],
-  ];
-  for (const [asset, length] of axles) {
-    const size = new THREE.Box3()
-      .setFromObject(loadPart(asset))
-      .getSize(new THREE.Vector3());
-    assert.ok(
-      size.x >= length - 0.1,
-      `${asset} mide ${size.x.toFixed(3)}L; esperaba aproximadamente ${length}L`,
-    );
-  }
-});

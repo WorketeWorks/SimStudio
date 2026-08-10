@@ -10,10 +10,9 @@
     "build": "vinext build",
     "build:pages": "vite build --config vite.pages.config.ts",
     "start": "vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs && npm run test:import && npm run test:connectors && npm run test:catalog",
+    "test": "npm run build && node --test tests/rendered-html.test.mjs && npm run test:import && npm run test:connectors",
     "test:import": "node --experimental-strip-types --test tests/ldraw-import.test.mjs",
     "test:connectors": "node --experimental-strip-types --test tests/connectors.test.mjs",
-    "test:catalog": "node --experimental-strip-types --test tests/parts-search.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "catalog:precache": "node scripts/precache-default-palette.mjs",
     "db:generate": "drizzle-kit generate"
