@@ -50,6 +50,8 @@ import {
 import preloadedCatalog from "./preloaded-catalog.json";
 
 type PieceKind = "beam" | "wheel" | "motor";
+type PartOrigin = "default-palette" | "catalog-search" | "model-import";
+type PartSource = "packaged-cache" | "external-catalog" | "ldraw-network";
 type CatalogPart = {
   part: string;
   name: string;
@@ -62,6 +64,13 @@ type CatalogPart = {
   geometry?: string;
   sourceColor?: number;
   gear?: boolean;
+  origin?: PartOrigin;
+  sourceKind?: PartSource;
+  requestedPart?: string;
+  catalogReturnedPart?: string;
+  resolvedPart?: string;
+  catalogQuery?: string;
+  importFile?: string;
 };
 type Piece = CatalogPart & {
   id: number;
@@ -225,6 +234,7 @@ type AppState = {
     position: THREE.Vector3;
     rotation: THREE.Quaternion;
   }[];
+  snapshotConnections?: Connection[];
   connectionModes: Map<
     string,
     {
@@ -1406,6 +1416,29 @@ export default function Home() {
               : replace(child.material);
           });
         }
+      }
+      if (p.color === 0) {
+        const blackOutline = new THREE.Color(0x505860);
+        exact.traverse((child) => {
+          if (!(child instanceof THREE.Line)) return;
+          const recolorLine = (source: THREE.Material) => {
+            const material = source.clone() as THREE.Material & {
+              color?: THREE.Color;
+              uniforms?: Record<string, { value?: unknown }>;
+            };
+            material.color?.copy(blackOutline);
+            for (const uniformName of ["diffuse", "color"])
+              if (
+                material.uniforms?.[uniformName]?.value instanceof THREE.Color
+              )
+                material.uniforms[uniformName].value.copy(blackOutline);
+            material.needsUpdate = true;
+            return material;
+          };
+          child.material = Array.isArray(child.material)
+            ? child.material.map(recolorLine)
+            : recolorLine(child.material);
+        });
       }
       modelCache.set(key, exact.clone(true));
       return exact;
@@ -4023,9 +4056,12 @@ export default function Home() {
             connect(piece);
             void verifyConnectionsAsync();
           });
-          setImported((old) =>
-            old.some((x) => x.part === p.part) ? old : [p, ...old],
-          );
+          if (p.origin === "catalog-search" || p.origin === "model-import")
+            setImported((old) =>
+              old.some((x) => x.part === p.part && x.color === p.color)
+                ? old
+                : [p, ...old],
+            );
         }
       } catch {
         setMessage("No se pudo soltar esa pieza");
@@ -4527,6 +4563,11 @@ export default function Home() {
       name: `Pieza LDraw ${part}`,
       kind: "beam",
       color: 71,
+      origin: "catalog-search",
+      sourceKind: "ldraw-network",
+      requestedPart: part,
+      resolvedPart: part,
+      catalogQuery: part,
     };
     try {
       const d = await fetch(`/api/parts?q=${encodeURIComponent(part)}`).then(
@@ -4540,6 +4581,12 @@ export default function Home() {
           ...exact,
           kind: kindFor("", exact.name),
           color: exact.color ?? 71,
+          origin: "catalog-search",
+          sourceKind: exact.geometry ? "packaged-cache" : "external-catalog",
+          requestedPart: part,
+          catalogReturnedPart: exact.part,
+          resolvedPart: exact.modelPart ?? exact.part,
+          catalogQuery: part,
         };
     } catch {}
     setImported((old) =>
@@ -4624,6 +4671,7 @@ export default function Home() {
     s.connectionModes.clear();
     s.pendingPlacement = undefined;
     s.snapshot = undefined;
+    s.snapshotConnections = undefined;
     s.physicsEventQueue?.free();
     s.physicsEventQueue = undefined;
     s.world = undefined;
@@ -4644,6 +4692,12 @@ export default function Home() {
         piece,
         position: piece.mesh.position.clone(),
         rotation: piece.mesh.quaternion.clone(),
+      }));
+      s.snapshotConnections = s.connections.map((connection) => ({
+        ...connection,
+        point: connection.point.clone(),
+        axis: connection.axis.clone(),
+        localAxisA: connection.localAxisA.clone(),
       }));
       s.simLog = {
         startedAt: new Date().toISOString(),
@@ -5029,8 +5083,26 @@ export default function Home() {
         x.piece.physicsIsland = undefined;
         x.piece.physicsIslandFixed = undefined;
       });
+      if (s.snapshotConnections) {
+        s.connections = s.snapshotConnections.map((connection) => {
+          const configured = s.connectionModes.get(connection.id);
+          return {
+            ...connection,
+            point: connection.point.clone(),
+            axis: connection.axis.clone(),
+            localAxisA: connection.localAxisA.clone(),
+            mode: configured?.mode ?? connection.mode,
+            motorSpeed: configured?.motorSpeed ?? connection.motorSpeed,
+            motorForce: configured?.motorForce ?? connection.motorForce,
+            userConfigured:
+              configured?.userConfigured ?? connection.userConfigured,
+          };
+        });
+        setConnectionRevision((value) => value + 1);
+      }
       s.renderBatchesDirty = true;
       s.snapshot = undefined;
+      s.snapshotConnections = undefined;
       s.physicsEventQueue?.free();
       s.physicsEventQueue = undefined;
       s.world = undefined;
@@ -5144,6 +5216,12 @@ export default function Home() {
               color: row.color,
               geometry: exactPalette?.geometry ?? palette.geometry,
               sourceColor: exactPalette?.color ?? palette.color,
+              origin: "model-import",
+              sourceKind: palette.geometry ? "packaged-cache" : "ldraw-network",
+              requestedPart: row.part,
+              catalogReturnedPart: palette.part,
+              resolvedPart: palette.modelPart ?? palette.part,
+              importFile: file.name,
             };
           return {
             ...(external ?? {}),
@@ -5152,6 +5230,17 @@ export default function Home() {
             kind: kindFor("", external?.name ?? row.part),
             color: row.color,
             sourceColor: external?.color ?? 71,
+            origin: "model-import",
+            sourceKind: external?.geometry
+              ? "packaged-cache"
+              : external
+                ? "external-catalog"
+                : "ldraw-network",
+            requestedPart: row.part,
+            catalogReturnedPart: external?.part,
+            resolvedPart: external?.modelPart ?? external?.part ?? row.part,
+            catalogQuery: row.part,
+            importFile: file.name,
           };
         },
         externalToLoad = externalReferences.map((reference) => {
@@ -5163,6 +5252,17 @@ export default function Home() {
             kind: kindFor("", item?.name ?? reference),
             color: item?.color ?? 71,
             sourceColor: item?.color ?? 71,
+            origin: "model-import",
+            sourceKind: item?.geometry
+              ? "packaged-cache"
+              : item
+                ? "external-catalog"
+                : "ldraw-network",
+            requestedPart: reference,
+            catalogReturnedPart: item?.part,
+            resolvedPart: item?.modelPart ?? item?.part ?? reference,
+            catalogQuery: reference,
+            importFile: file.name,
           } as CatalogPart;
         });
       await Promise.all(
@@ -5257,6 +5357,23 @@ export default function Home() {
     } finally {
       s.bulkLoading = false;
     }
+    const importedCatalog = [
+      ...new Map(
+        draft.placements.map((placement) => [
+          `${placement.catalog.part}:${placement.catalog.color}`,
+          placement.catalog,
+        ]),
+      ).values(),
+    ];
+    setImported((old) => {
+      const merged = new Map(
+        old.map((part) => [`${part.part}:${part.color}`, part]),
+      );
+      importedCatalog.forEach((part) =>
+        merged.set(`${part.part}:${part.color}`, part),
+      );
+      return [...merged.values()];
+    });
     setCount(s.pieces.length);
     if (!pieces.length) {
       setMessage(
@@ -6270,11 +6387,6 @@ export default function Home() {
               draggable
               onDragStart={(e) => dragPart(e, p)}
               onClick={() => {
-                setImported((old) =>
-                  old.some((x) => x.part === p.part && x.color === p.color)
-                    ? old
-                    : [p, ...old],
-                );
                 setMessage(
                   language === "es"
                     ? `Arrastra ${p.part} a la mesa`
@@ -6378,6 +6490,78 @@ export default function Home() {
                 <small>{t.piece} {selected.part}</small>
                 <b>{selected.name}</b>
               </div>
+            </div>
+            <label>
+              {language === "es" ? "Información del modelo" : "Model information"}
+            </label>
+            <div className="model-provenance">
+              <div className="data-row">
+                <span>{language === "es" ? "Procedencia" : "Origin"}</span>
+                <b>
+                  {selected.origin === "model-import"
+                    ? language === "es" ? "Modelo importado" : "Imported model"
+                    : selected.origin === "catalog-search"
+                      ? language === "es" ? "Catálogo / referencia" : "Catalog / reference"
+                      : language === "es" ? "Paleta predeterminada" : "Default palette"}
+                </b>
+              </div>
+              {selected.importFile && (
+                <div className="data-row">
+                  <span>{language === "es" ? "Archivo de origen" : "Source file"}</span>
+                  <b title={selected.importFile}>{selected.importFile}</b>
+                </div>
+              )}
+              <div className="data-row">
+                <span>
+                  {selected.origin === "model-import"
+                    ? language === "es" ? "Referencia en el archivo" : "Reference in file"
+                    : language === "es" ? "Referencia solicitada" : "Requested reference"}
+                </span>
+                <b>{selected.requestedPart ?? selected.part}</b>
+              </div>
+              <div className="data-row">
+                <span>{language === "es" ? "Devuelto por catálogo" : "Catalog result"}</span>
+                <b>
+                  {selected.catalogReturnedPart ??
+                    (selected.origin === "default-palette" ? selected.part : "—")}
+                </b>
+              </div>
+              <div className="data-row">
+                <span>{language === "es" ? "Modelo cargado" : "Loaded model"}</span>
+                <b>
+                  {selected.resolvedPart ?? selected.modelPart ?? selected.part}.dat
+                </b>
+              </div>
+              <div className="data-row">
+                <span>{language === "es" ? "Fuente de geometría" : "Geometry source"}</span>
+                <b>
+                  {selected.sourceKind === "packaged-cache" || selected.geometry
+                    ? language === "es" ? "Precargada localmente" : "Local preloaded cache"
+                    : selected.sourceKind === "external-catalog"
+                      ? language === "es" ? "Catálogo externo" : "External catalog"
+                      : "LDraw"}
+                </b>
+              </div>
+              {selected.catalogQuery && (
+                <div className="data-row">
+                  <span>
+                    {selected.origin === "model-import"
+                      ? language === "es" ? "Referencia pedida al catálogo" : "Reference requested from catalog"
+                      : language === "es" ? "Consulta enviada" : "Catalog query"}
+                  </span>
+                  <b>{selected.catalogQuery}</b>
+                </div>
+              )}
+              <div className="data-row">
+                <span>{language === "es" ? "Color solicitado / fuente" : "Requested / source color"}</span>
+                <b>{selected.color} / {selected.sourceColor ?? selected.color}</b>
+              </div>
+              {selected.geometry && (
+                <div className="data-row">
+                  <span>{language === "es" ? "Recurso local" : "Local resource"}</span>
+                  <b title={selected.geometry}>{selected.geometry}</b>
+                </div>
+              )}
             </div>
             <label>{t.color}</label>
             <div className="piece-color-control">
@@ -6970,10 +7154,6 @@ export default function Home() {
             <div className="data-row">
               <span>{t.activeJoints}</span>
               <b>{selectedConnections.length}</b>
-            </div>
-            <div className="data-row">
-              <span>{t.model}</span>
-              <b>{selected.part}.dat</b>
             </div>
             {selected.gear && (
               <div className="data-row">
