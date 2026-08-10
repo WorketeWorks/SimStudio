@@ -57,7 +57,10 @@ type Piece = CatalogPart & {
   frictionPin: boolean;
   lockSprite?: THREE.Sprite;
   body?: RAPIER.RigidBody;
+  physicsOffset?: THREE.Vector3;
   physicsBase?: THREE.Quaternion;
+  physicsIsland?: Piece[];
+  physicsIslandFixed?: boolean;
   renderBatched?: boolean;
 };
 type RenderBatchItem = {
@@ -1769,7 +1772,7 @@ export default function Home() {
         batch.pieces.forEach((piece, index) => {
           if (
             state.running &&
-            (!piece.body || piece.fixed || piece.body.isSleeping())
+            (!piece.body || piece.physicsIslandFixed || piece.body.isSleeping())
           )
             return;
           matrix.multiplyMatrices(
@@ -2672,7 +2675,7 @@ export default function Home() {
       linearLimit: number,
       angularLimit: number,
     ) => {
-      if (!piece.body || piece.fixed) return;
+      if (!piece.body || piece.physicsIslandFixed) return;
       const v = piece.body.linvel(),
         w = piece.body.angvel(),
         linear = Math.hypot(v.x, v.y, v.z),
@@ -2731,8 +2734,14 @@ export default function Home() {
         piece.lockSprite = undefined;
       }
       if (piece.body)
+        (piece.physicsIsland ?? [piece]).forEach((member) => {
+          member.physicsIslandFixed = (member.physicsIsland ?? [member]).some(
+            (candidate) => candidate.fixed,
+          );
+        });
+      if (piece.body)
         piece.body.setBodyType(
-          piece.fixed
+          piece.physicsIslandFixed
             ? RAPIER.RigidBodyType.Fixed
             : RAPIER.RigidBodyType.Dynamic,
           true,
@@ -2821,7 +2830,12 @@ export default function Home() {
         return;
       }
       if (state.running) {
-        if (hit && hitPiece && !hitPiece.fixed && hitPiece.body) {
+        if (
+          hit &&
+          hitPiece &&
+          !hitPiece.physicsIslandFixed &&
+          hitPiece.body
+        ) {
           state.selected = hitPiece;
           setSelectedId(hitPiece.id);
           const overlay = document.createElementNS(
@@ -3082,8 +3096,14 @@ export default function Home() {
       }
       if (spring) {
         const released = spring;
+        const releasedBodies = new Set<RAPIER.RigidBody>();
         released.component.forEach((p) => {
-          if (p.body && !p.fixed) {
+          if (
+            p.body &&
+            !p.physicsIslandFixed &&
+            !releasedBodies.has(p.body)
+          ) {
+            releasedBodies.add(p.body);
             p.body.resetForces(true);
             p.body.resetTorques(true);
             clampMotion(p, 3.5, 4.5);
@@ -3324,34 +3344,32 @@ export default function Home() {
         sleepingBodies = 0;
       if (state.running && state.world) {
         let phaseStarted = performance.now();
+        const steppedBodies = new Set<RAPIER.RigidBody>();
         state.pieces.forEach((p) => {
-          if (!p.body) return;
+          if (!p.body || steppedBodies.has(p.body)) return;
+          steppedBodies.add(p.body);
           const sleeping = p.body.isSleeping();
           if (sleeping) sleepingBodies++;
           else activeBodies++;
-          if (!p.fixed && !sleeping) {
+          if (!p.physicsIslandFixed && !sleeping) {
             p.body.resetForces(false);
             p.body.resetTorques(false);
           }
         });
         forceResetMs = performance.now() - phaseStarted;
         phaseStarted = performance.now();
-        if (spring?.piece.body && !spring.piece.fixed) {
+        if (spring?.piece.body && !spring.piece.physicsIslandFixed) {
           const anchor = spring.piece.mesh.localToWorld(spring.anchor.clone()),
             delta = spring.target.clone().sub(anchor);
           if (delta.length() > 3.5) delta.setLength(3.5);
-          const dynamic = spring.component.filter((p) => p.body && !p.fixed),
-            velocity = spring.piece.body.linvel(),
+          const velocity = spring.piece.body.linvel(),
             acceleration = delta
               .multiplyScalar(42)
               .addScaledVector(
                 new THREE.Vector3(velocity.x, velocity.y, velocity.z),
                 -1.2,
               ),
-            movingMass = dynamic.reduce(
-              (total, piece) => total + Math.max(0.25, piece.body!.mass()),
-              0,
-            );
+            movingMass = Math.max(0.25, spring.piece.body.mass());
           if (acceleration.length() > 90) acceleration.setLength(90);
           const force = acceleration.multiplyScalar(Math.max(0.25, movingMass)),
             totalForce = force.length();
@@ -3375,7 +3393,8 @@ export default function Home() {
             (connection.mode !== "linear" &&
               connection.mode !== "rotation-linear") ||
             !connection.a.body ||
-            !connection.b.body
+            !connection.b.body ||
+            connection.a.body === connection.b.body
           )
             continue;
           const axis = connection.localAxisA
@@ -3395,7 +3414,7 @@ export default function Home() {
               1.5,
             ),
             frictionForce = axis.multiplyScalar(forceMagnitude);
-          if (!connection.b.fixed)
+          if (!connection.b.physicsIslandFixed)
             connection.b.body.addForce(
               {
                 x: -frictionForce.x,
@@ -3404,7 +3423,7 @@ export default function Home() {
               },
               true,
             );
-          if (!connection.a.fixed)
+          if (!connection.a.physicsIslandFixed)
             connection.a.body.addForce(
               {
                 x: frictionForce.x,
@@ -3421,9 +3440,16 @@ export default function Home() {
         worldStepMs = performance.now() - phaseStarted;
         phaseStarted = performance.now();
         const startup = performance.now() - (state.simStartedMs ?? 0) < 350;
+        const clampedBodies = new Set<RAPIER.RigidBody>();
         state.pieces.forEach((p) => {
-          if (!p.body?.isSleeping())
+          if (
+            p.body &&
+            !p.body.isSleeping() &&
+            !clampedBodies.has(p.body)
+          ) {
+            clampedBodies.add(p.body);
             clampMotion(p, startup ? 2 : 12, startup ? 3 : 14);
+          }
         });
         state.pieces.forEach((p) => {
           if (
@@ -3432,10 +3458,15 @@ export default function Home() {
           ) {
             const t = p.body.translation(),
               q = p.body.rotation(),
-              bodyRotation = new THREE.Quaternion(q.x, q.y, q.z, q.w);
-            p.mesh.position.set(t.x, t.y, t.z);
+              bodyRotation = new THREE.Quaternion(q.x, q.y, q.z, q.w),
+              offset = (p.physicsOffset ?? new THREE.Vector3())
+                .clone()
+                .applyQuaternion(bodyRotation);
+            p.mesh.position.set(t.x + offset.x, t.y + offset.y, t.z + offset.z);
             p.mesh.quaternion.copy(
-              bodyRotation.multiply(p.physicsBase ?? new THREE.Quaternion()),
+              bodyRotation.clone().multiply(
+                p.physicsBase ?? new THREE.Quaternion(),
+              ),
             );
           }
         });
@@ -3446,9 +3477,7 @@ export default function Home() {
           if (time >= (state.nextLogSample ?? 0)) {
             const bodies = state.pieces.flatMap((p) => {
               if (!p.body) return [];
-              const t = p.body.translation(),
-                q = p.body.rotation(),
-                v = p.body.linvel(),
+              const v = p.body.linvel(),
                 w = p.body.angvel(),
                 linear = Math.hypot(v.x, v.y, v.z),
                 angular = Math.hypot(w.x, w.y, w.z);
@@ -3464,9 +3493,9 @@ export default function Home() {
                 {
                   id: p.id,
                   part: p.part,
-                  fixed: p.fixed,
-                  position: [t.x, t.y, t.z],
-                  rotation: [q.x, q.y, q.z, q.w],
+                  fixed: p.physicsIslandFixed ?? p.fixed,
+                  position: p.mesh.position.toArray(),
+                  rotation: p.mesh.quaternion.toArray(),
                   linearVelocity: [v.x, v.y, v.z],
                   angularVelocity: [w.x, w.y, w.z],
                 },
@@ -3738,7 +3767,41 @@ export default function Home() {
       };
       s.nextLogSample = 0;
       s.simStartedMs = performance.now();
-      const largeSimulation = s.pieces.length > 250,
+      const parent = new Map<Piece, Piece>();
+      s.pieces.forEach((piece) => parent.set(piece, piece));
+      const findRoot = (piece: Piece) => {
+          let root = piece;
+          while (parent.get(root) !== root) root = parent.get(root)!;
+          let current = piece;
+          while (parent.get(current) !== root) {
+            const next = parent.get(current)!;
+            parent.set(current, root);
+            current = next;
+          }
+          return root;
+        },
+        mergeRigidPieces = (a: Piece, b: Piece) => {
+          const rootA = findRoot(a),
+            rootB = findRoot(b);
+          if (rootA !== rootB) parent.set(rootB, rootA);
+        };
+      s.connections.forEach((connection) => {
+        if (connection.mode === "fixed")
+          mergeRigidPieces(connection.a, connection.b);
+      });
+      const rigidIslandMap = new Map<Piece, Piece[]>();
+      s.pieces.forEach((piece) => {
+        const root = findRoot(piece),
+          island = rigidIslandMap.get(root) ?? [];
+        island.push(piece);
+        rigidIslandMap.set(root, island);
+      });
+      const rigidIslands = [...rigidIslandMap.values()],
+        fixedConnectionCount = s.connections.filter(
+          (connection) => connection.mode === "fixed",
+        ).length,
+        largeSimulation =
+          rigidIslands.length > 250 || s.pieces.length > 800,
         solverIterations = largeSimulation ? 8 : 12,
         internalPgsIterations = largeSimulation ? 4 : 2,
         world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -3749,73 +3812,92 @@ export default function Home() {
       world.integrationParameters.maxCcdSubsteps = largeSimulation ? 1 : 2;
       world.integrationParameters.contact_natural_frequency = 18;
       world.integrationParameters.normalizedAllowedLinearError = 0.004;
+      s.simLog.events[0] =
+        `Inicio con ${s.pieces.length} piezas agrupadas en ${rigidIslands.length} cuerpos rígidos y ${s.connections.length} uniones`;
       s.simLog.events.push(
         `Solver rígido: ${solverIterations} iteraciones × ${internalPgsIterations} PGS interno`,
+        `${fixedConnectionCount} conexiones fijas fusionadas en islas rígidas compuestas`,
       );
       world.createCollider(
         RAPIER.ColliderDesc.cuboid(20, 0.15, 20)
           .setTranslation(0, -0.2, 0)
           .setFriction(0.9),
       );
-      s.pieces.forEach((p) => {
-        p.physicsBase = p.mesh.quaternion.clone();
-        const desc = p.fixed
+      rigidIslands.forEach((island) => {
+        const origin = island.reduce(
+            (sum, piece) => sum.add(piece.mesh.position),
+            new THREE.Vector3(),
+          ).multiplyScalar(1 / island.length),
+          islandFixed = island.some((piece) => piece.fixed),
+          additionalMass = island.reduce(
+            (sum, piece) => sum + (piece.kind === "motor" ? 2 : 0.65),
+            0,
+          ),
+          desc = islandFixed
           ? RAPIER.RigidBodyDesc.fixed()
           : RAPIER.RigidBodyDesc.dynamic()
               .setLinearDamping(0.55)
               .setAngularDamping(0.95)
               .setCcdEnabled(!largeSimulation)
               .setSoftCcdPrediction(largeSimulation ? 0 : 0.1)
-              .setAdditionalMass(p.kind === "motor" ? 2 : 0.65);
-        desc.setTranslation(
-          p.mesh.position.x,
-          p.mesh.position.y,
-          p.mesh.position.z,
-        );
+              .setAdditionalSolverIterations(largeSimulation ? 1 : 3)
+              .setAdditionalMass(additionalMass);
+        desc.setTranslation(origin.x, origin.y, origin.z);
         const rb = world.createRigidBody(desc);
-        for (const primitive of p.colliders) {
-          const collider =
-            primitive.shape === "box"
-              ? RAPIER.ColliderDesc.cuboid(
-                  primitive.size!.x / 2,
-                  primitive.size!.y / 2,
-                  primitive.size!.z / 2,
-                )
-              : RAPIER.ColliderDesc.cylinder(
-                  primitive.halfHeight!,
-                  primitive.radius!,
-                );
-          const center = primitive.center
-              .clone()
-              .applyQuaternion(p.physicsBase),
-            rotation = p.physicsBase.clone().multiply(primitive.rotation);
-          collider
-            .setTranslation(center.x, center.y, center.z)
-            .setRotation(rotation)
-            .setFriction(p.kind === "wheel" ? 1.6 : 0.75)
-            .setRestitution(0)
-            .setDensity(
-              (p.kind === "motor" ? 1.7 : 1) / Math.max(1, p.colliders.length),
-            );
-          world.createCollider(collider, rb);
-        }
-        p.body = rb;
+        island.forEach((p) => {
+          p.physicsOffset = p.mesh.position.clone().sub(origin);
+          p.physicsBase = p.mesh.quaternion.clone();
+          p.physicsIsland = island;
+          p.physicsIslandFixed = islandFixed;
+          p.body = rb;
+          for (const primitive of p.colliders) {
+            const collider =
+              primitive.shape === "box"
+                ? RAPIER.ColliderDesc.cuboid(
+                    primitive.size!.x / 2,
+                    primitive.size!.y / 2,
+                    primitive.size!.z / 2,
+                  )
+                : RAPIER.ColliderDesc.cylinder(
+                    primitive.halfHeight!,
+                    primitive.radius!,
+                  );
+            const center = p.physicsOffset
+                .clone()
+                .add(
+                  primitive.center.clone().applyQuaternion(p.physicsBase),
+                ),
+              rotation = p.physicsBase.clone().multiply(primitive.rotation);
+            collider
+              .setTranslation(center.x, center.y, center.z)
+              .setRotation(rotation)
+              .setFriction(p.kind === "wheel" ? 1.6 : 0.75)
+              .setRestitution(0)
+              .setDensity(
+                (p.kind === "motor" ? 1.7 : 1) /
+                  Math.max(1, p.colliders.length),
+              );
+            world.createCollider(collider, rb);
+          }
+        });
       });
-      const rigidBodyPairs = new Set<string>();
-      let redundantRigidJoints = 0;
+      let movingJointCount = 0,
+        redundantMovingJoints = 0;
       s.connections.forEach((c) => {
         if (!c.a.body || !c.b.body) return;
-        if (c.mode === "fixed") {
-          const pairKey =
-            c.a.id < c.b.id ? `${c.a.id}:${c.b.id}` : `${c.b.id}:${c.a.id}`;
-          if (rigidBodyPairs.has(pairKey)) {
-            redundantRigidJoints++;
-            return;
-          }
-          rigidBodyPairs.add(pairKey);
+        if (c.mode === "fixed") return;
+        if (c.a.body === c.b.body) {
+          redundantMovingJoints++;
+          return;
         }
-        const a = c.point.clone().sub(c.a.mesh.position),
-          b = c.point.clone().sub(c.b.mesh.position),
+        const positionA = c.a.body.translation(),
+          positionB = c.b.body.translation(),
+          a = c.point
+            .clone()
+            .sub(new THREE.Vector3(positionA.x, positionA.y, positionA.z)),
+          b = c.point
+            .clone()
+            .sub(new THREE.Vector3(positionB.x, positionB.y, positionB.z)),
           axis = c.axis.clone().normalize();
         let joint: RAPIER.JointData;
         if (c.mode === "rotation" || c.mode === "motor")
@@ -3832,19 +3914,14 @@ export default function Home() {
               RAPIER.JointAxesMask.AngY |
               RAPIER.JointAxesMask.AngZ,
           );
-        else
-          joint = RAPIER.JointData.fixed(a, { x: 0, y: 0, z: 0, w: 1 }, b, {
-            x: 0,
-            y: 0,
-            z: 0,
-            w: 1,
-          });
+        else return;
         const created = world.createImpulseJoint(
           joint,
           c.a.body,
           c.b.body,
           true,
         );
+        movingJointCount++;
         created.setContactsEnabled(false);
         if (c.mode === "motor")
           (created as RAPIER.RevoluteImpulseJoint).configureMotorVelocity(
@@ -3861,15 +3938,15 @@ export default function Home() {
           (created as RAPIER.PrismaticImpulseJoint).setLimits(-limit, limit);
         }
       });
-      if (redundantRigidJoints)
+      if (redundantMovingJoints)
         s.simLog.events.push(
-          `${redundantRigidJoints} uniones rígidas redundantes omitidas`,
+          `${redundantMovingJoints} uniones móviles internas redundantes omitidas`,
         );
       s.world = world;
       s.running = true;
       setRunning(true);
       setMessage(
-        `${s.connections.length} conexiones físicas activas · ${
+        `${rigidIslands.length} cuerpos rígidos · ${movingJointCount} articulaciones móviles · ${
           largeSimulation ? "modo de rendimiento para ensamblaje grande" : "precisión completa"
         }`,
       );
@@ -3893,7 +3970,10 @@ export default function Home() {
         x.piece.mesh.position.copy(x.position);
         x.piece.mesh.quaternion.copy(x.rotation);
         x.piece.body = undefined;
+        x.piece.physicsOffset = undefined;
         x.piece.physicsBase = undefined;
+        x.piece.physicsIsland = undefined;
+        x.piece.physicsIslandFixed = undefined;
       });
       s.renderBatchesDirty = true;
       s.snapshot = undefined;
