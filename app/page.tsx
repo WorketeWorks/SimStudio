@@ -1804,7 +1804,9 @@ export default function Home() {
         pieceMatrices.set(piece, piece.mesh.matrix);
       });
       for (const batch of state.renderBatchItems ?? []) {
+        const canCull = !state.running;
         let changed = false;
+        batch.mesh.frustumCulled = canCull;
         batch.pieces.forEach((piece, index) => {
           if (
             state.running &&
@@ -1818,7 +1820,13 @@ export default function Home() {
           batch.mesh.setMatrixAt(index, matrix);
           changed = true;
         });
-        if (changed) batch.mesh.instanceMatrix.needsUpdate = true;
+        if (changed) {
+          batch.mesh.instanceMatrix.needsUpdate = true;
+          if (canCull) {
+            batch.mesh.computeBoundingBox();
+            batch.mesh.computeBoundingSphere();
+          }
+        }
       }
       state.renderBatchesDirty = false;
     };
@@ -1911,17 +1919,22 @@ export default function Home() {
         if (source.index) nonIndexed.dispose();
         return result;
       };
-      const groups = new Map<string, Piece[]>();
+      const renderChunkSize = 8,
+        groups = new Map<string, Piece[]>(),
+        chunkFor = (piece: Piece) =>
+          `${Math.floor(piece.mesh.position.x / renderChunkSize)}:${Math.floor(
+            piece.mesh.position.y / renderChunkSize,
+          )}:${Math.floor(piece.mesh.position.z / renderChunkSize)}`;
       batchPieces.forEach((piece) => {
         piece.mesh.traverse((child) => {
           if (child instanceof THREE.Mesh) child.castShadow = false;
         });
-        const key = `${piece.geometry ?? piece.modelPart ?? piece.part}:${piece.color}`,
+        const key = `${piece.geometry ?? piece.modelPart ?? piece.part}:${piece.color}:${chunkFor(piece)}`,
           group = groups.get(key) ?? [];
         group.push(piece);
         groups.set(key, group);
       });
-      groups.forEach((pieces) => {
+      groups.forEach((pieces, groupKey) => {
         const template = pieces[0];
         template.mesh.updateMatrixWorld(true);
         const templateMeshes: THREE.Mesh[] = [],
@@ -1982,12 +1995,13 @@ export default function Home() {
                 material,
                 pieces.length,
               );
-            instance.name = `${template.part} × ${pieces.length}`;
+            instance.name = `${template.part} × ${pieces.length} @ ${chunkFor(template)}`;
             instance.castShadow = false;
             instance.receiveShadow = true;
-            instance.frustumCulled = false;
+            instance.frustumCulled = true;
             instance.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
             instance.userData.instancePieces = pieces;
+            instance.userData.spatialChunk = groupKey;
             instance.userData.ownedBatchGeometry = true;
             instance.userData.ownedBatchMaterial = false;
             root.add(instance);

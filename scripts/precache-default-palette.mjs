@@ -64,6 +64,27 @@ const fileMap = {},
   queuedReferences = new Set(),
   queue = [];
 
+// These legacy axle definitions use the complete axle primitive and are the
+// versions whose geometry is shipped in the default palette. Newer upstream
+// definitions rely on aggressively transformed segment primitives and must not
+// silently replace the known-good local roots during a selective precache.
+const pinnedLocalPartRoots = new Set([
+  "15462.dat",
+  "23948.dat",
+  "24316.dat",
+  "32062.dat",
+  "32073.dat",
+  "3705.dat",
+  "3706.dat",
+  "3707.dat",
+  "3737.dat",
+  "44294.dat",
+  "4519.dat",
+  "55013.dat",
+  "60485.dat",
+  "87083.dat",
+]);
+
 try {
   Object.assign(
     fileMap,
@@ -95,7 +116,14 @@ const fetchLibraryFile = async (reference) => {
   if (resolvedFiles.has(reference)) return resolvedFiles.get(reference);
   const existingPath = fileMap[reference];
   let result = null;
-  for (const candidate of candidatesFor(reference)) {
+  if (pinnedLocalPartRoots.has(reference) && existingPath) {
+    try {
+      const text = await readFile(join(ldrawRoot, ...existingPath.split("/")), "utf8");
+      result = { candidate: existingPath, text };
+      referencedFiles(text).forEach(enqueue);
+    } catch {}
+  }
+  for (const candidate of result ? [] : candidatesFor(reference)) {
     const response = await fetch(sourceBase + candidate);
     if (!response.ok) continue;
     const text = await response.text(),
@@ -240,6 +268,11 @@ try {
     let exact = await loader.loadAsync(
       `data:text/plain;charset=utf-8,${encodeURIComponent(modelText(part))}`,
     );
+    // LDraw subobjects can carry their length and placement in Object3D
+    // transforms. Make those local matrices current before ObjectLoader JSON
+    // serialization, otherwise scaled primitives (notably Technic axles) are
+    // restored at their unscaled 1L size.
+    exact.updateMatrixWorld(true);
     await writeFile(
       join(publicRoot, geometryFile),
       JSON.stringify(exact.toJSON()),

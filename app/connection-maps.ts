@@ -10,6 +10,31 @@ export type StoredConnector = {
 // Mapas revisados exportados desde el editor de Sim Studio. Las medidas están
 // expresadas en unidades Studio: un tramo Technic (1L) equivale a 1 unidad.
 export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
+  "32556": [
+    {
+      local: [-1, 0, 0],
+      axis: [1, 0, 0],
+      kind: "round",
+      role: "shaft",
+      diameter: 0.8000000000000002,
+      length: 1.41,
+    },
+    {
+      local: [1, 0, 0],
+      axis: [1, 0, 0],
+      kind: "round",
+      role: "shaft",
+      diameter: 0.8000000000000002,
+      length: 1.41,
+    },
+    {
+      local: [-0.5, 0, 0],
+      axis: [1, 0, 0],
+      kind: "round",
+      role: "socket",
+      diameter: 0.76956,
+    },
+  ],
   "11214": [
     {
       local: [-1, 0, 0],

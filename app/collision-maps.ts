@@ -10,6 +10,15 @@ export type StoredCollider = {
 // Mapas revisados exportados desde el editor de Sim Studio. Estos valores se
 // conservan literalmente: son la fuente de verdad para las colisiones manuales.
 export const preloadedCollisionMaps: Record<string, StoredCollider[]> = {
+  "32556": [
+    {
+      shape: "cylinder",
+      center: [0, 0, 0],
+      radius: 0.3030392026901245,
+      halfHeight: 1.41,
+      rotation: [0, 0, -0.7071067811865475, 0.7071067811865475],
+    },
+  ],
   "87408": [
     {
       shape: "box",
