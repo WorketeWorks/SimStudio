@@ -94,6 +94,24 @@ type Piece = CatalogPart & {
   physicsIslandFixed?: boolean;
   renderBatched?: boolean;
 };
+type EditorPieceSnapshot = {
+  piece: Piece;
+  position: THREE.Vector3;
+  rotation: THREE.Quaternion;
+  scale: THREE.Vector3;
+  color: number;
+  fixed: boolean;
+  dynamicAxleConnections: boolean;
+  connectors: MeshConnector[];
+  colliders: CollisionPrimitive[];
+  gearColliders: CollisionPrimitive[];
+};
+type EditorSnapshot = {
+  pieces: EditorPieceSnapshot[];
+  connections: Connection[];
+  connectionModes: AppState["connectionModes"];
+  selected?: Piece;
+};
 type RenderBatchItem = {
   mesh: THREE.InstancedMesh;
   pieces: Piece[];
@@ -248,6 +266,11 @@ type AppState = {
       userConfigured: boolean;
     }
   >;
+  recordHistory: () => void;
+  undo: () => Promise<boolean>;
+  redo: () => Promise<boolean>;
+  copySelected: () => boolean;
+  pasteClipboard: () => Promise<Piece | null>;
   addPart: (
     part: CatalogPart,
     position: THREE.Vector3,
@@ -540,7 +563,7 @@ const translations = {
     ready: "Catálogo local listo",
     running: "SIMULACIÓN: arrastra una pieza para aplicarle fuerza",
     cameraHelp:
-      "Arrastrar: mover · Rueda central: desplazar cámara · Doble rueda: centrar/restaurar · Alt/botón derecho: orbitar · Rueda: zoom · Ctrl+arrastrar: Connect manual · Shift: mover Y · WASD/flechas: rotar 90° · Alt+clic: fijar",
+      "Arrastrar: mover · Rueda central: desplazar cámara · Doble rueda: centrar/restaurar · Alt/botón derecho: orbitar · Rueda: zoom · Ctrl+arrastrar: Connect manual · Ctrl+Z/Y: deshacer/rehacer · Ctrl+C/V: copiar/pegar · Shift: mover Y · WASD/flechas: rotar 90° · Alt+clic: fijar",
     properties: "PROPIEDADES",
     piece: "PIEZA",
     color: "COLOR",
@@ -673,7 +696,7 @@ const translations = {
     ready: "Local catalog ready",
     running: "SIMULATION: drag a part to apply force",
     cameraHelp:
-      "Drag: move · Middle drag: pan camera · Middle double-click: focus/reset · Alt/right button: orbit · Wheel: zoom · Ctrl+drag: manual Connect · Shift: move Y · WASD/arrows: rotate 90° · Alt+click: fix",
+      "Drag: move · Middle drag: pan camera · Middle double-click: focus/reset · Alt/right button: orbit · Wheel: zoom · Ctrl+drag: manual Connect · Ctrl+Z/Y: undo/redo · Ctrl+C/V: copy/paste · Shift: move Y · WASD/arrows: rotate 90° · Alt+click: fix",
     properties: "PROPERTIES",
     piece: "PART",
     color: "COLOR",
@@ -3768,6 +3791,242 @@ export default function Home() {
           : `${piece.part} liberada`,
       );
     };
+    const cloneConnection = (connection: Connection): Connection => ({
+        ...connection,
+        point: connection.point.clone(),
+        axis: connection.axis.clone(),
+        localAxisA: connection.localAxisA.clone(),
+      }),
+      cloneConnector = (connector: MeshConnector): MeshConnector => ({
+        ...connector,
+        local: connector.local.clone(),
+        axis: connector.axis.clone(),
+      }),
+      cloneCollider = (collider: CollisionPrimitive): CollisionPrimitive => ({
+        ...collider,
+        center: collider.center.clone(),
+        size: collider.size?.clone(),
+        rotation: collider.rotation.clone(),
+      });
+    const captureEditorSnapshot = (): EditorSnapshot => ({
+      pieces: state.pieces.map((piece) => ({
+        piece,
+        position: piece.mesh.position.clone(),
+        rotation: piece.mesh.quaternion.clone(),
+        scale: piece.mesh.scale.clone(),
+        color: piece.color,
+        fixed: piece.fixed,
+        dynamicAxleConnections: piece.dynamicAxleConnections,
+        connectors: piece.connectors.map(cloneConnector),
+        colliders: piece.colliders.map(cloneCollider),
+        gearColliders: piece.gearColliders.map(cloneCollider),
+      })),
+      connections: state.connections.map(cloneConnection),
+      connectionModes: new Map(
+        [...state.connectionModes].map(([id, mode]) => [id, { ...mode }]),
+      ),
+      selected: state.selected,
+    });
+    const undoStack: EditorSnapshot[] = [],
+      redoStack: EditorSnapshot[] = [];
+    let restoringHistory = false,
+      historyBusy = false,
+      clipboard:
+        | {
+            catalog: CatalogPart;
+            position: THREE.Vector3;
+            rotation: THREE.Quaternion;
+            scale: THREE.Vector3;
+            connectors: MeshConnector[];
+            colliders: CollisionPrimitive[];
+            gearColliders: CollisionPrimitive[];
+            fixed: boolean;
+            dynamicAxleConnections: boolean;
+          }
+        | undefined,
+      pasteIndex = 0;
+    const disposeLock = (piece: Piece) => {
+      if (!piece.lockSprite) return;
+      scene.remove(piece.lockSprite);
+      piece.lockSprite.material.map?.dispose();
+      piece.lockSprite.material.dispose();
+      piece.lockSprite = undefined;
+    };
+    const restoreEditorSnapshot = async (snapshot: EditorSnapshot) => {
+      restoringHistory = true;
+      try {
+        state.disposeRenderBatches();
+        const restoredPieces = new Set(snapshot.pieces.map((item) => item.piece));
+        state.pieces.forEach((piece) => {
+          if (restoredPieces.has(piece)) return;
+          scene.remove(piece.mesh);
+          disposeLock(piece);
+        });
+        state.pieces = snapshot.pieces.map((item) => item.piece);
+        for (const item of snapshot.pieces) {
+          const piece = item.piece;
+          if (piece.mesh.parent !== scene) scene.add(piece.mesh);
+          if (piece.color !== item.color)
+            await state.recolorPart(piece, item.color);
+          piece.mesh.position.copy(item.position);
+          piece.mesh.quaternion.copy(item.rotation);
+          piece.mesh.scale.copy(item.scale);
+          piece.mesh.visible = true;
+          piece.mesh.updateMatrixWorld(true);
+          piece.fixed = item.fixed;
+          piece.dynamicAxleConnections = item.dynamicAxleConnections;
+          piece.connectors = item.connectors.map(cloneConnector);
+          piece.colliders = item.colliders.map(cloneCollider);
+          piece.gearColliders = item.gearColliders.map(cloneCollider);
+          if (piece.fixed && !piece.lockSprite) {
+            piece.lockSprite = makeLock();
+            scene.add(piece.lockSprite);
+          } else if (!piece.fixed) disposeLock(piece);
+        }
+        state.connections = snapshot.connections.map(cloneConnection);
+        state.connectionModes = new Map(
+          [...snapshot.connectionModes].map(([id, mode]) => [id, { ...mode }]),
+        );
+        state.gearLinks = detectGearLinks(state.pieces);
+        state.selected =
+          snapshot.selected && restoredPieces.has(snapshot.selected)
+            ? snapshot.selected
+            : undefined;
+        state.rebuildRenderBatches();
+        state.refreshDebug();
+        setSelectedId(state.selected?.id ?? null);
+        setCount(state.pieces.length);
+        setConnectionRevision((value) => value + 1);
+      } finally {
+        restoringHistory = false;
+      }
+    };
+    const recordHistory = () => {
+      if (restoringHistory || historyBusy || state.running) return;
+      undoStack.push(captureEditorSnapshot());
+      if (undoStack.length > 80) undoStack.shift();
+      redoStack.length = 0;
+    };
+    const undo = async () => {
+      if (historyBusy || state.running) return false;
+      if (!undoStack.length) {
+        setMessage("No hay acciones que deshacer");
+        return false;
+      }
+      historyBusy = true;
+      try {
+        redoStack.push(captureEditorSnapshot());
+        await restoreEditorSnapshot(undoStack.pop()!);
+        setMessage("Deshacer");
+        return true;
+      } finally {
+        historyBusy = false;
+      }
+    };
+    const redo = async () => {
+      if (historyBusy || state.running) return false;
+      if (!redoStack.length) {
+        setMessage("No hay acciones que rehacer");
+        return false;
+      }
+      historyBusy = true;
+      try {
+        undoStack.push(captureEditorSnapshot());
+        await restoreEditorSnapshot(redoStack.pop()!);
+        setMessage("Rehacer");
+        return true;
+      } finally {
+        historyBusy = false;
+      }
+    };
+    const catalogFromPiece = (piece: Piece): CatalogPart => ({
+      part: piece.part,
+      name: piece.name,
+      thumb: piece.thumb,
+      kind: piece.kind,
+      color: piece.color,
+      family: piece.family,
+      modelPart: piece.modelPart,
+      rawThumb: piece.rawThumb,
+      geometry: piece.geometry,
+      sourceColor: piece.sourceColor,
+      gear: piece.gear,
+      origin: piece.origin,
+      sourceKind: piece.sourceKind,
+      requestedPart: piece.requestedPart,
+      catalogReturnedPart: piece.catalogReturnedPart,
+      resolvedPart: piece.resolvedPart,
+      catalogQuery: piece.catalogQuery,
+      importFile: piece.importFile,
+      downloadUrl: piece.downloadUrl,
+      downloadSource: piece.downloadSource,
+    });
+    const copySelected = () => {
+      const piece = state.selected;
+      if (!piece || state.running) return false;
+      clipboard = {
+        catalog: catalogFromPiece(piece),
+        position: piece.mesh.position.clone(),
+        rotation: piece.mesh.quaternion.clone(),
+        scale: piece.mesh.scale.clone(),
+        connectors: piece.connectors.map(cloneConnector),
+        colliders: piece.colliders.map(cloneCollider),
+        gearColliders: piece.gearColliders.map(cloneCollider),
+        fixed: piece.fixed,
+        dynamicAxleConnections: piece.dynamicAxleConnections,
+      };
+      pasteIndex = 0;
+      setMessage(`${piece.part} copiada`);
+      return true;
+    };
+    const pasteClipboard = async () => {
+      if (state.running || historyBusy) return null;
+      if (!clipboard) {
+        setMessage("Copia una pieza antes de pegar");
+        return null;
+      }
+      const historyLength = undoStack.length;
+      recordHistory();
+      pasteIndex++;
+      const offset = new THREE.Vector3(0.4 * pasteIndex, 0, 0.4 * pasteIndex),
+        piece = await addPart(
+          { ...clipboard.catalog },
+          clipboard.position.clone().add(offset),
+          clipboard.rotation,
+        );
+      if (!piece) {
+        undoStack.length = historyLength;
+        return null;
+      }
+      piece.mesh.scale.copy(clipboard.scale);
+      piece.connectors = clipboard.connectors.map(cloneConnector);
+      piece.colliders = clipboard.colliders.map(cloneCollider);
+      piece.gearColliders = clipboard.gearColliders.map(cloneCollider);
+      piece.fixed = clipboard.fixed;
+      piece.dynamicAxleConnections = clipboard.dynamicAxleConnections;
+      if (piece.fixed) {
+        piece.lockSprite = makeLock();
+        scene.add(piece.lockSprite);
+      }
+      piece.mesh.updateMatrixWorld(true);
+      connect(piece);
+      void verifyConnectionsAsync();
+      state.selected = piece;
+      state.rebuildRenderBatches();
+      state.refreshDebug();
+      setSelectedId(piece.id);
+      setCount(state.pieces.length);
+      setConnectionRevision((value) => value + 1);
+      setMessage(`${piece.part} pegada`);
+      return piece;
+    };
+    Object.assign(state, {
+      recordHistory,
+      undo,
+      redo,
+      copySelected,
+      pasteClipboard,
+    });
     const down = (e: PointerEvent) => {
       canvas.focus({ preventScroll: true });
       canvas.setPointerCapture(e.pointerId);
@@ -4087,6 +4346,7 @@ export default function Home() {
           // A click only selects the piece. Connections are detached only
           // after an intentional drag passes this screen-space threshold.
           if (pointerDistance <= 5) return;
+          state.recordHistory();
           movingPrepared = true;
           moved = true;
           state.connections = state.connections.filter(
@@ -4165,15 +4425,16 @@ export default function Home() {
               best = { piece, connector, distance };
           }
         }
-        const connected =
-          !!best &&
-          best.distance <= 2 &&
-          connectManual(
+        let connected = false;
+        if (best && best.distance <= 2) {
+          state.recordHistory();
+          connected = connectManual(
             draft.piece,
             draft.connector,
             best.piece,
             best.connector,
           );
+        }
         scene.remove(draft.line);
         draft.line.geometry.dispose();
         (draft.line.material as THREE.Material).dispose();
@@ -4225,7 +4486,10 @@ export default function Home() {
         released.label.remove();
         spring = undefined;
       }
-      if (orbit && !moved && altCandidate) toggleFixed(altCandidate);
+      if (orbit && !moved && altCandidate) {
+        state.recordHistory();
+        toggleFixed(altCandidate);
+      }
       orbit = false;
       pan = false;
       altCandidate = undefined;
@@ -4252,6 +4516,7 @@ export default function Home() {
         cast(e);
         const ground = ray.intersectObject(floor)[0];
         if (ground) {
+          state.recordHistory();
           void addPart(
             p,
             new THREE.Vector3(
@@ -4304,11 +4569,32 @@ export default function Home() {
       const target = e.target as HTMLElement | null;
       if (target?.matches("input, textarea, select, [contenteditable=true]"))
         return;
+      const command = e.ctrlKey || e.metaKey;
+      if (command && !e.altKey) {
+        const redoShortcut =
+          e.code === "KeyY" || (e.code === "KeyZ" && e.shiftKey);
+        if (e.code === "KeyZ" || redoShortcut) {
+          e.preventDefault();
+          if (!e.repeat) void (redoShortcut ? state.redo() : state.undo());
+          return;
+        }
+        if (e.code === "KeyC") {
+          e.preventDefault();
+          if (!e.repeat) state.copySelected();
+          return;
+        }
+        if (e.code === "KeyV") {
+          e.preventDefault();
+          if (!e.repeat) void state.pasteClipboard();
+          return;
+        }
+      }
       if (state.running || !state.selected) return;
       const piece = state.selected,
         code = e.code;
       if (code === "Delete") {
         e.preventDefault();
+        state.recordHistory();
         scene.remove(piece.mesh);
         if (piece.lockSprite) scene.remove(piece.lockSprite);
         state.pieces = state.pieces.filter((item) => item !== piece);
@@ -4338,6 +4624,7 @@ export default function Home() {
                 : undefined;
       if (!rotation) return;
       e.preventDefault();
+      state.recordHistory();
       if (rotation.axis === "x") piece.mesh.rotateX(rotation.angle);
       else piece.mesh.rotateY(rotation.angle);
       piece.mesh.updateMatrixWorld(true);
@@ -4872,6 +5159,7 @@ export default function Home() {
     const s = appRef.current,
       p = s?.selected;
     if (!s || !p || running) return;
+    s.recordHistory();
     const radians = THREE.MathUtils.degToRad(rotationAngle * dir);
     if (axis === "x") p.mesh.rotateX(radians);
     else if (axis === "y") p.mesh.rotateY(radians);
@@ -4885,6 +5173,7 @@ export default function Home() {
     const s = appRef.current,
       p = s?.selected;
     if (!s || !p || running) return;
+    s.recordHistory();
     p.mesh.position[axis] += amount;
     if (p.renderBatched) s.rebuildRenderBatches();
     else s.renderBatchesDirty = true;
@@ -4895,6 +5184,7 @@ export default function Home() {
     const s = appRef.current,
       piece = s?.selected;
     if (!s || !piece || running || piece.color === color) return;
+    s.recordHistory();
     setMessage(t.changingColor);
     const changed = await s.recolorPart(piece, color);
     setMessage(
@@ -4908,6 +5198,7 @@ export default function Home() {
     const s = appRef.current,
       p = s?.selected;
     if (!s || !p || running) return;
+    s.recordHistory();
     s.scene.remove(p.mesh);
     if (p.lockSprite) s.scene.remove(p.lockSprite);
     s.pieces = s.pieces.filter((x) => x !== p);
@@ -4922,6 +5213,7 @@ export default function Home() {
   const reset = () => {
     const s = appRef.current;
     if (!s) return;
+    if (!s.running) s.recordHistory();
     s.running = false;
     s.connectionScanVersion++;
     s.bulkConnecting = false;
@@ -5764,6 +6056,7 @@ export default function Home() {
       !allowedModes(connection.profile).includes(mode)
     )
       return;
+    state.recordHistory();
     connection.mode = mode;
     connection.userConfigured = true;
     state.connectionModes.set(id, {
@@ -5781,6 +6074,7 @@ export default function Home() {
     const state = appRef.current,
       connection = state?.connections.find((item) => item.id === id);
     if (!state || !connection) return;
+    if (!running) state.recordHistory();
     connection.motorSpeed = motorSpeed;
     state.connectionModes.set(id, {
       mode: connection.mode,
@@ -5801,6 +6095,7 @@ export default function Home() {
     const state = appRef.current,
       connection = state?.connections.find((item) => item.id === id);
     if (!state || !connection) return;
+    if (!running) state.recordHistory();
     connection.motorForce = motorForce;
     state.connectionModes.set(id, {
       mode: connection.mode,
@@ -5833,6 +6128,7 @@ export default function Home() {
   ) => {
     const state = appRef.current;
     if (!state || running) return;
+    state.recordHistory();
     const normalized = connectors.map((connector) => ({
       ...connector,
       local: connector.local.clone(),
@@ -6080,6 +6376,7 @@ export default function Home() {
   ) => {
     const state = appRef.current;
     if (!state || running) return;
+    state.recordHistory();
     const normalized = colliders.map(cloneCollider);
     state.pieces
       .filter((instance) => instance.part === piece.part)
@@ -6547,6 +6844,46 @@ export default function Home() {
               if (file) void importModel(file);
             }}
           />
+          <button
+            className="ghost"
+            style={{ minWidth: 34, padding: "10px 8px", fontSize: 16, lineHeight: 1 }}
+            disabled={running}
+            onClick={() => void appRef.current?.undo()}
+            aria-label={language === "es" ? "Deshacer" : "Undo"}
+            title={`${language === "es" ? "Deshacer" : "Undo"} · Ctrl+Z`}
+          >
+            ↶
+          </button>
+          <button
+            className="ghost"
+            style={{ minWidth: 34, padding: "10px 8px", fontSize: 16, lineHeight: 1 }}
+            disabled={running}
+            onClick={() => void appRef.current?.redo()}
+            aria-label={language === "es" ? "Rehacer" : "Redo"}
+            title={`${language === "es" ? "Rehacer" : "Redo"} · Ctrl+Y`}
+          >
+            ↷
+          </button>
+          <button
+            className="ghost"
+            style={{ minWidth: 34, padding: "10px 8px", fontSize: 16, lineHeight: 1 }}
+            disabled={running || !selected}
+            onClick={() => appRef.current?.copySelected()}
+            aria-label={language === "es" ? "Copiar pieza" : "Copy part"}
+            title={`${language === "es" ? "Copiar pieza" : "Copy part"} · Ctrl+C`}
+          >
+            ⧉
+          </button>
+          <button
+            className="ghost"
+            style={{ minWidth: 34, padding: "10px 8px", fontSize: 16, lineHeight: 1 }}
+            disabled={running}
+            onClick={() => void appRef.current?.pasteClipboard()}
+            aria-label={language === "es" ? "Pegar pieza" : "Paste part"}
+            title={`${language === "es" ? "Pegar pieza" : "Paste part"} · Ctrl+V`}
+          >
+            ⎘
+          </button>
           <button className="ghost" onClick={() => fileRef.current?.click()}>
             {t.import}
           </button>
@@ -6936,6 +7273,7 @@ export default function Home() {
                   checked={selected.dynamicAxleConnections}
                   disabled={running}
                   onChange={(event) => {
+                    appRef.current?.recordHistory();
                     selected.dynamicAxleConnections = event.target.checked;
                     setConnectionRevision((value) => value + 1);
                     setMessage(

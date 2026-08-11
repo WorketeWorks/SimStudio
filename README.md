@@ -129,6 +129,10 @@ The renderer caps presentation at 60 FPS. Dynamic resolution reduction is reserv
 | Apply force during simulation | Drag from a point on the part |
 | Rotate 90° | `WASD` or arrow keys |
 | Delete selected part | `Delete` |
+| Undo | `Ctrl + Z` |
+| Redo | `Ctrl + Y` or `Ctrl + Shift + Z` |
+| Copy selected part | `Ctrl + C` |
+| Paste copied part | `Ctrl + V` |
 
 ## Installation
 
