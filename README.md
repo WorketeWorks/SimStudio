@@ -6,7 +6,7 @@ Sim Studio is an experimental browser-based 3D editor for building LEGO® Techni
 
 ## Use it online
 
-**[Open Sim Studio in your browser](https://worketeworks.github.io/SimStudio/)** — no download or installation is required.
+**[Open Sim Studio in your browser](https://worketeworks.github.io/SimStudio-LEGO-Technic-Physics-Simulator/)** — no download or installation is required.
 
 The GitHub Pages version includes the complete default palette and its locally packaged geometry. Features that require the dynamic external-catalog API may be limited on static hosting.
 
@@ -139,13 +139,13 @@ The renderer caps presentation at 60 FPS. Dynamic resolution reduction is reserv
 Node.js `22.13.0` or newer is required.
 
 ```bash
-git clone https://github.com/WorketeWorks/SimStudio.git
-cd SimStudio
+git clone https://github.com/WorketeWorks/SimStudio-LEGO-Technic-Physics-Simulator.git
+cd SimStudio-LEGO-Technic-Physics-Simulator
 npm install
 npm run dev
 ```
 
-Then open the local address printed by the development server. For immediate use without cloning the repository, use the [hosted GitHub Pages version](https://worketeworks.github.io/SimStudio/).
+Then open the local address printed by the development server. For immediate use without cloning the repository, use the [hosted GitHub Pages version](https://worketeworks.github.io/SimStudio-LEGO-Technic-Physics-Simulator/).
 
 ## Commands
 
