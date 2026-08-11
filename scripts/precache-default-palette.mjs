@@ -28,15 +28,41 @@ globalThis.ProgressEvent ??= class ProgressEvent extends Event {
   }
 };
 
-const repositoryRoot = resolve(
-    process.argv[2] || fileURLToPath(new URL("..", import.meta.url)),
+const selectedReferences = new Set(
+    (process.argv.find((argument) => argument.startsWith("--parts=")) ?? "")
+      .slice("--parts=".length)
+      .split(",")
+      .map((reference) => reference.trim().toLowerCase())
+      .filter(Boolean),
+  ),
+  repositoryRoot = resolve(
+    process.argv[2] && !process.argv[2].startsWith("--")
+      ? process.argv[2]
+      : fileURLToPath(new URL("..", import.meta.url)),
   ),
   publicRoot = join(repositoryRoot, "public"),
   ldrawRoot = join(publicRoot, "ldraw"),
   catalogRoot = join(publicRoot, "catalog"),
   geometryRoot = join(catalogRoot, "geometry"),
   renderRoot = join(catalogRoot, "renders"),
-  sourceBase = "https://cdn.jsdelivr.net/gh/pybricks/ldraw@master/";
+  sourceBases = [
+    "https://library.ldraw.org/library/official/",
+    "https://cdn.jsdelivr.net/gh/remig/ldraw_parts@master/",
+    "https://cdn.jsdelivr.net/gh/pybricks/ldraw@master/",
+  ],
+  targetParts = selectedReferences.size
+    ? paletteParts.filter((part) => selectedReferences.has(part.part.toLowerCase()))
+    : paletteParts,
+  forcedRootReferences = new Set(
+    targetParts.map((part) => `${part.modelPart ?? part.part}.dat`.toLowerCase()),
+  );
+
+if (selectedReferences.size && targetParts.length !== selectedReferences.size) {
+  const found = new Set(targetParts.map((part) => part.part.toLowerCase()));
+  throw new Error(
+    `No están en la paleta: ${[...selectedReferences].filter((part) => !found.has(part)).join(", ")}`,
+  );
+}
 
 await Promise.all(
   [ldrawRoot, catalogRoot, geometryRoot, renderRoot].map((directory) =>
@@ -79,7 +105,7 @@ const referencedFiles = (text) =>
 const fetchLibraryFile = async (reference) => {
   if (resolvedFiles.has(reference)) return resolvedFiles.get(reference);
   const existingPath = fileMap[reference];
-  if (existingPath) {
+  if (existingPath && !(selectedReferences.size && forcedRootReferences.has(reference))) {
     try {
       const text = await readFile(join(ldrawRoot, ...existingPath.split("/")), "utf8"),
         result = { candidate: existingPath, text };
@@ -90,33 +116,41 @@ const fetchLibraryFile = async (reference) => {
   }
   let result = null;
   for (const candidate of candidatesFor(reference)) {
-    const response = await fetch(sourceBase + candidate);
-    if (!response.ok) continue;
-    const text = await response.text(),
-      destination = join(ldrawRoot, ...candidate.split("/"));
-    await mkdir(join(destination, ".."), { recursive: true });
-    await writeFile(destination, text, "utf8");
-    fileMap[reference] = candidate;
-    if (candidate.startsWith("parts/"))
-      fileMap[candidate.slice("parts/".length)] ??= candidate;
-    result = { candidate, text };
-    referencedFiles(text).forEach(enqueue);
-    break;
+    for (const sourceBase of sourceBases) {
+      const response = await fetch(sourceBase + candidate);
+      if (!response.ok) continue;
+      const text = await response.text(),
+        destination = join(ldrawRoot, ...candidate.split("/"));
+      await mkdir(join(destination, ".."), { recursive: true });
+      await writeFile(destination, text, "utf8");
+      fileMap[reference] = candidate;
+      if (candidate.startsWith("parts/"))
+        fileMap[candidate.slice("parts/".length)] ??= candidate;
+      result = { candidate, text };
+      referencedFiles(text).forEach(enqueue);
+      break;
+    }
+    if (result) break;
   }
   resolvedFiles.set(reference, result);
   return result;
 };
 
-const materialResponse = await fetch(sourceBase + "LDConfig.ldr");
-if (!materialResponse.ok) throw new Error("No se pudo descargar LDConfig.ldr");
+const fetchSourceFile = async (file) => {
+  for (const sourceBase of sourceBases) {
+    const response = await fetch(sourceBase + file);
+    if (response.ok) return response;
+  }
+  throw new Error(`No se pudo descargar ${file}`);
+};
+const materialResponse = await fetchSourceFile("LDConfig.ldr");
 await writeFile(join(ldrawRoot, "LDConfig.ldr"), await materialResponse.text(), "utf8");
 for (const legalFile of ["CAreadme.txt", "CAlicense.txt", "CAlicense4.txt"]) {
-  const response = await fetch(sourceBase + legalFile);
-  if (!response.ok) throw new Error(`No se pudo descargar ${legalFile}`);
+  const response = await fetchSourceFile(legalFile);
   await writeFile(join(ldrawRoot, legalFile), await response.text(), "utf8");
 }
 
-for (const part of paletteParts) enqueue(`${part.modelPart ?? part.part}.dat`);
+for (const part of targetParts) enqueue(`${part.modelPart ?? part.part}.dat`);
 let cursor = 0;
 while (cursor < queue.length) {
   const batch = queue.slice(cursor, cursor + 12);
@@ -130,7 +164,7 @@ await writeFile(
 );
 
 await Promise.all(
-  [...new Map(paletteParts.map((part) => [part.modelPart ?? part.part, part])).values()].map(
+  [...new Map(targetParts.map((part) => [part.modelPart ?? part.part, part])).values()].map(
     async (part) => {
       if (!part.sourceThumb?.startsWith("http")) return;
       const response = await fetch(part.sourceThumb);
@@ -205,9 +239,16 @@ const modelText = (part) =>
     rotation: collider.rotation.toArray(),
   });
 
-const catalog = { version: 1, parts: {}, assets: {} };
+let catalog = { version: 1, parts: {}, assets: {} };
+if (selectedReferences.size) {
+  try {
+    catalog = JSON.parse(
+      await readFile(join(repositoryRoot, "app", "preloaded-catalog.json"), "utf8"),
+    );
+  } catch {}
+}
 try {
-  for (const part of paletteParts) {
+  for (const part of targetParts) {
     const assetKey = `${part.part}-${part.color}`,
       geometryFile = `catalog/geometry/${assetKey}.json`;
     let exact = await loader.loadAsync(
@@ -290,7 +331,7 @@ try {
         : [],
       box = new THREE.Box3().setFromObject(wrapper),
       rootFile = resolvedFiles.get(`${(part.modelPart ?? part.part).toLowerCase()}.dat`);
-    catalog.parts[part.part] ??= {
+    catalog.parts[part.part] = {
       name: part.name,
       family: part.family,
       modelPart: part.modelPart ?? part.part,
@@ -311,6 +352,24 @@ try {
   await new Promise((done) => server.close(done));
 }
 
+// Keep legacy, automatically generated beam metadata in sync with the current
+// 0.45-stud radial envelope without regenerating every cached mesh. Reviewed
+// collision maps are applied at runtime and are intentionally not rewritten.
+for (const part of Object.values(catalog.parts)) {
+  if (part.family !== "beams" || !Array.isArray(part.colliders)) continue;
+  part.colliders = part.colliders.map((collider) => {
+    if (collider.shape === "cylinder" && Math.abs((collider.radius ?? 0) - 0.5) < 1e-6)
+      return { ...collider, radius: 0.45 };
+    if (
+      collider.shape === "box" &&
+      Array.isArray(collider.size) &&
+      Math.abs(collider.size[2] - 1) < 1e-6
+    )
+      return { ...collider, size: [collider.size[0], collider.size[1], 0.9] };
+    return collider;
+  });
+}
+
 await writeFile(
   join(repositoryRoot, "app", "preloaded-catalog.json"),
   JSON.stringify(catalog, null, 2) + "\n",
@@ -322,5 +381,5 @@ await writeFile(
   "utf8",
 );
 console.log(
-  `Catálogo generado: ${Object.keys(catalog.assets).length} variantes, ${resolvedFiles.size} archivos LDraw.`,
+  `Catálogo actualizado: ${targetParts.length} piezas, ${Object.keys(catalog.assets).length} variantes totales, ${resolvedFiles.size} archivos LDraw resueltos.`,
 );

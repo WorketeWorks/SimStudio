@@ -81,17 +81,17 @@ test("builds the small L collider from two orthogonal boxes", () => {
   ));
   boxes.forEach((box) => {
     assert.equal(box.size.y, 0.5);
-    assert.equal(box.size.z, 1);
+    assert.equal(box.size.z, 0.9);
   });
   colliders
     .filter((collider) => collider.shape === "cylinder")
     .forEach((cylinder) => {
-      assert.equal(cylinder.radius, 0.5);
+      assert.equal(cylinder.radius, 0.45);
       assert.equal(cylinder.halfHeight, 0.25);
     });
 });
 
-test("full beams use a one-unit cross section", () => {
+test("full beams use a 0.45 radial collision envelope", () => {
   const root = loadPart("32523-71"),
     connectors = detectConnectorHoles(root),
     colliders = approximateCollisionPrimitives(
@@ -101,10 +101,10 @@ test("full beams use a one-unit cross section", () => {
     );
   colliders.filter((item) => item.shape === "box").forEach((box) => {
     assert.equal(box.size.y, 1);
-    assert.equal(box.size.z, 1);
+    assert.equal(box.size.z, 0.9);
   });
   colliders.filter((item) => item.shape === "cylinder").forEach((cylinder) => {
-    assert.equal(cylinder.radius, 0.5);
+    assert.equal(cylinder.radius, 0.45);
     assert.equal(cylinder.halfHeight, 0.5);
   });
   const singleRoot = loadPart("18654-71"),
@@ -114,7 +114,7 @@ test("full beams use a one-unit cross section", () => {
       detectConnectorHoles(singleRoot),
     );
   assert.equal(single.length, 1);
-  assert.equal(single[0].radius, 0.5);
+  assert.equal(single[0].radius, 0.45);
   assert.equal(single[0].halfHeight, 0.5);
 });
 
@@ -180,7 +180,7 @@ test("gears, tyres and axle connector shells use a 0.95 envelope", () => {
 });
 
 test("keeps every restored correction map preloaded", () => {
-  for (const part of ["3713", "32016", "32034", "32192", "55615", "4265c"])
+  for (const part of ["3713", "32016", "32034", "32192", "55615", "4265c", "11478"])
     assert.ok(preloadedConnectionMaps[part]?.length, `${part} connection map`);
   for (const part of ["32013", "32016", "32034", "32192", "3713", "87408"])
     assert.ok(preloadedCollisionMaps[part]?.length, `${part} collision map`);

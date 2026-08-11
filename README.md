@@ -4,23 +4,36 @@ Sim Studio is an experimental browser-based 3D editor for building LEGO® Techni
 
 > Sim Studio is an independent, unofficial project. It is not sponsored, endorsed or authorized by the LEGO Group, BrickLink or Studio.
 
+## Use it online
+
+**[Open Sim Studio in your browser](https://worketeworks.github.io/SimStudio/)** — no download or installation is required.
+
+The GitHub Pages version includes the complete default palette and its locally packaged geometry. Features that require the dynamic external-catalog API may be limited on static hosting.
+
 ## Main features
 
 - Offline-first default palette with locally packaged LDraw sources, parsed 3D geometry, renders, connection maps, collider data and metadata.
 - Beams, axles, pins, connectors, gears and wheels organized into Studio-like categories.
-- Search by part name or part number, plus external LDraw part import.
+- Search by part name or part number, plus external LDraw part import with source and requested/resolved-reference metadata.
 - Drag parts from the palette into the 3D workspace.
 - Move placed parts on X/Z, use `Shift` for constrained movement, and rotate them by any angle.
 - Rotate the selected part in 90° steps with `WASD` or the arrow keys.
-- Import `.ldr` and `.mpd` models and export the assembly as `.ldr`.
+- Import `.ldr`, `.mpd` and BrickLink Studio `.io` models and export the assembly as `.ldr`.
+- Import preview and progress dialog that separates locally cached palette parts from external catalog parts.
+- Change a placed part to any supported LDraw color from its properties.
 - Light and dark themes, including the 3D environment.
 - Spanish and English UI, selected from the flag button in the top bar.
-- Gravity, friction, collisions, configurable joints, motors and spring-force dragging.
+- Orbit, pan, zoom, part-focused camera targeting, below-floor viewing and an effectively infinite adaptive grid.
+- Gravity, friction, self-collision, configurable joints, motors and spring-force dragging with a live newton readout.
 - Fix or release parts with `Alt + click`.
 - Restore the complete build state when the simulation stops.
+- Rigid and flexible structural modes with adjustable joint stiffness.
+- Runtime axle/socket and gear engagement updates when moving mechanisms connect or separate.
 - JSON physics log for the most recent simulation.
-- Diagnostic views for colliders, connection points, bodies, pivots and physics joints.
-- Connection-map editor with JSON import/export for correcting individual parts.
+- FPS overlay and detailed frame-performance profiling.
+- Diagnostic views for compound colliders, connection points, rigid bodies, pivots, groups and physics joints.
+- Connection-map and compound-collider editors with JSON import/export for correcting individual parts.
+- Resizable properties panel with model provenance, requested reference, resolved LDraw file and download source.
 
 ## Offline-first part catalog
 
@@ -47,7 +60,7 @@ The generator recursively downloads the required LDraw dependencies, stores the 
 
 ## Connect system
 
-Connection maps use four visual connector types:
+Connection maps use six visual connector types:
 
 | Color | Connector | Compatible with |
 | --- | --- | --- |
@@ -55,10 +68,14 @@ Connection maps use four visual connector types:
 | Orange | Pin shaft | Blue sockets |
 | Green | Cross-shaped axle socket | Purple axles |
 | Purple | Usable axle path | Green and blue sockets |
+| Cyan | Half-width socket | Orange pins at either half-width position |
+| Pink | Half-width shaft | Cyan sockets and either half of a blue socket |
 
 Mixed parts can contain sockets and shafts at the same time. Each shaft uses its own local position, orientation and usable length, allowing perpendicular holes on axle pins and pin connectors to participate in auto-connect.
 
-Auto-connect aligns only the connector axes that must coincide and preserves the part's existing rotation around that axis. `Ctrl + drag` starts manual Connect: choose a connection point, drag its guide and release near a highlighted compatible point.
+Auto-connect aligns only the connector axes that must coincide and preserves the part's existing rotation around that axis. `Ctrl + drag` starts manual Connect: choose a connection point, drag its guide and release near a highlighted compatible point. The connection-map overlay is temporarily enabled for this operation and returns to its previous visibility state afterward.
+
+Axles may span several rigid groups without colliding with the parts they connect. Connections can be detected, released and recovered during simulation when an axle enters or leaves a compatible socket. This dynamic behavior can be disabled per axle.
 
 ### Joint modes
 
@@ -74,17 +91,25 @@ Friction pins default to rigid joints. Other multi-connection shafts intelligent
 
 Motor mode creates a driven rotational joint with configurable angular speed, direction and maximum torque.
 
+### Gear coupling
+
+Compatible gears are linked from their tooth counts, pitch radii, axis alignment and centre distance. Motion is transferred in either direction using the calculated ratio. Gear engagement is updated during simulation when height, alignment or distance changes, and a separate gear-contact collider keeps tooth interaction independent from the normal solid collider.
+
 ## Physics and colliders
 
 The visible LDraw mesh remains detailed, while Rapier uses lighter compound colliders. The generated collider set is stored in the local catalog instead of being recalculated on every browser session.
 
-- Straight beams use a longitudinal box and cylindrical end caps.
-- L, T and angled beams use multiple aligned boxes and cylinders.
+- Straight beams use a longitudinal box and cylindrical end caps with a 0.45-stud radial envelope.
+- L, T and angled beams use multiple aligned boxes and 0.45-radius cylinders.
 - Pins and axles use simplified cylinders.
 - Wheels, gears and bushes use cylindrical approximations.
 - Irregular parts fall back to adjusted compound boxes/cylinders.
 
-During simulation, clicking a point on a part and dragging applies a visible spring force at that exact point. The force label displays newtons and the off-center application point can create torque. Stopping simulation restores all parts to their pre-simulation position and rotation.
+Fixed connections may be merged into rigid physics islands for stable large structures. Non-rigid joints remain the boundaries between those islands. Flexible mode restores per-part bodies and exposes a stiffness control for mechanisms that should bend slightly rather than behave as perfectly rigid assemblies.
+
+During simulation, clicking a point on a part and dragging applies a visible spring force at that exact point. The force label displays newtons and the off-center application point can create torque. Stopping simulation restores all parts, connections and joint settings to their pre-simulation state.
+
+The renderer caps presentation at 60 FPS. Dynamic resolution reduction is reserved for severe sustained drops, while instancing, cached geometry and visibility culling reduce the cost of larger models.
 
 ## Controls
 
@@ -96,6 +121,9 @@ During simulation, clicking a point on a part and dragging applies a visible spr
 | Move along a free linear connection or Y | `Shift` + drag |
 | Manual Connect | `Ctrl` + drag from a connection point |
 | Orbit camera | Right button or `Alt` + drag |
+| Pan camera | Drag with the middle mouse button |
+| Focus camera on a part | Double-click the middle button over a part |
+| Restore the default camera | Double-click the middle button over the floor |
 | Zoom | Mouse wheel |
 | Fix/release a part | `Alt` + click |
 | Apply force during simulation | Drag from a point on the part |
@@ -112,6 +140,8 @@ cd SimStudio
 npm install
 npm run dev
 ```
+
+Then open the local address printed by the development server. For immediate use without cloning the repository, use the [hosted GitHub Pages version](https://worketeworks.github.io/SimStudio/).
 
 ## Commands
 
@@ -135,7 +165,8 @@ npm test                  # Build and automated tests
 
 ## Data and current limitations
 
-- LDraw import restores part number, color, position and orientation.
+- LDraw/MPD and Studio `.io` import restore part number, color, position and orientation.
+- `.io` export is not currently supported.
 - LDraw export creates `sim-studio-model.ldr`; Sim Studio-specific physics modes are not currently embedded in the exported model.
 - Automatic connector detection is geometric and may require correction for unusual parts.
 - Compound colliders are simulation approximations, not manufacturing geometry.

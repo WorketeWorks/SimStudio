@@ -650,7 +650,7 @@ export function approximateCollisionPrimitives(
           colliderDepth = beamOrPanel
             ? beamThickness
             : Math.min(0.9, Math.max(0.25, depth * 0.96)),
-          colliderHeight = beamOrPanel ? 1 : 0.9;
+          colliderHeight = 0.9;
         result.push({
           shape: "box",
           center: line.origin.clone(),
@@ -681,7 +681,7 @@ export function approximateCollisionPrimitives(
         result.push({
           shape: "cylinder",
           center: connector.local.clone(),
-          radius: beamOrPanel ? 0.5 : 0.45,
+          radius: 0.45,
           halfHeight: beamOrPanel
             ? beamThickness / 2
             : Math.min(0.45, Math.max(0.12, depth * 0.48)),
@@ -698,7 +698,7 @@ export function approximateCollisionPrimitives(
         {
           shape: "cylinder",
           center: connector.local.clone(),
-          radius: 0.5,
+          radius: 0.45,
           halfHeight: beamThickness / 2,
           rotation: new THREE.Quaternion().setFromUnitVectors(
             new THREE.Vector3(0, 1, 0),

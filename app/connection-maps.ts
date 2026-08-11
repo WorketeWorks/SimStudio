@@ -2568,6 +2568,88 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
       "diameter": 0.6325250029563905
     }
   ],
+  "11478": [
+    {
+      "local": [
+        0,
+        0,
+        1
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "half",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 0.5000000000000006
+    },
+    {
+      "local": [
+        0,
+        0,
+        0
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "half",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 0.5000000000000006
+    },
+    {
+      "local": [
+        0,
+        0,
+        -1
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "half",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 0.5000000000000006
+    },
+    {
+      "local": [
+        0,
+        0,
+        -2
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "axle",
+      "role": "socket",
+      "diameter": 0.6,
+      "length": 0.5000000000000006
+    },
+    {
+      "local": [
+        0,
+        0,
+        2
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "axle",
+      "role": "socket",
+      "diameter": 0.6,
+      "length": 0.5000000000000006
+    }
+  ],
   "6538c": [
     {
       "local": [

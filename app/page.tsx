@@ -32,7 +32,7 @@ import {
   type CollisionPrimitive,
   type MeshConnector,
 } from "./connectors";
-import { paletteParts } from "./palette";
+import { paletteParts, paletteRequestAliases } from "./palette";
 import { preloadedConnectionMaps } from "./connection-maps";
 import {
   preloadedCollisionMaps,
@@ -151,6 +151,7 @@ type ManualConnectDraft = {
   cursor: THREE.Vector3;
   plane: THREE.Plane;
   line: THREE.Line;
+  connectorsWereVisible: boolean;
 };
 type DebugFlags = { colliders: boolean; connectors: boolean; physics: boolean };
 type SimulationLog = {
@@ -296,7 +297,7 @@ const LDRAW =
   MODEL_LOAD_TIMEOUT = 20_000,
   AUTO_CONNECTIONS_ENABLED = true,
   CORRECTION_MAP_REVISION = "2026-08-10-corrections-1";
-const invalidPackagedGeometry = new Set(["14720"]);
+const invalidPackagedGeometry = new Set<string>();
 const packagedParts = preloadedCatalog.parts as Record<
   string,
   {
@@ -790,10 +791,17 @@ const isPinPart = (p: CatalogPart) =>
   /^Technic (Axle )?Pin/i.test(p.name) || frictionPinRefs.has(p.part);
 const isAxlePart = (p: CatalogPart) => /^Technic Axle(?! Pin)/i.test(p.name);
 const paletteReferenceSet = new Set(
-  paletteParts.flatMap((part) =>
-    [part.part, part.modelPart].filter(Boolean).map((value) => value!.toLowerCase()),
-  ),
+  [
+    ...paletteParts.flatMap((part) =>
+      [part.part, part.modelPart]
+        .filter(Boolean)
+        .map((value) => value!.toLowerCase()),
+    ),
+    ...Object.keys(paletteRequestAliases),
+  ],
 );
+const resolvePaletteRequest = (reference: string) =>
+  paletteRequestAliases[reference.toLowerCase()] ?? reference.toLowerCase();
 const belongsToDefaultPalette = (part: CatalogPart) =>
   [part.part, part.modelPart, part.resolvedPart]
     .filter(Boolean)
@@ -3870,6 +3878,7 @@ export default function Home() {
             origin,
           ),
           line,
+          connectorsWereVisible: state.debug.connectors,
         };
         state.selected = hitPiece;
         state.debug.connectors = true;
@@ -4169,6 +4178,11 @@ export default function Home() {
         draft.line.geometry.dispose();
         (draft.line.material as THREE.Material).dispose();
         state.manualConnect = undefined;
+        state.debug.connectors = draft.connectorsWereVisible;
+        setDebugViews((current) => ({
+          ...current,
+          connectors: draft.connectorsWereVisible,
+        }));
         if (connected && draft.piece.renderBatched)
           state.rebuildRenderBatches();
         setConnectionRevision((value) => value + 1);
@@ -4796,10 +4810,11 @@ export default function Home() {
     if (!part) return;
     setCatalogBusy(true);
     const normalizedPart = part.toLowerCase(),
+      palettePart = resolvePaletteRequest(normalizedPart),
       packaged = paletteParts.find(
         (candidate) =>
-          candidate.part.toLowerCase() === normalizedPart ||
-          candidate.modelPart?.toLowerCase() === normalizedPart,
+          candidate.part.toLowerCase() === palettePart ||
+          candidate.modelPart?.toLowerCase() === palettePart,
       );
     let found: CatalogPart = packaged
       ? {
@@ -5403,6 +5418,16 @@ export default function Home() {
             matches = paletteMatches.get(key) ?? [];
           matches.push(part);
           paletteMatches.set(key, matches);
+        }
+        for (const [alias, target] of Object.entries(paletteRequestAliases)) {
+          if (
+            target === part.part.toLowerCase() ||
+            target === part.modelPart?.toLowerCase()
+          ) {
+            const matches = paletteMatches.get(alias) ?? [];
+            matches.push(part);
+            paletteMatches.set(alias, matches);
+          }
         }
       }
       const paletteReferences = references.filter((reference) =>
