@@ -4,6 +4,10 @@ Sim Studio is an experimental browser-based 3D editor for building LEGO® Techni
 
 > Sim Studio is an independent, unofficial project. It is not sponsored, endorsed or authorized by the LEGO Group, BrickLink or Studio.
 
+<p align="center">
+  <img src="docs/images/sim-studio-interface.png" alt="Sim Studio editor interface" width="800">
+</p>
+
 ## Use it online
 
 **[Open Sim Studio in your browser](https://worketeworks.github.io/SimStudio-LEGO-Technic-Physics-Simulator/)** — no download or installation is required.
