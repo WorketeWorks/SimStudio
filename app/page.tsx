@@ -810,6 +810,15 @@ const kindFor = (category: string, name = ""): PieceKind =>
 const modelText = (p: CatalogPart) =>
   `0 FILE ${p.part}.ldr\n1 ${p.color} 0 0 0 1 0 0 0 1 0 0 0 1 ${p.modelPart ?? p.part}.dat\n0`;
 const frictionPinRefs = new Set(["2780", "6558", "32054", "43093"]);
+// Rapier combines the friction coefficients of both colliders. LEGO-like
+// plastic must slide over plastic without behaving as if both surfaces were
+// rubber, while tyres and the floor still need enough grip to drive a model.
+const CONTACT_FRICTION = {
+  plastic: 0.18,
+  gearMesh: 0.12,
+  tyre: 1.35,
+  floor: 0.9,
+} as const;
 const isPinPart = (p: CatalogPart) =>
   /^Technic (Axle )?Pin/i.test(p.name) || frictionPinRefs.has(p.part);
 const isAxlePart = (p: CatalogPart) => /^Technic Axle(?! Pin)/i.test(p.name);
@@ -4829,11 +4838,13 @@ export default function Home() {
               (velocityB.x - velocityA.x) * axis.x +
               (velocityB.y - velocityA.y) * axis.y +
               (velocityB.z - velocityA.z) * axis.z,
-            damping = connection.mode === "linear" ? 0.42 : 0.18,
+            // A free connector should only have a slight guide resistance.
+            // Contact friction already accounts for surfaces rubbing together.
+            damping = connection.mode === "linear" ? 0.08 : 0.03,
             forceMagnitude = THREE.MathUtils.clamp(
               relativeSpeed * damping,
-              -1.5,
-              1.5,
+              -0.35,
+              0.35,
             ),
             frictionForce = axis.multiplyScalar(forceMagnitude);
           if (!connection.b.physicsIslandFixed)
@@ -5399,7 +5410,7 @@ export default function Home() {
       world.createCollider(
         RAPIER.ColliderDesc.cuboid(5000, 0.15, 5000)
           .setTranslation(0, -0.2, 0)
-          .setFriction(0.9)
+          .setFriction(CONTACT_FRICTION.floor)
           .setCollisionGroups(
             interactionGroups(
               COLLISION_GROUP_NON_GEAR,
@@ -5458,7 +5469,13 @@ export default function Home() {
             collider
               .setTranslation(center.x, center.y, center.z)
               .setRotation(rotation)
-              .setFriction(gearLayer ? 1.15 : p.kind === "wheel" ? 1.6 : 0.75)
+              .setFriction(
+                gearLayer
+                  ? CONTACT_FRICTION.gearMesh
+                  : p.kind === "wheel" && !p.gear
+                    ? CONTACT_FRICTION.tyre
+                    : CONTACT_FRICTION.plastic,
+              )
               .setRestitution(0)
               .setActiveHooks(RAPIER.ActiveHooks.FILTER_CONTACT_PAIRS)
               .setCollisionGroups(
