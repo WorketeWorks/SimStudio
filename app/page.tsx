@@ -166,6 +166,7 @@ type RuntimeGearLink = GearPair<Piece> & {
 type ManualConnectDraft = {
   piece: Piece;
   connector: MeshConnector;
+  anchorLocal: THREE.Vector3;
   cursor: THREE.Vector3;
   plane: THREE.Plane;
   line: THREE.Line;
@@ -237,6 +238,7 @@ type PhysicsSettings = {
   axleTolerance: number;
 };
 type GridStep = 0 | 0.25 | 0.5 | 1;
+type AxleSnapStep = 0 | 0.0625 | 0.125 | 0.25;
 type AppState = {
   scene: THREE.Scene;
   renderer: THREE.WebGLRenderer;
@@ -244,6 +246,7 @@ type AppState = {
   floor: THREE.Mesh;
   grid: THREE.Group;
   gridStep: GridStep;
+  axleSnapStep: AxleSnapStep;
   pieces: Piece[];
   selected?: Piece;
   running: boolean;
@@ -674,6 +677,7 @@ const translations = {
     grid: "Cuadrícula",
     gridSize: "AJUSTE DE MOVIMIENTO",
     noGridSnap: "Sin ajuste",
+    axleSnap: "AJUSTE AXIAL CON SHIFT",
     cache: "caché local activa",
     ldrawCredit: "Usa The LDraw Parts Library",
     categories: {
@@ -818,6 +822,7 @@ const translations = {
     grid: "Grid",
     gridSize: "MOVEMENT SNAP",
     noGridSnap: "No snapping",
+    axleSnap: "SHIFT AXLE SNAP",
     cache: "local cache active",
     ldrawCredit: "Uses The LDraw Parts Library",
     categories: {
@@ -1041,6 +1046,31 @@ const closestConnectorOffset = (
   return connectorAxialOffsets(shaft, socket).reduce((best, candidate) =>
     Math.abs(along - candidate) < Math.abs(along - best) ? candidate : best,
   );
+};
+type AxleSnapPoint = { local: THREE.Vector3; important: boolean };
+const axleSnapPoints = (
+  connector: MeshConnector,
+  includeSecondary = true,
+): AxleSnapPoint[] => {
+  if (connector.role !== "shaft" || connector.kind !== "axle") return [];
+  const sections = Math.max(1, Math.ceil(connector.length ?? 0.5)),
+    half = sections / 2,
+    axis = connector.axis.clone().normalize(),
+    points: AxleSnapPoint[] = [];
+  for (let section = 0; section < sections; section++)
+    points.push({
+      local: connector.local
+        .clone()
+        .addScaledVector(axis, -half + section + 0.5),
+      important: true,
+    });
+  if (includeSecondary)
+    for (let gap = 1; gap < sections; gap++)
+      points.push({
+        local: connector.local.clone().addScaledVector(axis, -half + gap),
+        important: false,
+      });
+  return points;
 };
 const detectShaftTraversals = (pieces: Piece[]) => {
   type SocketEntry = {
@@ -1290,6 +1320,7 @@ export default function Home() {
   const [theme, setTheme] = useState<"dark" | "light">("light"),
     [language, setLanguage] = useState<Language>("en"),
     [gridStep, setGridStep] = useState<GridStep>(0.25),
+    [axleSnapStep, setAxleSnapStep] = useState<AxleSnapStep>(0.25),
     [inspectorWidth, setInspectorWidth] = useState(270),
     [structuralMode, setStructuralMode] = useState<StructuralMode>("rigid"),
     [structuralStiffness, setStructuralStiffness] = useState(85),
@@ -1334,6 +1365,16 @@ export default function Home() {
         savedGridStep === 1
       )
         setGridStep(savedGridStep);
+      const savedAxleSnapText = localStorage.getItem("sim-studio:axle-snap"),
+        savedAxleSnap =
+          savedAxleSnapText === null ? NaN : Number(savedAxleSnapText);
+      if (
+        savedAxleSnap === 0 ||
+        savedAxleSnap === 0.0625 ||
+        savedAxleSnap === 0.125 ||
+        savedAxleSnap === 0.25
+      )
+        setAxleSnapStep(savedAxleSnap);
       setStructuralMode(
         localStorage.getItem("sim-studio:structural-mode") === "flexible"
           ? "flexible"
@@ -1374,6 +1415,12 @@ export default function Home() {
     } catch {}
     if (appRef.current) appRef.current.gridStep = gridStep;
   }, [gridStep]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("sim-studio:axle-snap", String(axleSnapStep));
+    } catch {}
+    if (appRef.current) appRef.current.axleSnapStep = axleSnapStep;
+  }, [axleSnapStep]);
   useEffect(() => {
     try {
       localStorage.setItem("sim-studio:structural-mode", structuralMode);
@@ -2306,6 +2353,36 @@ export default function Home() {
                 localRotation,
               };
               debugRoot.add(volume);
+              for (const snapPoint of axleSnapPoints(connector)) {
+                const highlighted =
+                    manual?.piece === piece &&
+                    manual.connector === connector &&
+                    manual.anchorLocal.distanceTo(snapPoint.local) < 1e-4,
+                  marker = new THREE.Mesh(
+                    new THREE.SphereGeometry(
+                      highlighted ? 0.14 : snapPoint.important ? 0.09 : 0.052,
+                      10,
+                      8,
+                    ),
+                    new THREE.MeshBasicMaterial({
+                      color: highlighted
+                        ? 0xffee38
+                        : snapPoint.important
+                          ? 0xc084fc
+                          : 0x7e22ce,
+                      depthTest: false,
+                      transparent: true,
+                      opacity: snapPoint.important ? 1 : 0.7,
+                    }),
+                  );
+                marker.renderOrder = 43;
+                marker.userData = {
+                  debugKind: "connector-point",
+                  piece,
+                  local: snapPoint.local.clone(),
+                };
+                debugRoot.add(marker);
+              }
             } else {
               const point = new THREE.Mesh(
                 connector.kind === "axle"
@@ -2730,6 +2807,7 @@ export default function Home() {
       floor,
       grid,
       gridStep,
+      axleSnapStep,
       pieces: [],
       connections: [],
       gearLinks: [],
@@ -2797,6 +2875,24 @@ export default function Home() {
           .transformDirection(host.mesh.matrixWorld)
           .normalize(),
       };
+    };
+    const nearestAxleSnapWorld = (
+      host: Piece,
+      connector: MeshConnector,
+      target: THREE.Vector3,
+      includeSecondary = true,
+    ) => {
+      host.mesh.updateMatrixWorld(true);
+      return axleSnapPoints(connector, includeSecondary)
+        .map((snap) => ({
+          ...snap,
+          world: host.mesh.localToWorld(snap.local.clone()),
+        }))
+        .sort(
+          (left, right) =>
+            left.world.distanceToSquared(target) -
+            right.world.distanceToSquared(target),
+        )[0];
     };
     const socketSurfaceHalfThickness = (
       host: Piece,
@@ -2872,6 +2968,7 @@ export default function Home() {
     const connectManual = (
       sourcePiece: Piece,
       sourceConnector: MeshConnector,
+      sourceAnchorLocal: THREE.Vector3,
       targetPiece: Piece,
       targetConnector: MeshConnector,
     ) => {
@@ -2892,10 +2989,17 @@ export default function Home() {
         shaft =
           sourceConnector.role === "shaft" ? sourceConnector : targetConnector,
         alignedSourceWorld = worldConnector(sourcePiece, sourceConnector),
+        alignedSourcePoint = sourcePiece.mesh.localToWorld(
+          sourceAnchorLocal.clone(),
+        ),
         shaftWorld =
-          sourceConnector.role === "shaft" ? alignedSourceWorld : targetWorld,
+          sourceConnector.role === "shaft"
+            ? { ...alignedSourceWorld, point: alignedSourcePoint }
+            : targetWorld,
         socketWorld =
-          sourceConnector.role === "socket" ? alignedSourceWorld : targetWorld,
+          sourceConnector.role === "socket"
+            ? { ...alignedSourceWorld, point: alignedSourcePoint }
+            : targetWorld,
         offset = closestConnectorOffset(
           shaft,
           socket,
@@ -2910,7 +3014,9 @@ export default function Home() {
             sourceConnector.role === "shaft" ? offset : -offset,
           );
       sourcePiece.mesh.position.add(
-        sourceTarget.sub(worldConnector(sourcePiece, sourceConnector).point),
+        sourceTarget.sub(
+          sourcePiece.mesh.localToWorld(sourceAnchorLocal.clone()),
+        ),
       );
       sourcePiece.mesh.updateMatrixWorld(true);
       state.renderBatchesDirty = true;
@@ -3427,15 +3533,12 @@ export default function Home() {
               targetShaftPoint.sub(shaftPoint),
             );
           } else {
-            const shaftPoint = worldConnector(piece, best.shaft).point,
-              along = shaftPoint.clone().sub(socketPoint).dot(targetAxis),
-              targetShaftPoint = socketPoint
-                .clone()
-                .addScaledVector(targetAxis, along),
-              rotated = best.shaft.local.clone().applyQuaternion(
-                piece.mesh.quaternion,
-              );
-            piece.mesh.position.copy(targetShaftPoint).sub(rotated);
+            const snap = nearestAxleSnapWorld(
+              piece,
+              best.shaft,
+              socketPoint,
+            );
+            if (snap) piece.mesh.position.add(socketPoint.clone().sub(snap.world));
           }
           piece.mesh.updateMatrixWorld(true);
           return;
@@ -3517,11 +3620,12 @@ export default function Home() {
           targetSocketPoint.sub(socketPoint),
         );
       } else {
-        const delta = worldConnector(best.rod, best.shaft).point.sub(socketPoint),
-          perpendicular = delta
-            .clone()
-            .addScaledVector(targetAxis, -delta.dot(targetAxis));
-        piece.mesh.position.add(perpendicular);
+        const snap = nearestAxleSnapWorld(
+          best.rod,
+          best.shaft,
+          socketPoint,
+        );
+        if (snap) piece.mesh.position.add(snap.world.clone().sub(socketPoint));
       }
       piece.mesh.updateMatrixWorld(true);
     };
@@ -3540,7 +3644,8 @@ export default function Home() {
       moveOffset = new THREE.Vector2(),
       movingStartPosition = new THREE.Vector3(),
       movingStartPointer = new THREE.Vector2(),
-      movingLinearAxis: THREE.Vector3 | undefined;
+      movingLinearAxis: THREE.Vector3 | undefined,
+      movedAxially = false;
     let lastMiddleDown = { time: 0, x: 0, y: 0 };
     let spring:
       | {
@@ -3569,19 +3674,27 @@ export default function Home() {
       e: { clientX: number; clientY: number },
     ) => {
       const bounds = renderer.domElement.getBoundingClientRect();
+      piece.mesh.updateMatrixWorld(true);
       return piece.connectors
-        .map((connector) => {
-          const projected = worldConnector(piece, connector)
-              .point.clone()
-              .project(camera),
+        .flatMap((connector) => {
+          const anchors =
+            connector.role === "shaft" && connector.kind === "axle"
+              ? axleSnapPoints(connector)
+              : [{ local: connector.local, important: true }];
+          return anchors.map((anchor) => {
+            const projected = piece.mesh
+                .localToWorld(anchor.local.clone())
+                .project(camera),
             x = bounds.left + ((projected.x + 1) * bounds.width) / 2,
             y = bounds.top + ((1 - projected.y) * bounds.height) / 2;
-          return {
-            connector,
-            distance: Math.hypot(x - e.clientX, y - e.clientY),
-          };
+            return {
+              connector,
+              anchorLocal: anchor.local.clone(),
+              distance: Math.hypot(x - e.clientX, y - e.clientY),
+            };
+          });
         })
-        .sort((a, b) => a.distance - b.distance)[0]?.connector;
+        .sort((a, b) => a.distance - b.distance)[0];
     };
     const pieceFrom = (object: THREE.Object3D, instanceId?: number) => {
       const instancePieces = object.userData.instancePieces as Piece[] | undefined;
@@ -4201,12 +4314,13 @@ export default function Home() {
       altCandidate = e.altKey && e.button === 0 ? hitPiece : undefined;
       if (orbit) return;
       if (!state.running && e.ctrlKey && e.button === 0 && hitPiece) {
-        const connector = nearestScreenConnector(hitPiece, e);
-        if (!connector) {
+        const selectedConnector = nearestScreenConnector(hitPiece, e);
+        if (!selectedConnector) {
           setMessage(`${hitPiece.part} no tiene puntos de conexión`);
           return;
         }
-        const origin = worldConnector(hitPiece, connector).point,
+        const { connector, anchorLocal } = selectedConnector,
+          origin = hitPiece.mesh.localToWorld(anchorLocal.clone()),
           line = new THREE.Line(
             new THREE.BufferGeometry().setFromPoints([origin, origin]),
             new THREE.LineBasicMaterial({
@@ -4221,6 +4335,7 @@ export default function Home() {
         state.manualConnect = {
           piece: hitPiece,
           connector,
+          anchorLocal,
           cursor: origin.clone(),
           plane: new THREE.Plane().setFromNormalAndCoplanarPoint(
             camera.getWorldDirection(new THREE.Vector3()),
@@ -4301,6 +4416,7 @@ export default function Home() {
       }
       if (hit && hitPiece) {
         moving = hitPiece;
+        movedAxially = false;
         movingPrepared = false;
         state.selected = moving;
         setSelectedId(moving.id);
@@ -4357,16 +4473,18 @@ export default function Home() {
       if (state.manualConnect) {
         moved = true;
         cast(e);
-        const origin = worldConnector(
-            state.manualConnect.piece,
-            state.manualConnect.connector,
-          ).point,
+        const selectedOrigin = state.manualConnect.piece.mesh.localToWorld(
+            state.manualConnect.anchorLocal.clone(),
+          ),
           candidate = ray.ray.at(
-            camera.position.distanceTo(origin),
+            camera.position.distanceTo(selectedOrigin),
             new THREE.Vector3(),
           );
         state.manualConnect.cursor.copy(candidate);
-        state.manualConnect.line.geometry.setFromPoints([origin, candidate]);
+        state.manualConnect.line.geometry.setFromPoints([
+          selectedOrigin,
+          candidate,
+        ]);
         state.manualConnect.line.geometry.attributes.position.needsUpdate = true;
         return;
       }
@@ -4452,6 +4570,7 @@ export default function Home() {
         } else moved = true;
         const shiftActive = e.shiftKey || shiftHeld;
         if (shiftActive && movingLinearAxis) {
+          movedAxially = true;
           const bounds = canvas.getBoundingClientRect(),
             project = (point: THREE.Vector3) => {
               const projected = point.clone().project(camera);
@@ -4474,8 +4593,8 @@ export default function Home() {
               pixelsPerUnit > 3
                 ? pointerDelta.dot(screenAxis.normalize()) / pixelsPerUnit
                 : -(e.clientY - movingStartPointer.y) * 0.015,
-            snappedDistance = state.gridStep
-              ? Math.round(distance / state.gridStep) * state.gridStep
+            snappedDistance = state.axleSnapStep
+              ? Math.round(distance / state.axleSnapStep) * state.axleSnapStep
               : distance;
           moving.mesh.position
             .copy(movingStartPosition)
@@ -4516,25 +4635,38 @@ export default function Home() {
         const draft = state.manualConnect;
         cast(e);
         let best:
-          | { piece: Piece; connector: MeshConnector; distance: number }
+          | {
+              piece: Piece;
+              connector: MeshConnector;
+              distance: number;
+              cursorDistance: number;
+            }
           | undefined;
         for (const piece of state.pieces) {
           if (piece === draft.piece) continue;
           for (const connector of piece.connectors) {
             if (!pairProfile(draft.connector, connector)) continue;
             const distance = ray.ray.distanceToPoint(
-              worldConnector(piece, connector).point,
-            );
-            if (!best || distance < best.distance)
-              best = { piece, connector, distance };
+                worldConnector(piece, connector).point,
+              ),
+              cursorDistance = worldConnector(piece, connector).point.distanceTo(
+                draft.cursor,
+              );
+            if (
+              distance <= 0.45 &&
+              cursorDistance <= 2 &&
+              (!best || cursorDistance < best.cursorDistance)
+            )
+              best = { piece, connector, distance, cursorDistance };
           }
         }
         let connected = false;
-        if (best && best.distance <= 2) {
+        if (best) {
           state.recordHistory();
           connected = connectManual(
             draft.piece,
             draft.connector,
+            draft.anchorLocal,
             best.piece,
             best.connector,
           );
@@ -4599,12 +4731,13 @@ export default function Home() {
       altCandidate = undefined;
       const movedPiece = moving;
       if (moving && moved) {
-        connect(moving);
+        if (!movedAxially) connect(moving);
         void verifyConnectionsAsync();
       }
       moving = undefined;
       movingPrepared = false;
       movingLinearAxis = undefined;
+      movedAxially = false;
       if (movedPiece?.renderBatched && moved)
         state.rebuildRenderBatches();
       setConnectionRevision((value) => value + 1);
@@ -8088,6 +8221,19 @@ export default function Home() {
                 className={gridStep === step ? "active" : ""}
                 disabled={running}
                 onClick={() => setGridStep(step)}
+              >
+                {step === 0 ? t.noGridSnap : `${step} u`}
+              </button>
+            ))}
+          </div>
+          <label className="grid-setting-title">{t.axleSnap}</label>
+          <div className="grid-setting" role="group" aria-label={t.axleSnap}>
+            {([0.25, 0.125, 0.0625, 0] as AxleSnapStep[]).map((step) => (
+              <button
+                key={step}
+                className={axleSnapStep === step ? "active" : ""}
+                disabled={running}
+                onClick={() => setAxleSnapStep(step)}
               >
                 {step === 0 ? t.noGridSnap : `${step} u`}
               </button>
