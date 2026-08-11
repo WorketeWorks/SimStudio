@@ -236,12 +236,14 @@ type PhysicsSettings = {
   axleRotationFriction: number;
   axleTolerance: number;
 };
+type GridStep = 0 | 0.25 | 0.5 | 1;
 type AppState = {
   scene: THREE.Scene;
   renderer: THREE.WebGLRenderer;
   camera: THREE.PerspectiveCamera;
   floor: THREE.Mesh;
   grid: THREE.Group;
+  gridStep: GridStep;
   pieces: Piece[];
   selected?: Piece;
   running: boolean;
@@ -669,7 +671,9 @@ const translations = {
       "Las conexiones fijas se fusionan. La rigidez controla las articulaciones móviles.",
     flexibleStructureHelp:
       "Cada pieza conserva su cuerpo y las conexiones fijas pueden flexionarse ligeramente.",
-    grid: "Cuadrícula 0.4 u",
+    grid: "Cuadrícula",
+    gridSize: "AJUSTE DE MOVIMIENTO",
+    noGridSnap: "Sin ajuste",
     cache: "caché local activa",
     ldrawCredit: "Usa The LDraw Parts Library",
     categories: {
@@ -811,7 +815,9 @@ const translations = {
       "Fixed connections are merged. Stiffness controls the moving joints.",
     flexibleStructureHelp:
       "Every part keeps its own body and fixed connections may flex slightly.",
-    grid: "0.4 u grid",
+    grid: "Grid",
+    gridSize: "MOVEMENT SNAP",
+    noGridSnap: "No snapping",
     cache: "local cache active",
     ldrawCredit: "Uses The LDraw Parts Library",
     categories: {
@@ -1283,6 +1289,7 @@ export default function Home() {
     [importDraft, setImportDraft] = useState<ImportDraft | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">("light"),
     [language, setLanguage] = useState<Language>("en"),
+    [gridStep, setGridStep] = useState<GridStep>(0.25),
     [inspectorWidth, setInspectorWidth] = useState(270),
     [structuralMode, setStructuralMode] = useState<StructuralMode>("rigid"),
     [structuralStiffness, setStructuralStiffness] = useState(85),
@@ -1318,6 +1325,15 @@ export default function Home() {
       setLanguage(
         localStorage.getItem("sim-studio:language") === "es" ? "es" : "en",
       );
+      const savedGridStepText = localStorage.getItem("sim-studio:grid-step"),
+        savedGridStep = savedGridStepText === null ? NaN : Number(savedGridStepText);
+      if (
+        savedGridStep === 0 ||
+        savedGridStep === 0.25 ||
+        savedGridStep === 0.5 ||
+        savedGridStep === 1
+      )
+        setGridStep(savedGridStep);
       setStructuralMode(
         localStorage.getItem("sim-studio:structural-mode") === "flexible"
           ? "flexible"
@@ -1352,6 +1368,12 @@ export default function Home() {
     } catch {}
     document.documentElement.lang = language;
   }, [language]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("sim-studio:grid-step", String(gridStep));
+    } catch {}
+    if (appRef.current) appRef.current.gridStep = gridStep;
+  }, [gridStep]);
   useEffect(() => {
     try {
       localStorage.setItem("sim-studio:structural-mode", structuralMode);
@@ -2707,6 +2729,7 @@ export default function Home() {
       camera,
       floor,
       grid,
+      gridStep,
       pieces: [],
       connections: [],
       gearLinks: [],
@@ -4314,9 +4337,13 @@ export default function Home() {
         const ground = ray.intersectObject(floor)[0];
         if (ground) {
           const target = new THREE.Vector3(
-            Math.round(ground.point.x / 0.4) * 0.4,
+            state.gridStep
+              ? Math.round(ground.point.x / state.gridStep) * state.gridStep
+              : ground.point.x,
             0,
-            Math.round(ground.point.z / 0.4) * 0.4,
+            state.gridStep
+              ? Math.round(ground.point.z / state.gridStep) * state.gridStep
+              : ground.point.z,
           );
           state.pendingPlacement.pieces.forEach((piece, index) => {
             piece.mesh.position.copy(target).add(state.pendingPlacement!.offsets[index]);
@@ -4447,25 +4474,35 @@ export default function Home() {
               pixelsPerUnit > 3
                 ? pointerDelta.dot(screenAxis.normalize()) / pixelsPerUnit
                 : -(e.clientY - movingStartPointer.y) * 0.015,
-            snappedDistance = Math.round(distance / 0.1) * 0.1;
+            snappedDistance = state.gridStep
+              ? Math.round(distance / state.gridStep) * state.gridStep
+              : distance;
           moving.mesh.position
             .copy(movingStartPosition)
             .addScaledVector(movingLinearAxis, snappedDistance);
         } else if (shiftActive)
-          moving.mesh.position.y =
-            Math.round(
-              (movingStartPosition.y -
-                (e.clientY - movingStartPointer.y) * 0.0125) /
-                0.2,
-            ) * 0.2;
+          moving.mesh.position.y = state.gridStep
+            ? Math.round(
+                (movingStartPosition.y -
+                  (e.clientY - movingStartPointer.y) * 0.0125) /
+                  state.gridStep,
+              ) * state.gridStep
+            : movingStartPosition.y -
+              (e.clientY - movingStartPointer.y) * 0.0125;
         else {
           cast(e);
           const ground = ray.intersectObject(floor)[0];
           if (ground) {
             moving.mesh.position.x =
-              Math.round((ground.point.x + moveOffset.x) / 0.4) * 0.4;
+              state.gridStep
+                ? Math.round((ground.point.x + moveOffset.x) / state.gridStep) *
+                  state.gridStep
+                : ground.point.x + moveOffset.x;
             moving.mesh.position.z =
-              Math.round((ground.point.z + moveOffset.y) / 0.4) * 0.4;
+              state.gridStep
+                ? Math.round((ground.point.z + moveOffset.y) / state.gridStep) *
+                  state.gridStep
+                : ground.point.z + moveOffset.y;
           }
         }
         previous = { x: e.clientX, y: e.clientY };
@@ -4587,9 +4624,13 @@ export default function Home() {
           void addPart(
             p,
             new THREE.Vector3(
-              Math.round(ground.point.x / 0.4) * 0.4,
+              state.gridStep
+                ? Math.round(ground.point.x / state.gridStep) * state.gridStep
+                : ground.point.x,
               0,
-              Math.round(ground.point.z / 0.4) * 0.4,
+              state.gridStep
+                ? Math.round(ground.point.z / state.gridStep) * state.gridStep
+                : ground.point.z,
             ),
           ).then((piece) => {
             if (!piece) return;
@@ -7383,12 +7424,12 @@ export default function Home() {
             </div>
             <label>{t.move}</label>
             <div className="control-grid">
-              <button onClick={() => nudge("x", -0.4)}>X−</button>
-              <button onClick={() => nudge("y", 0.4)}>Y+</button>
-              <button onClick={() => nudge("z", -0.4)}>Z−</button>
-              <button onClick={() => nudge("x", 0.4)}>X+</button>
-              <button onClick={() => nudge("y", -0.4)}>Y−</button>
-              <button onClick={() => nudge("z", 0.4)}>Z+</button>
+              <button onClick={() => nudge("x", -(gridStep || 0.25))}>X−</button>
+              <button onClick={() => nudge("y", gridStep || 0.25)}>Y+</button>
+              <button onClick={() => nudge("z", -(gridStep || 0.25))}>Z−</button>
+              <button onClick={() => nudge("x", gridStep || 0.25)}>X+</button>
+              <button onClick={() => nudge("y", -(gridStep || 0.25))}>Y−</button>
+              <button onClick={() => nudge("z", gridStep || 0.25)}>Z+</button>
             </div>
             <div className="angle-head">
               <label>{t.rotateAny}</label>
@@ -8039,6 +8080,19 @@ export default function Home() {
           </button>
         </div>
         <div className="physics">
+          <label className="grid-setting-title">{t.gridSize}</label>
+          <div className="grid-setting" role="group" aria-label={t.gridSize}>
+            {([0.25, 0.5, 1, 0] as GridStep[]).map((step) => (
+              <button
+                key={step}
+                className={gridStep === step ? "active" : ""}
+                disabled={running}
+                onClick={() => setGridStep(step)}
+              >
+                {step === 0 ? t.noGridSnap : `${step} u`}
+              </button>
+            ))}
+          </div>
           <label className="structural-title">{t.structuralBehavior}</label>
           <div className="structural-mode" role="group" aria-label={t.structuralBehavior}>
             <button
@@ -8134,7 +8188,7 @@ export default function Home() {
         </div>
       </aside>
       <footer>
-        <span>● {t.grid}</span>
+        <span>● {t.grid}: {gridStep ? `${gridStep} u` : t.noGridSnap}</span>
         <a href="https://www.ldraw.org/" target="_blank" rel="noreferrer">
           {t.ldrawCredit}
         </a>
