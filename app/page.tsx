@@ -12,7 +12,6 @@ import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { LDrawLoader } from "three/addons/loaders/LDrawLoader.js";
 import { LDrawConditionalLineMaterial } from "three/addons/materials/LDrawConditionalLineMaterial.js";
-import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import {
   ldrawToScenePlacement,
   makeLDR,
@@ -1197,7 +1196,7 @@ export default function Home() {
       "normal",
     ),
     [importDraft, setImportDraft] = useState<ImportDraft | null>(null);
-  const [theme, setTheme] = useState<"dark" | "light">("dark"),
+  const [theme, setTheme] = useState<"dark" | "light">("light"),
     [language, setLanguage] = useState<Language>("es"),
     [inspectorWidth, setInspectorWidth] = useState(270),
     [structuralMode, setStructuralMode] = useState<StructuralMode>("rigid"),
@@ -1226,7 +1225,7 @@ export default function Home() {
     try {
       setLastLog(localStorage.getItem("sim-studio:physics-log") ?? "");
       setTheme(
-        localStorage.getItem("sim-studio:theme") === "light" ? "light" : "dark",
+        localStorage.getItem("sim-studio:theme") === "dark" ? "dark" : "light",
       );
       setLanguage(
         localStorage.getItem("sim-studio:language") === "en" ? "en" : "es",
@@ -1424,16 +1423,21 @@ export default function Home() {
       collisionCache = new Map<string, CollisionPrimitive[]>(),
       gearCollisionCache = new Map<string, CollisionPrimitive[]>();
     const assetUrl = (path: string) => new URL(path, document.baseURI).href;
+    const modelSourceIdentity = (p: CatalogPart) =>
+      p.geometry
+        ? `asset:${p.geometry}`
+        : `ldraw:${p.modelPart ?? p.resolvedPart ?? p.part}`;
+    const modelRenderKey = (p: CatalogPart) =>
+      `${modelSourceIdentity(p)}:source-color:${p.sourceColor ?? p.color}:display-color:${p.color}`;
     const loadPartModel = async (p: CatalogPart) => {
       if (p.geometry && invalidPackagedGeometry.has(p.part)) {
         p.geometry = undefined;
         p.sourceKind = "ldraw-network";
       }
-      const key = `${p.part}:${p.color}`,
-        sourceColor = p.sourceColor ?? p.color,
-        sourceKey = p.geometry
-          ? `asset:${p.geometry}`
-          : `ldraw:${p.modelPart ?? p.part}`,
+      const sourceColor = p.sourceColor ?? p.color,
+        sourceIdentity = modelSourceIdentity(p),
+        sourceKey = `${sourceIdentity}:source-color:${sourceColor}`,
+        key = `${sourceKey}:display-color:${p.color}`,
         cachedSource = modelSourceCache.get(sourceKey),
         resolvedFile = `${p.modelPart ?? p.part}.dat`;
       Object.assign(
@@ -1836,7 +1840,7 @@ export default function Home() {
       return { connectors, colliders, gearColliders };
     };
     const preloadPart = async (p: CatalogPart) => {
-      const preloadKey = `${p.part}:${p.color}`;
+      const preloadKey = modelRenderKey(p);
       if (preloaded.has(preloadKey)) return;
       if (preloading.has(preloadKey)) return preloading.get(preloadKey);
       const task = loadPartModel(p)
@@ -2358,50 +2362,6 @@ export default function Home() {
         outlineBatchCount = 0;
       let hiddenOriginalMeshes = 0;
       state.renderLineBatchRoot = undefined;
-      const materialFingerprint = (material: THREE.Material) => {
-        const lineMaterial = material as THREE.Material & {
-          color?: THREE.Color;
-          emissive?: THREE.Color;
-          roughness?: number;
-          metalness?: number;
-          flatShading?: boolean;
-          linewidth?: number;
-          dashed?: boolean;
-          fog?: boolean;
-          map?: THREE.Texture | null;
-          normalMap?: THREE.Texture | null;
-          roughnessMap?: THREE.Texture | null;
-          metalnessMap?: THREE.Texture | null;
-          uniforms?: Record<string, { value?: unknown }>;
-        };
-        return JSON.stringify({
-          type: (lineMaterial as THREE.Material & {
-            isLDrawConditionalLineMaterial?: boolean;
-          }).isLDrawConditionalLineMaterial
-            ? "LDrawConditionalLineMaterial"
-            : material.type,
-          color: lineMaterial.color?.getHexString() ?? null,
-          emissive: lineMaterial.emissive?.getHexString() ?? null,
-          roughness: lineMaterial.roughness ?? null,
-          metalness: lineMaterial.metalness ?? null,
-          flatShading: lineMaterial.flatShading ?? null,
-          map: lineMaterial.map?.uuid ?? null,
-          normalMap: lineMaterial.normalMap?.uuid ?? null,
-          roughnessMap: lineMaterial.roughnessMap?.uuid ?? null,
-          metalnessMap: lineMaterial.metalnessMap?.uuid ?? null,
-          opacity: material.opacity,
-          transparent: material.transparent,
-          depthTest: material.depthTest,
-          depthWrite: material.depthWrite,
-          blending: material.blending,
-          vertexColors: material.vertexColors,
-          linewidth: lineMaterial.linewidth ?? null,
-          dashed: lineMaterial.dashed ?? null,
-          fog: lineMaterial.fog ?? null,
-          alphaTest: material.alphaTest,
-          side: material.side,
-        });
-      };
       const cloneGeometryRange = (
         source: THREE.BufferGeometry,
         start: number,
@@ -2439,24 +2399,26 @@ export default function Home() {
         piece.mesh.traverse((child) => {
           if (child instanceof THREE.Mesh) child.castShadow = false;
         });
-        const key = `${piece.geometry ?? piece.modelPart ?? piece.part}:${piece.color}`,
+        const key = modelRenderKey(piece),
           group = groups.get(key) ?? [];
         group.push(piece);
         groups.set(key, group);
       });
       groups.forEach((pieces) => {
+        // Instancing a single part cannot save a draw call and makes its
+        // direct LDraw hierarchy unnecessarily diverge from the import
+        // preview. Keep unique parts untouched; only repeated references are
+        // worth batching.
+        if (pieces.length < 2) return;
         const template = pieces[0];
         template.mesh.updateMatrixWorld(true);
-        const templateMeshes: THREE.Mesh[] = [],
-          meshGroups = new Map<
-            string,
-            { material: THREE.Material; geometries: THREE.BufferGeometry[] }
-          >();
+        const templateMeshes: THREE.Mesh[] = [];
         template.mesh.traverse((child) => {
           if (child instanceof THREE.Mesh) templateMeshes.push(child);
         });
         if (!templateMeshes.length) return;
         const inverseWrapper = template.mesh.matrixWorld.clone().invert();
+        let createdBatches = 0;
         templateMeshes.forEach((child) => {
           const materials = Array.isArray(child.material)
               ? child.material
@@ -2477,30 +2439,8 @@ export default function Home() {
             localTransform = inverseWrapper.clone().multiply(child.matrixWorld);
           ranges.forEach(({ start, count, material }) => {
             if (!material || count <= 0) return;
-            const geometry = cloneGeometryRange(child.geometry, start, count);
-            geometry.applyMatrix4(localTransform);
-            const attributes = Object.entries(geometry.attributes)
-                .map(
-                  ([name, attribute]) =>
-                    `${name}:${attribute.itemSize}:${attribute.normalized}:${attribute.array.constructor.name}`,
-                )
-                .sort()
-                .join("|"),
-              key = `${materialFingerprint(material)}:${attributes}`,
-              group = meshGroups.get(key) ?? { material, geometries: [] };
-            group.geometries.push(geometry);
-            meshGroups.set(key, group);
-          });
-        });
-        meshGroups.forEach(({ material, geometries }) => {
-          const merged =
-              geometries.length > 1
-                ? mergeGeometries(geometries, false)
-                : undefined,
-            batches = merged ? [merged] : geometries;
-          if (merged) geometries.forEach((geometry) => geometry.dispose());
-          batches.forEach((geometry) => {
-            const instance = new THREE.InstancedMesh(
+            const geometry = cloneGeometryRange(child.geometry, start, count),
+              instance = new THREE.InstancedMesh(
                 geometry,
                 material,
                 pieces.length,
@@ -2517,11 +2457,15 @@ export default function Home() {
             state.renderBatchItems.push({
               mesh: instance,
               pieces,
-              localMatrix: new THREE.Matrix4(),
+              // Preserve the exact hierarchy transform used by the direct
+              // preview. Baking and merging differently transformed LDraw
+              // children can displace primitives in complex parts.
+              localMatrix: localTransform.clone(),
             });
+            createdBatches++;
           });
         });
-        if (!meshGroups.size) return;
+        if (!createdBatches) return;
         pieces.forEach((piece) => {
           piece.mesh.traverse((child) => {
             if (child instanceof THREE.Mesh) {
@@ -2586,7 +2530,7 @@ export default function Home() {
       if (!state.bulkLoading) setMessage(`Cargando ${p.part}…`);
       try {
         const exact = await loadPartModel(p);
-        preloaded.add(`${p.part}:${p.color}`);
+        preloaded.add(modelRenderKey(p));
         prepareModel(exact);
         exact.traverse((object) => {
           if (object instanceof THREE.Mesh) {
@@ -4809,37 +4753,54 @@ export default function Home() {
     const part = reference.trim().replace(/\.dat$/i, "");
     if (!part) return;
     setCatalogBusy(true);
-    let found: CatalogPart = {
-      part,
-      name: `Pieza LDraw ${part}`,
-      kind: "beam",
-      color: 71,
-      origin: "catalog-search",
-      sourceKind: "ldraw-network",
-      requestedPart: part,
-      resolvedPart: part,
-      catalogQuery: part,
-    };
-    try {
-      const d = await fetch(`/api/parts?q=${encodeURIComponent(part)}`).then(
-        (r) => r.json(),
+    const normalizedPart = part.toLowerCase(),
+      packaged = paletteParts.find(
+        (candidate) =>
+          candidate.part.toLowerCase() === normalizedPart ||
+          candidate.modelPart?.toLowerCase() === normalizedPart,
       );
-      const exact = d.items?.find(
-        (x: { part: string }) => x.part.toLowerCase() === part.toLowerCase(),
-      );
-      if (exact)
-        found = {
-          ...exact,
-          kind: kindFor("", exact.name),
-          color: exact.color ?? 71,
+    let found: CatalogPart = packaged
+      ? {
+          ...packaged,
           origin: "catalog-search",
-          sourceKind: exact.geometry ? "packaged-cache" : "external-catalog",
+          sourceKind: packaged.geometry ? "packaged-cache" : "ldraw-network",
           requestedPart: part,
-          catalogReturnedPart: exact.part,
-          resolvedPart: exact.modelPart ?? exact.part,
+          catalogReturnedPart: packaged.part,
+          resolvedPart: packaged.modelPart ?? packaged.part,
+          catalogQuery: part,
+        }
+      : {
+          part,
+          name: `Pieza LDraw ${part}`,
+          kind: "beam",
+          color: 71,
+          origin: "catalog-search",
+          sourceKind: "ldraw-network",
+          requestedPart: part,
+          resolvedPart: part,
           catalogQuery: part,
         };
-    } catch {}
+    if (!packaged)
+      try {
+        const d = await fetch(`/api/parts?q=${encodeURIComponent(part)}`).then(
+          (r) => r.json(),
+        );
+        const exact = d.items?.find(
+          (x: { part: string }) => x.part.toLowerCase() === normalizedPart,
+        );
+        if (exact)
+          found = {
+            ...exact,
+            kind: kindFor("", exact.name),
+            color: exact.color ?? 71,
+            origin: "catalog-search",
+            sourceKind: exact.geometry ? "packaged-cache" : "external-catalog",
+            requestedPart: part,
+            catalogReturnedPart: exact.part,
+            resolvedPart: exact.modelPart ?? exact.part,
+            catalogQuery: part,
+          };
+      } catch {}
     setImported((old) =>
       old.some((x) => x.part === found.part) ? old : [found, ...old],
     );
