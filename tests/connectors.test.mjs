@@ -6,6 +6,8 @@ import {
   approximateCollisionPrimitives,
   approximateGearCollisionPrimitives,
   detectConnectorHoles,
+  straightAxleCollisionPrimitives,
+  straightAxleConnectors,
 } from "../app/connectors.ts";
 import { preloadedConnectionMaps } from "../app/connection-maps.ts";
 import { preloadedCollisionMaps } from "../app/collision-maps.ts";
@@ -114,6 +116,25 @@ test("full beams use a one-unit cross section", () => {
   assert.equal(single.length, 1);
   assert.equal(single[0].radius, 0.5);
   assert.equal(single[0].halfHeight, 0.5);
+});
+
+test("scales the reviewed cross-axle template by stud length", () => {
+  for (const studs of [2, 4, 12]) {
+    const name = `Technic Axle ${studs}${studs === 2 ? " Notched" : ""}`,
+      connectors = straightAxleConnectors(name),
+      colliders = straightAxleCollisionPrimitives(name);
+    assert.equal(connectors.length, 1);
+    assert.equal(connectors[0].length, studs);
+    assert.equal(connectors[0].diameter, 0.6);
+    assert.deepEqual(connectors[0].axis.toArray(), [1, 0, 0]);
+    assert.equal(colliders.length, 2);
+    assert.deepEqual(colliders[0].size.toArray(), [studs, 0.2, 0.6]);
+    assert.deepEqual(colliders[1].size.toArray(), [studs, 0.6, 0.2]);
+  }
+  assert.equal(
+    straightAxleCollisionPrimitives("Technic Axle 4 with Stop"),
+    undefined,
+  );
 });
 
 test("gear contact colliders sit inside the normal tooth envelope", () => {

@@ -427,6 +427,61 @@ export type CollisionPrimitive = {
   rotation: THREE.Quaternion;
 };
 
+/**
+ * Returns the nominal stud length for a plain, straight Technic axle.
+ * Axles with stops, bushes, pin holes or other extra geometry deliberately do
+ * not use this template because they need their own compound collider.
+ */
+export function straightAxleStudLength(name: string) {
+  const match = name.match(/^Technic Axle\s+(\d+)(?:\s+Notched)?$/i);
+  if (!match) return undefined;
+  const length = Number(match[1]);
+  return Number.isFinite(length) && length > 0 ? length : undefined;
+}
+
+/** Reviewed cross-axle map template exported from Sim Studio. */
+export function straightAxleConnectors(
+  name: string,
+): MeshConnector[] | undefined {
+  const length = straightAxleStudLength(name);
+  if (!length) return undefined;
+  return [
+    {
+      local: new THREE.Vector3(0, 0, 0),
+      axis: new THREE.Vector3(1, 0, 0),
+      kind: "axle",
+      role: "shaft",
+      diameter: 0.6,
+      length,
+    },
+  ];
+}
+
+/**
+ * Cross-shaped compound collider. The supplied unit map is multiplied by the
+ * axle length: axle 2 => X=2, axle 4 => X=4, axle 12 => X=12.
+ */
+export function straightAxleCollisionPrimitives(
+  name: string,
+): CollisionPrimitive[] | undefined {
+  const length = straightAxleStudLength(name);
+  if (!length) return undefined;
+  return [
+    {
+      shape: "box",
+      center: new THREE.Vector3(0, 0, 0),
+      size: new THREE.Vector3(length, 0.2, 0.6),
+      rotation: new THREE.Quaternion(0, 0, 0, 1),
+    },
+    {
+      shape: "box",
+      center: new THREE.Vector3(0, 0, 0),
+      size: new THREE.Vector3(length, 0.6, 0.2),
+      rotation: new THREE.Quaternion(0, 0, 0, 1),
+    },
+  ];
+}
+
 const canonicalDirection = (direction: THREE.Vector3) => {
   const result = direction.clone().normalize();
   const values = [result.x, result.y, result.z],

@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { extname, join, normalize, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import * as THREE from "three";
 import { LDrawLoader } from "three/addons/loaders/LDrawLoader.js";
 import { LDrawConditionalLineMaterial } from "three/addons/materials/LDrawConditionalLineMaterial.js";
@@ -13,6 +13,8 @@ import {
   hybridAxlePinConnectors,
   objectLocalBounds,
   rodConnectors,
+  straightAxleCollisionPrimitives,
+  straightAxleConnectors,
 } from "../app/connectors.ts";
 import { preloadedConnectionMaps } from "../app/connection-maps.ts";
 import { paletteParts } from "../app/palette.ts";
@@ -26,7 +28,9 @@ globalThis.ProgressEvent ??= class ProgressEvent extends Event {
   }
 };
 
-const repositoryRoot = resolve(process.argv[2] || new URL("..", import.meta.url).pathname),
+const repositoryRoot = resolve(
+    process.argv[2] || fileURLToPath(new URL("..", import.meta.url)),
+  ),
   publicRoot = join(repositoryRoot, "public"),
   ldrawRoot = join(publicRoot, "ldraw"),
   catalogRoot = join(publicRoot, "catalog"),
@@ -221,7 +225,9 @@ try {
     wrapper.add(exact);
     wrapper.updateMatrixWorld(true);
     let connectors;
-    if (preloadedConnectionMaps[part.part])
+    if (straightAxleConnectors(part.name))
+      connectors = straightAxleConnectors(part.name);
+    else if (preloadedConnectionMaps[part.part])
       connectors = vectors(preloadedConnectionMaps[part.part]);
     else if (isPinPart(part)) {
       const shafts = /^Technic Axle Pin/i.test(part.name)
@@ -276,7 +282,9 @@ try {
             ? "half"
             : connector.kind,
       }));
-    const colliders = approximateCollisionPrimitives(wrapper, part.name, connectors),
+    const colliders =
+        straightAxleCollisionPrimitives(part.name) ??
+        approximateCollisionPrimitives(wrapper, part.name, connectors),
       gearColliders = part.gear
         ? approximateGearCollisionPrimitives(colliders)
         : [],

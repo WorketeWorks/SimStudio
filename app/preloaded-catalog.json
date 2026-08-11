@@ -395,25 +395,47 @@
           ],
           "kind": "axle",
           "role": "shaft",
-          "diameter": 0.6000000000000002,
-          "length": 3.76
+          "diameter": 0.6,
+          "length": 4
         }
       ],
       "colliders": [
         {
-          "shape": "cylinder",
+          "shape": "box",
           "center": [
             0,
             0,
             0
           ],
-          "radius": 0.24600000000000008,
-          "halfHeight": 1.88,
+          "size": [
+            4,
+            0.2,
+            0.6
+          ],
           "rotation": [
             0,
             0,
-            -0.7071067811865475,
-            0.7071067811865475
+            0,
+            1
+          ]
+        },
+        {
+          "shape": "box",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "size": [
+            4,
+            0.6,
+            0.2
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
           ]
         }
       ],
@@ -449,25 +471,47 @@
           ],
           "kind": "axle",
           "role": "shaft",
-          "diameter": 0.6000000000000002,
-          "length": 5.64
+          "diameter": 0.6,
+          "length": 6
         }
       ],
       "colliders": [
         {
-          "shape": "cylinder",
+          "shape": "box",
           "center": [
             0,
             0,
             0
           ],
-          "radius": 0.24600000000000008,
-          "halfHeight": 2.82,
+          "size": [
+            6,
+            0.2,
+            0.6
+          ],
           "rotation": [
             0,
             0,
-            -0.7071067811865475,
-            0.7071067811865475
+            0,
+            1
+          ]
+        },
+        {
+          "shape": "box",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "size": [
+            6,
+            0.6,
+            0.2
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
           ]
         }
       ],
@@ -503,25 +547,47 @@
           ],
           "kind": "axle",
           "role": "shaft",
-          "diameter": 0.6000000000000002,
-          "length": 7.52
+          "diameter": 0.6,
+          "length": 8
         }
       ],
       "colliders": [
         {
-          "shape": "cylinder",
+          "shape": "box",
           "center": [
             0,
             0,
             0
           ],
-          "radius": 0.24600000000000008,
-          "halfHeight": 3.76,
+          "size": [
+            8,
+            0.2,
+            0.6
+          ],
           "rotation": [
             0,
             0,
-            -0.7071067811865475,
-            0.7071067811865475
+            0,
+            1
+          ]
+        },
+        {
+          "shape": "box",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "size": [
+            8,
+            0.6,
+            0.2
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
           ]
         }
       ],
@@ -535,6 +601,84 @@
           4,
           0.3000000000000001,
           0.3000000000000001
+        ]
+      }
+    },
+    "3708": {
+      "name": "Technic Axle 12",
+      "family": "axles",
+      "modelPart": "3708",
+      "modelFile": "parts/3708.dat",
+      "connectors": [
+        {
+          "local": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "axle",
+          "role": "shaft",
+          "diameter": 0.6,
+          "length": 12
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "box",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "size": [
+            12,
+            0.2,
+            0.6
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        {
+          "shape": "box",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "size": [
+            12,
+            0.6,
+            0.2
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -6,
+          -0.3,
+          -0.3
+        ],
+        "max": [
+          6,
+          0.3,
+          0.3
         ]
       }
     },
@@ -640,25 +784,47 @@
           ],
           "kind": "axle",
           "role": "shaft",
-          "diameter": 0.6000000000000002,
-          "length": 9.399999999999999
+          "diameter": 0.6,
+          "length": 10
         }
       ],
       "colliders": [
         {
-          "shape": "cylinder",
+          "shape": "box",
           "center": [
             0,
             0,
             0
           ],
-          "radius": 0.24600000000000008,
-          "halfHeight": 4.699999999999999,
+          "size": [
+            10,
+            0.2,
+            0.6
+          ],
           "rotation": [
             0,
             0,
-            -0.7071067811865475,
-            0.7071067811865475
+            0,
+            1
+          ]
+        },
+        {
+          "shape": "box",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "size": [
+            10,
+            0.6,
+            0.2
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
           ]
         }
       ],
@@ -892,25 +1058,47 @@
           ],
           "kind": "axle",
           "role": "shaft",
-          "diameter": 0.6000000000000002,
-          "length": 2.82
+          "diameter": 0.6,
+          "length": 3
         }
       ],
       "colliders": [
         {
-          "shape": "cylinder",
+          "shape": "box",
           "center": [
             0,
             0,
             0
           ],
-          "radius": 0.24600000000000008,
-          "halfHeight": 1.41,
+          "size": [
+            3,
+            0.2,
+            0.6
+          ],
           "rotation": [
             0,
             0,
-            -0.7071067811865475,
-            0.7071067811865475
+            0,
+            1
+          ]
+        },
+        {
+          "shape": "box",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "size": [
+            3,
+            0.6,
+            0.2
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
           ]
         }
       ],
@@ -2948,25 +3136,47 @@
           ],
           "kind": "axle",
           "role": "shaft",
-          "diameter": 0.6000000000000002,
-          "length": 10.34
+          "diameter": 0.6,
+          "length": 11
         }
       ],
       "colliders": [
         {
-          "shape": "cylinder",
+          "shape": "box",
           "center": [
             0,
             0,
             0
           ],
-          "radius": 0.24600000000000008,
-          "halfHeight": 5.17,
+          "size": [
+            11,
+            0.2,
+            0.6
+          ],
           "rotation": [
             0,
             0,
-            -0.7071067811865475,
-            0.7071067811865475
+            0,
+            1
+          ]
+        },
+        {
+          "shape": "box",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "size": [
+            11,
+            0.6,
+            0.2
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
           ]
         }
       ],
@@ -3961,25 +4171,47 @@
           ],
           "kind": "axle",
           "role": "shaft",
-          "diameter": 0.6000000000000002,
-          "length": 1.88
+          "diameter": 0.6,
+          "length": 2
         }
       ],
       "colliders": [
         {
-          "shape": "cylinder",
+          "shape": "box",
           "center": [
             0,
             0,
             0
           ],
-          "radius": 0.24600000000000008,
-          "halfHeight": 0.94,
+          "size": [
+            2,
+            0.2,
+            0.6
+          ],
           "rotation": [
             0,
             0,
-            -0.7071067811865475,
-            0.7071067811865475
+            0,
+            1
+          ]
+        },
+        {
+          "shape": "box",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "size": [
+            2,
+            0.6,
+            0.2
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
           ]
         }
       ],
@@ -4371,25 +4603,47 @@
           ],
           "kind": "axle",
           "role": "shaft",
-          "diameter": 0.6000000000000002,
-          "length": 4.699999999999999
+          "diameter": 0.6,
+          "length": 5
         }
       ],
       "colliders": [
         {
-          "shape": "cylinder",
+          "shape": "box",
           "center": [
             0,
             0,
             0
           ],
-          "radius": 0.24600000000000008,
-          "halfHeight": 2.3499999999999996,
+          "size": [
+            5,
+            0.2,
+            0.6
+          ],
           "rotation": [
             0,
             0,
-            -0.7071067811865475,
-            0.7071067811865475
+            0,
+            1
+          ]
+        },
+        {
+          "shape": "box",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "size": [
+            5,
+            0.6,
+            0.2
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
           ]
         }
       ],
@@ -8366,25 +8620,47 @@
           ],
           "kind": "axle",
           "role": "shaft",
-          "diameter": 0.6000000000000002,
-          "length": 6.58
+          "diameter": 0.6,
+          "length": 7
         }
       ],
       "colliders": [
         {
-          "shape": "cylinder",
+          "shape": "box",
           "center": [
             0,
             0,
             0
           ],
-          "radius": 0.24600000000000008,
-          "halfHeight": 3.29,
+          "size": [
+            7,
+            0.2,
+            0.6
+          ],
           "rotation": [
             0,
             0,
-            -0.7071067811865475,
-            0.7071067811865475
+            0,
+            1
+          ]
+        },
+        {
+          "shape": "box",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "size": [
+            7,
+            0.6,
+            0.2
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
           ]
         }
       ],
@@ -9212,25 +9488,47 @@
           ],
           "kind": "axle",
           "role": "shaft",
-          "diameter": 0.6000000000000002,
-          "length": 8.459999999999999
+          "diameter": 0.6,
+          "length": 9
         }
       ],
       "colliders": [
         {
-          "shape": "cylinder",
+          "shape": "box",
           "center": [
             0,
             0,
             0
           ],
-          "radius": 0.24600000000000008,
-          "halfHeight": 4.2299999999999995,
+          "size": [
+            9,
+            0.2,
+            0.6
+          ],
           "rotation": [
             0,
             0,
-            -0.7071067811865475,
-            0.7071067811865475
+            0,
+            1
+          ]
+        },
+        {
+          "shape": "box",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "size": [
+            9,
+            0.6,
+            0.2
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
           ]
         }
       ],
@@ -12316,6 +12614,11 @@
       "geometry": "catalog/geometry/64782-71.json",
       "render": "catalog/renders/64782.png",
       "color": 71
+    },
+    "3708-0": {
+      "geometry": "catalog/geometry/3708-0.json",
+      "render": "catalog/renders/3708.png",
+      "color": 0
     }
   }
 }

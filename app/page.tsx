@@ -27,6 +27,8 @@ import {
   hybridAxlePinConnectors,
   objectLocalBounds,
   rodConnectors,
+  straightAxleCollisionPrimitives,
+  straightAxleConnectors,
   type CollisionPrimitive,
   type MeshConnector,
 } from "./connectors";
@@ -787,6 +789,15 @@ const frictionPinRefs = new Set(["2780", "6558", "32054", "43093"]);
 const isPinPart = (p: CatalogPart) =>
   /^Technic (Axle )?Pin/i.test(p.name) || frictionPinRefs.has(p.part);
 const isAxlePart = (p: CatalogPart) => /^Technic Axle(?! Pin)/i.test(p.name);
+const paletteReferenceSet = new Set(
+  paletteParts.flatMap((part) =>
+    [part.part, part.modelPart].filter(Boolean).map((value) => value!.toLowerCase()),
+  ),
+);
+const belongsToDefaultPalette = (part: CatalogPart) =>
+  [part.part, part.modelPart, part.resolvedPart]
+    .filter(Boolean)
+    .some((value) => paletteReferenceSet.has(value!.toLowerCase()));
 const isGearPart = (p: CatalogPart) =>
   p.gear === true || p.family === "gears" || /\bgear\b/i.test(p.name);
 const gearPoseForPiece = (piece: Piece): GearPose<Piece> | undefined => {
@@ -1580,9 +1591,11 @@ export default function Home() {
         axis: connector.axis.clone(),
       }));
     const analyzePart = (wrapper: THREE.Object3D, p: CatalogPart) => {
-      let connectors: MeshConnector[] | undefined,
+      let connectors: MeshConnector[] | undefined = straightAxleConnectors(
+          p.name,
+        ),
         hasSavedConnectorMap = false;
-      try {
+      if (!connectors) try {
         const saved = localStorage.getItem(`sim-connectors-v4:${p.part}`),
           savedIsCurrent =
             localStorage.getItem(`sim-connectors-revision:${p.part}`) ===
@@ -1677,8 +1690,9 @@ export default function Home() {
               : connector.kind,
         }));
       connectorCache.set(p.part, cloneConnectors(connectors));
-      let colliders: CollisionPrimitive[] | undefined;
-      try {
+      let colliders: CollisionPrimitive[] | undefined =
+        straightAxleCollisionPrimitives(p.name);
+      if (!colliders) try {
         const saved = localStorage.getItem(`sim-colliders-v1:${p.part}`),
           savedIsCurrent =
             localStorage.getItem(`sim-colliders-revision:${p.part}`) ===
@@ -2410,6 +2424,17 @@ export default function Home() {
         // preview. Keep unique parts untouched; only repeated references are
         // worth batching.
         if (pieces.length < 2) return;
+        // Network LDraw parts can come from different library revisions and
+        // retain a deeper BFC/subpart hierarchy than the packaged geometry.
+        // Keep that hierarchy direct; instancing is reserved for the uniform,
+        // locally precached assets.
+        if (
+          pieces.some(
+            (piece) =>
+              piece.sourceKind !== "packaged-cache" || !piece.geometry,
+          )
+        )
+          return;
         const template = pieces[0];
         template.mesh.updateMatrixWorld(true);
         const templateMeshes: THREE.Mesh[] = [];
@@ -3387,6 +3412,7 @@ export default function Home() {
       moved = false,
       shiftHeld = false,
       moving: Piece | undefined,
+      movingPrepared = false,
       altCandidate: Piece | undefined,
       previous = { x: 0, y: 0 },
       orbitStart = { x: 0, y: 0 },
@@ -3917,6 +3943,7 @@ export default function Home() {
       }
       if (hit && hitPiece) {
         moving = hitPiece;
+        movingPrepared = false;
         state.selected = moving;
         setSelectedId(moving.id);
         movingStartPosition.copy(moving.mesh.position);
@@ -3935,11 +3962,6 @@ export default function Home() {
               .transformDirection(linearGuide.a.mesh.matrixWorld)
               .normalize()
           : undefined;
-        state.connections = state.connections.filter(
-          (c) => c.a !== moving && c.b !== moving,
-        );
-        rebalanceAllSmartDefaults(state);
-        setConnectionRevision((value) => value + 1);
         const ground = ray.intersectObject(floor)[0];
         if (ground)
           moveOffset.set(
@@ -4048,7 +4070,23 @@ export default function Home() {
         return;
       }
       if (moving) {
-        moved = true;
+        if (!movingPrepared) {
+          const pointerDistance = Math.hypot(
+            e.clientX - movingStartPointer.x,
+            e.clientY - movingStartPointer.y,
+          );
+          // A click only selects the piece. Connections are detached only
+          // after an intentional drag passes this screen-space threshold.
+          if (pointerDistance <= 5) return;
+          movingPrepared = true;
+          moved = true;
+          state.connections = state.connections.filter(
+            (connection) =>
+              connection.a !== moving && connection.b !== moving,
+          );
+          rebalanceAllSmartDefaults(state);
+          setConnectionRevision((value) => value + 1);
+        } else moved = true;
         const shiftActive = e.shiftKey || shiftHeld;
         if (shiftActive && movingLinearAxis) {
           const bounds = canvas.getBoundingClientRect(),
@@ -4183,6 +4221,7 @@ export default function Home() {
         void verifyConnectionsAsync();
       }
       moving = undefined;
+      movingPrepared = false;
       movingLinearAxis = undefined;
       if (movedPiece?.renderBatched && moved)
         state.rebuildRenderBatches();
@@ -4211,7 +4250,10 @@ export default function Home() {
             connect(piece);
             void verifyConnectionsAsync();
           });
-          if (p.origin === "catalog-search" || p.origin === "model-import")
+          if (
+            (p.origin === "catalog-search" || p.origin === "model-import") &&
+            !belongsToDefaultPalette(p)
+          )
             setImported((old) =>
               old.some((x) => x.part === p.part && x.color === p.color)
                 ? old
@@ -4801,10 +4843,12 @@ export default function Home() {
             catalogQuery: part,
           };
       } catch {}
-    setImported((old) =>
-      old.some((x) => x.part === found.part) ? old : [found, ...old],
-    );
-    setCategory("imported");
+    if (!belongsToDefaultPalette(found)) {
+      setImported((old) =>
+        old.some((x) => x.part === found.part) ? old : [found, ...old],
+      );
+      setCategory("imported");
+    } else if (packaged?.family) setCategory(packaged.family);
     setReference("");
     setCatalogBusy(false);
     void appRef.current?.preloadPart(found);
@@ -5576,7 +5620,7 @@ export default function Home() {
           placement.catalog,
         ]),
       ).values(),
-    ];
+    ].filter((part) => !belongsToDefaultPalette(part));
     setImported((old) => {
       const merged = new Map(
         old.map((part) => [`${part.part}:${part.color}`, part]),
