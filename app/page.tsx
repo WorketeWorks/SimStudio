@@ -87,6 +87,8 @@ type Piece = CatalogPart & {
   pin: boolean;
   frictionPin: boolean;
   dynamicAxleConnections: boolean;
+  rotationPivotLocal?: THREE.Vector3;
+  rotationPivotKey?: string;
   lockSprite?: THREE.Sprite;
   body?: RAPIER.RigidBody;
   physicsOffset?: THREE.Vector3;
@@ -103,6 +105,8 @@ type EditorPieceSnapshot = {
   color: number;
   fixed: boolean;
   dynamicAxleConnections: boolean;
+  rotationPivotLocal?: THREE.Vector3;
+  rotationPivotKey?: string;
   connectors: MeshConnector[];
   colliders: CollisionPrimitive[];
   gearColliders: CollisionPrimitive[];
@@ -242,6 +246,7 @@ type PhysicsSettings = {
 };
 type GridStep = 0 | 0.25 | 0.5 | 1;
 type AxleSnapStep = 0 | 0.0625 | 0.125 | 0.25;
+type RotationSnapStep = 0 | 11.25 | 22.5 | 45;
 type AppState = {
   scene: THREE.Scene;
   renderer: THREE.WebGLRenderer;
@@ -250,6 +255,7 @@ type AppState = {
   grid: THREE.Group;
   gridStep: GridStep;
   axleSnapStep: AxleSnapStep;
+  rotationSnapStep: RotationSnapStep;
   pieces: Piece[];
   selected?: Piece;
   running: boolean;
@@ -582,7 +588,7 @@ const translations = {
     ready: "Catálogo local listo",
     running: "SIMULACIÓN: arrastra una pieza para aplicarle fuerza",
     cameraHelp:
-      "Arrastrar: mover · Rueda central: desplazar cámara · Doble rueda: centrar/restaurar · Alt/botón derecho: orbitar · Rueda: zoom · Ctrl+arrastrar: Connect manual · Ctrl+Z/Y: deshacer/rehacer · Ctrl+C/V: copiar/pegar · Shift: mover Y · WASD/flechas: rotar 90° · Alt+clic: fijar",
+      "Arrastrar: mover · R+arrastrar: girar desde una conexión · Rueda central: desplazar cámara · Doble rueda: centrar/restaurar · Alt/botón derecho: orbitar · Rueda: zoom · Ctrl+arrastrar: Connect manual · Ctrl+Z/Y: deshacer/rehacer · Ctrl+C/V: copiar/pegar · Shift: mover Y · WASD/flechas: rotar 90° · Alt+clic: fijar",
     properties: "PROPIEDADES",
     piece: "PIEZA",
     color: "COLOR",
@@ -591,6 +597,9 @@ const translations = {
     colorError: "No se pudo cargar ese color para la pieza",
     move: "DESPLAZAR",
     rotateAny: "ROTAR CUALQUIER ÁNGULO",
+    rotationPivot: "CENTRO DE GIRO",
+    pieceCenter: "Centro de la pieza",
+    connectionPivot: "Conexión",
     pieceJoints: "UNIONES DE ESTA PIEZA",
     joint: "Unión",
     speed: "VELOCIDAD",
@@ -683,6 +692,7 @@ const translations = {
     gridSize: "AJUSTE DE MOVIMIENTO",
     noGridSnap: "Sin ajuste",
     axleSnap: "AJUSTE AXIAL CON SHIFT",
+    rotationSnap: "AJUSTE ANGULAR",
     cache: "caché local activa",
     ldrawCredit: "Usa The LDraw Parts Library",
     categories: {
@@ -727,7 +737,7 @@ const translations = {
     ready: "Local catalog ready",
     running: "SIMULATION: drag a part to apply force",
     cameraHelp:
-      "Drag: move · Middle drag: pan camera · Middle double-click: focus/reset · Alt/right button: orbit · Wheel: zoom · Ctrl+drag: manual Connect · Ctrl+Z/Y: undo/redo · Ctrl+C/V: copy/paste · Shift: move Y · WASD/arrows: rotate 90° · Alt+click: fix",
+      "Drag: move · R+drag: rotate from a connection · Middle drag: pan camera · Middle double-click: focus/reset · Alt/right button: orbit · Wheel: zoom · Ctrl+drag: manual Connect · Ctrl+Z/Y: undo/redo · Ctrl+C/V: copy/paste · Shift: move Y · WASD/arrows: rotate 90° · Alt+click: fix",
     properties: "PROPERTIES",
     piece: "PART",
     color: "COLOR",
@@ -736,6 +746,9 @@ const translations = {
     colorError: "That color could not be loaded for this part",
     move: "MOVE",
     rotateAny: "ROTATE ANY ANGLE",
+    rotationPivot: "ROTATION PIVOT",
+    pieceCenter: "Part center",
+    connectionPivot: "Connection",
     pieceJoints: "JOINTS ON THIS PART",
     joint: "Joint",
     speed: "SPEED",
@@ -828,6 +841,7 @@ const translations = {
     gridSize: "MOVEMENT SNAP",
     noGridSnap: "No snapping",
     axleSnap: "SHIFT AXLE SNAP",
+    rotationSnap: "ANGLE SNAP",
     cache: "local cache active",
     ldrawCredit: "Uses The LDraw Parts Library",
     categories: {
@@ -1116,6 +1130,131 @@ const connectorMapReach = (connectors: MeshConnector[]) =>
         connector.local.length() + (connector.length ?? 0.5) / 2,
     ),
   );
+const jointPivotKey = (connection: Connection) => `joint:${connection.id}`;
+const connectionPivotLocal = (piece: Piece, connection: Connection) => {
+  connection.a.mesh.updateMatrixWorld(true);
+  piece.mesh.updateMatrixWorld(true);
+  return piece.mesh.worldToLocal(
+    connection.a.mesh.localToWorld(connection.socket.local.clone()),
+  );
+};
+const ensurePieceRotationPivot = (
+  piece: Piece,
+  connections: Connection[],
+) => {
+  if (piece.rotationPivotKey === "center") {
+    piece.rotationPivotLocal = undefined;
+    return;
+  }
+  const pieceConnections = connections.filter(
+      (connection) => connection.a === piece || connection.b === piece,
+    ),
+    selectedConnection = pieceConnections.find(
+      (connection) => jointPivotKey(connection) === piece.rotationPivotKey,
+    ) ?? pieceConnections[0];
+  if (!selectedConnection) {
+    piece.rotationPivotKey = undefined;
+    piece.rotationPivotLocal = undefined;
+    return;
+  }
+  piece.rotationPivotKey = jointPivotKey(selectedConnection);
+  piece.rotationPivotLocal = connectionPivotLocal(piece, selectedConnection);
+};
+const absoluteRotationAroundLocalAxis = (
+  piece: Piece,
+  localAxis: THREE.Vector3,
+) => {
+  piece.mesh.updateMatrixWorld(true);
+  const normalizedLocalAxis = localAxis.clone().normalize(),
+    worldAxis = normalizedLocalAxis
+      .clone()
+      .transformDirection(piece.mesh.matrixWorld)
+      .normalize(),
+    bases = [
+      new THREE.Vector3(1, 0, 0),
+      new THREE.Vector3(0, 1, 0),
+      new THREE.Vector3(0, 0, 1),
+    ],
+    localBase = bases
+      .map((base) => ({ base, alignment: Math.abs(base.dot(normalizedLocalAxis)) }))
+      .sort((left, right) => left.alignment - right.alignment)[0].base,
+    localReference = localBase
+      .clone()
+      .addScaledVector(normalizedLocalAxis, -localBase.dot(normalizedLocalAxis))
+      .normalize(),
+    pieceReference = localReference
+      .clone()
+      .transformDirection(piece.mesh.matrixWorld)
+      .normalize(),
+    globalBase = bases
+      .map((base) => ({ base, alignment: Math.abs(base.dot(worldAxis)) }))
+      .sort((left, right) => left.alignment - right.alignment)[0].base,
+    globalReference = globalBase
+      .clone()
+      .addScaledVector(worldAxis, -globalBase.dot(worldAxis))
+      .normalize();
+  return Math.atan2(
+    worldAxis.dot(globalReference.clone().cross(pieceReference)),
+    globalReference.dot(pieceReference),
+  );
+};
+const rotatePieceAroundLocalAxis = (
+  piece: Piece,
+  localAxis: THREE.Vector3,
+  radians: number,
+) => {
+  const pivotLocal = piece.rotationPivotLocal,
+    pivotBefore = pivotLocal
+      ? piece.mesh.localToWorld(pivotLocal.clone())
+      : undefined;
+  piece.mesh.quaternion
+    .multiply(
+      new THREE.Quaternion().setFromAxisAngle(
+        localAxis.clone().normalize(),
+        radians,
+      ),
+    )
+    .normalize();
+  piece.mesh.updateMatrixWorld(true);
+  if (pivotLocal && pivotBefore) {
+    const pivotAfter = piece.mesh.localToWorld(pivotLocal.clone());
+    piece.mesh.position.add(pivotBefore.sub(pivotAfter));
+    piece.mesh.updateMatrixWorld(true);
+  }
+};
+const rotatePieceAroundPivot = (
+  piece: Piece,
+  axis: "x" | "y" | "z",
+  radians: number,
+) =>
+  rotatePieceAroundLocalAxis(
+    piece,
+    axis === "x"
+      ? new THREE.Vector3(1, 0, 0)
+      : axis === "y"
+        ? new THREE.Vector3(0, 1, 0)
+        : new THREE.Vector3(0, 0, 1),
+    radians,
+  );
+const rotatePieceAroundPivotWithGlobalSnap = (
+  piece: Piece,
+  axis: "x" | "y" | "z",
+  radians: number,
+  snapDegrees: RotationSnapStep,
+) => {
+  const localAxis =
+      axis === "x"
+        ? new THREE.Vector3(1, 0, 0)
+        : axis === "y"
+          ? new THREE.Vector3(0, 1, 0)
+          : new THREE.Vector3(0, 0, 1),
+    step = THREE.MathUtils.degToRad(snapDegrees),
+    current = absoluteRotationAroundLocalAxis(piece, localAxis),
+    appliedRadians = step
+      ? Math.round((current + radians) / step) * step - current
+      : radians;
+  rotatePieceAroundLocalAxis(piece, localAxis, appliedRadians);
+};
 const detectShaftTraversals = (pieces: Piece[]) => {
   type SocketEntry = {
     host: Piece;
@@ -1365,6 +1504,8 @@ export default function Home() {
     [language, setLanguage] = useState<Language>("en"),
     [gridStep, setGridStep] = useState<GridStep>(0.25),
     [axleSnapStep, setAxleSnapStep] = useState<AxleSnapStep>(0.25),
+    [rotationSnapStep, setRotationSnapStep] =
+      useState<RotationSnapStep>(22.5),
     [inspectorWidth, setInspectorWidth] = useState(270),
     [structuralMode, setStructuralMode] = useState<StructuralMode>("rigid"),
     [structuralStiffness, setStructuralStiffness] = useState(85),
@@ -1419,6 +1560,18 @@ export default function Home() {
         savedAxleSnap === 0.25
       )
         setAxleSnapStep(savedAxleSnap);
+      const savedRotationSnapText = localStorage.getItem(
+          "sim-studio:rotation-snap",
+        ),
+        savedRotationSnap =
+          savedRotationSnapText === null ? NaN : Number(savedRotationSnapText);
+      if (
+        savedRotationSnap === 0 ||
+        savedRotationSnap === 11.25 ||
+        savedRotationSnap === 22.5 ||
+        savedRotationSnap === 45
+      )
+        setRotationSnapStep(savedRotationSnap);
       setStructuralMode(
         localStorage.getItem("sim-studio:structural-mode") === "flexible"
           ? "flexible"
@@ -1465,6 +1618,15 @@ export default function Home() {
     } catch {}
     if (appRef.current) appRef.current.axleSnapStep = axleSnapStep;
   }, [axleSnapStep]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "sim-studio:rotation-snap",
+        String(rotationSnapStep),
+      );
+    } catch {}
+    if (appRef.current) appRef.current.rotationSnapStep = rotationSnapStep;
+  }, [rotationSnapStep]);
   useEffect(() => {
     try {
       localStorage.setItem("sim-studio:structural-mode", structuralMode);
@@ -2204,6 +2366,7 @@ export default function Home() {
     };
     const state = {} as AppState,
       debugRoot = new THREE.Group();
+    let showRotationPivot = false;
     debugRoot.name = "Sim Studio diagnostics";
     scene.add(debugRoot);
     const disposeDebug = () => {
@@ -2469,6 +2632,28 @@ export default function Home() {
             };
             debugRoot.add(arrow);
           }
+        if (
+          showRotationPivot &&
+          piece === state.selected &&
+          piece.rotationPivotLocal
+        ) {
+          const pivotMarker = new THREE.Mesh(
+            new THREE.TorusGeometry(0.14, 0.035, 8, 20),
+            new THREE.MeshBasicMaterial({
+              color: 0xffc928,
+              depthTest: false,
+              transparent: true,
+              opacity: 0.95,
+            }),
+          );
+          pivotMarker.renderOrder = 48;
+          pivotMarker.userData = {
+            debugKind: "connector-point",
+            piece,
+            local: piece.rotationPivotLocal.clone(),
+          };
+          debugRoot.add(pivotMarker);
+        }
         if (state.debug.physics) {
           const axes = new THREE.AxesHelper(0.65);
           axes.userData = { debugKind: "body-axes", piece };
@@ -2853,6 +3038,7 @@ export default function Home() {
       grid,
       gridStep,
       axleSnapStep,
+      rotationSnapStep,
       pieces: [],
       connections: [],
       gearLinks: [],
@@ -2986,7 +3172,7 @@ export default function Home() {
         motorSpeed = saved?.motorSpeed ?? 3,
         motorForce = saved?.motorForce ?? 80,
         userConfigured = saved?.userConfigured ?? false;
-      state.connections.push({
+      const addedConnection: Connection = {
         id,
         a: host,
         b: rod,
@@ -3008,7 +3194,10 @@ export default function Home() {
         motorSpeed,
         motorForce,
         userConfigured,
-      });
+      };
+      state.connections.push(addedConnection);
+      ensurePieceRotationPivot(host, state.connections);
+      ensurePieceRotationPivot(rod, state.connections);
       if (!state.bulkConnecting) rebalanceSmartDefaults(state, rod);
       return true;
     };
@@ -3245,6 +3434,9 @@ export default function Home() {
       finishConnectionScan = () => {
         state.bulkConnecting = false;
         rebalanceAllSmartDefaults(state);
+        state.pieces.forEach((piece) =>
+          ensurePieceRotationPivot(piece, state.connections),
+        );
         setConnectionRevision((value) => value + 1);
         refreshDebug();
         return state.connections.length;
@@ -3300,7 +3492,15 @@ export default function Home() {
     state.verifyConnections = verifyConnections;
     state.verifyConnectionsAsync = verifyConnectionsAsync;
     const verifyPieceConnections = (movedPiece: Piece) => {
-      const started = performance.now();
+      const started = performance.now(),
+        previousPartners = state.connections
+          .filter(
+            (connection) =>
+              connection.a === movedPiece || connection.b === movedPiece,
+          )
+          .map((connection) =>
+            connection.a === movedPiece ? connection.b : connection.a,
+          );
       state.connections = state.connections.filter(
         (connection) =>
           connection.a !== movedPiece && connection.b !== movedPiece,
@@ -3383,6 +3583,10 @@ export default function Home() {
       }
       state.bulkConnecting = false;
       rebalanceAllSmartDefaults(state);
+      ensurePieceRotationPivot(movedPiece, state.connections);
+      previousPartners.forEach((piece) =>
+        ensurePieceRotationPivot(piece, state.connections),
+      );
       state.pendingConnectionMs += performance.now() - started;
       setConnectionRevision((value) => value + 1);
       refreshDebug();
@@ -3780,6 +3984,7 @@ export default function Home() {
       pan = false,
       moved = false,
       shiftHeld = false,
+      rotationPivotHeld = false,
       moving: Piece | undefined,
       movingPrepared = false,
       altCandidate: Piece | undefined,
@@ -3790,6 +3995,20 @@ export default function Home() {
       movingStartPointer = new THREE.Vector2(),
       movingLinearAxis: THREE.Vector3 | undefined,
       movedAxially = false;
+    let pivotRotate:
+      | {
+          piece: Piece;
+          local: THREE.Vector3;
+          axis: THREE.Vector3;
+          connector: MeshConnector;
+          connection: Connection;
+          startX: number;
+          startAbsoluteAngle: number;
+          startPosition: THREE.Vector3;
+          startQuaternion: THREE.Quaternion;
+          prepared: boolean;
+        }
+      | undefined;
     let lastMiddleDown = { time: 0, x: 0, y: 0 };
     let spring:
       | {
@@ -3839,6 +4058,209 @@ export default function Home() {
           });
         })
         .sort((a, b) => a.distance - b.distance)[0];
+    };
+    const nearestConnectedPivot = (
+      piece: Piece,
+      e: { clientX: number; clientY: number },
+    ) => {
+      const bounds = renderer.domElement.getBoundingClientRect();
+      piece.mesh.updateMatrixWorld(true);
+      return state.connections
+        .filter((connection) => connection.a === piece || connection.b === piece)
+        .map((connection) => {
+          const connector =
+              connection.a === piece ? connection.socket : connection.shaft,
+            socketPoint = worldConnector(connection.a, connection.socket).point,
+            anchorLocal = piece.mesh.worldToLocal(socketPoint.clone()),
+            projected = socketPoint.clone().project(camera),
+            x = bounds.left + ((projected.x + 1) * bounds.width) / 2,
+            y = bounds.top + ((1 - projected.y) * bounds.height) / 2;
+          return {
+            connection,
+            connector,
+            anchorLocal,
+            distance: Math.hypot(x - e.clientX, y - e.clientY),
+          };
+        })
+        .sort((a, b) => a.distance - b.distance)[0];
+    };
+    const nearbyPivotConnectionCorrection = (draft: {
+      piece: Piece;
+      local: THREE.Vector3;
+      axis: THREE.Vector3;
+      connector: MeshConnector;
+      connection: Connection;
+    }) => {
+      draft.piece.mesh.updateMatrixWorld(true);
+      const pivotSupport =
+          draft.connection.a === draft.piece
+            ? draft.connection.b
+            : draft.connection.a,
+        pivotTargetConnector =
+          draft.connection.a === draft.piece
+            ? draft.connection.shaft
+            : draft.connection.socket,
+        supportPieces = new Set<Piece>([pivotSupport]),
+        supportQueue = [pivotSupport];
+      while (supportQueue.length) {
+        const current = supportQueue.shift()!;
+        for (const connection of state.connections) {
+          const next =
+            connection.a === current
+              ? connection.b
+              : connection.b === current
+                ? connection.a
+                : undefined;
+          if (
+            next &&
+            next !== draft.piece &&
+            !supportPieces.has(next)
+          ) {
+            supportPieces.add(next);
+            supportQueue.push(next);
+          }
+        }
+      }
+      const candidatePieces = [...state.pieces].sort(
+          (left, right) =>
+            Number(supportPieces.has(right)) - Number(supportPieces.has(left)),
+        ),
+        pivotWorld = draft.piece.mesh.localToWorld(draft.local.clone()),
+        pivotAxisWorld = draft.axis
+          .clone()
+          .transformDirection(draft.piece.mesh.matrixWorld)
+          .normalize(),
+        maximumCorrection = THREE.MathUtils.degToRad(12);
+      let best:
+        | { angle: number; other: Piece; score: number }
+        | undefined;
+      for (const sourceConnector of draft.piece.connectors) {
+        if (sourceConnector === draft.connector) continue;
+        const sourceAnchors =
+          sourceConnector.role === "shaft" && sourceConnector.kind === "axle"
+            ? axleSnapPoints(sourceConnector).map((point) => point.local)
+            : [sourceConnector.local];
+        for (const other of candidatePieces) {
+          if (other === draft.piece) continue;
+          other.mesh.updateMatrixWorld(true);
+          for (const targetConnector of other.connectors) {
+            if (
+              other === pivotSupport &&
+              targetConnector === pivotTargetConnector
+            )
+              continue;
+            const profile = pairProfile(sourceConnector, targetConnector);
+            if (!profile) continue;
+            const targetAnchors =
+              targetConnector.role === "shaft" &&
+              targetConnector.kind === "axle"
+                ? axleSnapPoints(targetConnector).map((point) => point.local)
+                : [targetConnector.local];
+            for (const sourceLocal of sourceAnchors)
+              for (const targetLocal of targetAnchors) {
+                const sourcePoint = draft.piece.mesh.localToWorld(
+                    sourceLocal.clone(),
+                  ),
+                  targetPoint = other.mesh.localToWorld(targetLocal.clone()),
+                  sourceRadius = sourcePoint
+                    .clone()
+                    .sub(pivotWorld)
+                    .addScaledVector(
+                      pivotAxisWorld,
+                      -sourcePoint
+                        .clone()
+                        .sub(pivotWorld)
+                        .dot(pivotAxisWorld),
+                    ),
+                  targetRadius = targetPoint
+                    .clone()
+                    .sub(pivotWorld)
+                    .addScaledVector(
+                      pivotAxisWorld,
+                      -targetPoint
+                        .clone()
+                        .sub(pivotWorld)
+                        .dot(pivotAxisWorld),
+                    );
+                if (
+                  sourceRadius.lengthSq() < 1e-5 ||
+                  targetRadius.lengthSq() < 1e-5 ||
+                  Math.abs(sourceRadius.length() - targetRadius.length()) > 0.22
+                )
+                  continue;
+                const angle = Math.atan2(
+                  pivotAxisWorld.dot(
+                    sourceRadius.clone().cross(targetRadius),
+                  ),
+                  sourceRadius.dot(targetRadius),
+                );
+                if (Math.abs(angle) > maximumCorrection) continue;
+                const correction = new THREE.Quaternion().setFromAxisAngle(
+                    pivotAxisWorld,
+                    angle,
+                  ),
+                  predictedSourcePoint = sourcePoint
+                    .clone()
+                    .sub(pivotWorld)
+                    .applyQuaternion(correction)
+                    .add(pivotWorld),
+                  predictedSourceAxis = worldConnector(
+                    draft.piece,
+                    sourceConnector,
+                  ).axis.applyQuaternion(correction),
+                  targetAxis = worldConnector(other, targetConnector).axis;
+                if (Math.abs(predictedSourceAxis.dot(targetAxis)) < 0.965)
+                  continue;
+                const shaft =
+                    sourceConnector.role === "shaft"
+                      ? sourceConnector
+                      : targetConnector,
+                  socket =
+                    sourceConnector.role === "socket"
+                      ? sourceConnector
+                      : targetConnector,
+                  shaftPoint =
+                    sourceConnector.role === "shaft"
+                      ? predictedSourcePoint
+                      : targetPoint,
+                  socketPoint =
+                    sourceConnector.role === "socket"
+                      ? predictedSourcePoint
+                      : targetPoint,
+                  shaftAxis =
+                    sourceConnector.role === "shaft"
+                      ? predictedSourceAxis
+                      : targetAxis,
+                  delta = socketPoint.clone().sub(shaftPoint),
+                  along = delta.dot(shaftAxis),
+                  radial = delta
+                    .clone()
+                    .addScaledVector(shaftAxis, -along)
+                    .length(),
+                  axialError =
+                    shaft.kind === "axle"
+                      ? Math.max(
+                          0,
+                          Math.abs(along) - (shaft.length ?? 0.5) / 2,
+                        )
+                      : Math.min(
+                          ...connectorAxialOffsets(shaft, socket).map(
+                            (offset) => Math.abs(along - offset),
+                          ),
+                        );
+                if (radial > 0.18 || axialError > 0.14) continue;
+                const score =
+                  radial +
+                  axialError +
+                  Math.abs(angle) * 0.04 +
+                  (supportPieces.has(other) ? 0 : 0.025);
+                if (!best || score < best.score)
+                  best = { angle, other, score };
+              }
+          }
+        }
+      }
+      return best;
     };
     const pieceFrom = (object: THREE.Object3D, instanceId?: number) => {
       const instancePieces = object.userData.instancePieces as Piece[] | undefined;
@@ -4212,6 +4634,8 @@ export default function Home() {
         color: piece.color,
         fixed: piece.fixed,
         dynamicAxleConnections: piece.dynamicAxleConnections,
+        rotationPivotLocal: piece.rotationPivotLocal?.clone(),
+        rotationPivotKey: piece.rotationPivotKey,
         connectors: piece.connectors.map(cloneConnector),
         colliders: piece.colliders.map(cloneCollider),
         gearColliders: piece.gearColliders.map(cloneCollider),
@@ -4237,6 +4661,8 @@ export default function Home() {
             gearColliders: CollisionPrimitive[];
             fixed: boolean;
             dynamicAxleConnections: boolean;
+            rotationPivotLocal?: THREE.Vector3;
+            rotationPivotKey?: string;
           }
         | undefined,
       pasteIndex = 0;
@@ -4270,6 +4696,8 @@ export default function Home() {
           piece.mesh.updateMatrixWorld(true);
           piece.fixed = item.fixed;
           piece.dynamicAxleConnections = item.dynamicAxleConnections;
+          piece.rotationPivotLocal = item.rotationPivotLocal?.clone();
+          piece.rotationPivotKey = item.rotationPivotKey;
           piece.connectors = item.connectors.map(cloneConnector);
           piece.colliders = item.colliders.map(cloneCollider);
           piece.gearColliders = item.gearColliders.map(cloneCollider);
@@ -4369,6 +4797,8 @@ export default function Home() {
         gearColliders: piece.gearColliders.map(cloneCollider),
         fixed: piece.fixed,
         dynamicAxleConnections: piece.dynamicAxleConnections,
+        rotationPivotLocal: piece.rotationPivotLocal?.clone(),
+        rotationPivotKey: piece.rotationPivotKey,
       };
       pasteIndex = 0;
       setMessage(`${piece.part} copiada`);
@@ -4399,6 +4829,8 @@ export default function Home() {
       piece.gearColliders = clipboard.gearColliders.map(cloneCollider);
       piece.fixed = clipboard.fixed;
       piece.dynamicAxleConnections = clipboard.dynamicAxleConnections;
+      piece.rotationPivotLocal = clipboard.rotationPivotLocal?.clone();
+      piece.rotationPivotKey = clipboard.rotationPivotKey;
       if (piece.fixed) {
         piece.lockSprite = makeLock();
         scene.add(piece.lockSprite);
@@ -4505,6 +4937,51 @@ export default function Home() {
       orbit = e.button === 2 || e.altKey;
       altCandidate = e.altKey && e.button === 0 ? hitPiece : undefined;
       if (orbit) return;
+      if (
+        !state.running &&
+        rotationPivotHeld &&
+        e.button === 0 &&
+        hitPiece
+      ) {
+        const selectedConnector = nearestConnectedPivot(hitPiece, e);
+        if (!selectedConnector) {
+          setMessage(
+            language === "es"
+              ? `${hitPiece.part} no tiene ninguna unión conectada que pueda usarse como pivote`
+              : `${hitPiece.part} has no connected joint that can be used as a pivot`,
+          );
+          return;
+        }
+        const { connector, connection, anchorLocal } = selectedConnector;
+        state.recordHistory();
+        hitPiece.rotationPivotLocal = anchorLocal.clone();
+        hitPiece.rotationPivotKey = jointPivotKey(connection);
+        state.selected = hitPiece;
+        pivotRotate = {
+          piece: hitPiece,
+          local: anchorLocal.clone(),
+          axis: connector.axis.clone().normalize(),
+          connector,
+          connection,
+          startX: e.clientX,
+          startAbsoluteAngle: absoluteRotationAroundLocalAxis(
+            hitPiece,
+            connector.axis,
+          ),
+          startPosition: hitPiece.mesh.position.clone(),
+          startQuaternion: hitPiece.mesh.quaternion.clone(),
+          prepared: false,
+        };
+        showRotationPivot = true;
+        setSelectedId(hitPiece.id);
+        setMessage(
+          language === "es"
+            ? `Pivote seleccionado en ${hitPiece.part} · arrastra para girar`
+            : `Pivot selected on ${hitPiece.part} · drag to rotate`,
+        );
+        refreshDebug();
+        return;
+      }
       if (!state.running && e.ctrlKey && e.button === 0 && hitPiece) {
         const selectedConnector = nearestScreenConnector(hitPiece, e);
         if (!selectedConnector) {
@@ -4640,6 +5117,38 @@ export default function Home() {
       }
     };
     const move = (e: PointerEvent) => {
+      if (pivotRotate) {
+        const rawAngle = (e.clientX - pivotRotate.startX) * 0.012,
+          angleStep = THREE.MathUtils.degToRad(state.rotationSnapStep),
+          angle = angleStep
+            ? Math.round(
+                (pivotRotate.startAbsoluteAngle + rawAngle) / angleStep,
+              ) * angleStep - pivotRotate.startAbsoluteAngle
+            : rawAngle;
+        if (Math.abs(angle) < 0.01) return;
+        if (!pivotRotate.prepared) {
+          pivotRotate.prepared = true;
+          state.connections = state.connections.filter(
+            (connection) =>
+              connection === pivotRotate!.connection ||
+              (connection.a !== pivotRotate!.piece &&
+                connection.b !== pivotRotate!.piece),
+          );
+          rebalanceAllSmartDefaults(state);
+        }
+        pivotRotate.piece.mesh.position.copy(pivotRotate.startPosition);
+        pivotRotate.piece.mesh.quaternion.copy(pivotRotate.startQuaternion);
+        pivotRotate.piece.mesh.updateMatrixWorld(true);
+        rotatePieceAroundLocalAxis(
+          pivotRotate.piece,
+          pivotRotate.axis,
+          angle,
+        );
+        moved = true;
+        state.renderBatchesDirty = true;
+        refreshDebug();
+        return;
+      }
       if (!state.running && state.pendingPlacement) {
         cast(e);
         const ground = ray.intersectObject(floor)[0];
@@ -4823,6 +5332,34 @@ export default function Home() {
     const up = (e: PointerEvent) => {
       if (canvas.hasPointerCapture(e.pointerId))
         canvas.releasePointerCapture(e.pointerId);
+      if (pivotRotate) {
+        const rotated = pivotRotate;
+        pivotRotate = undefined;
+        showRotationPivot = false;
+        if (rotated.prepared) {
+          const correction = nearbyPivotConnectionCorrection(rotated);
+          if (correction && Math.abs(correction.angle) > 1e-5)
+            rotatePieceAroundLocalAxis(
+              rotated.piece,
+              rotated.axis,
+              correction.angle,
+            );
+          verifyPieceConnections(rotated.piece);
+          if (rotated.piece.renderBatched) state.rebuildRenderBatches();
+          else state.renderBatchesDirty = true;
+          setMessage(
+            language === "es"
+              ? correction
+                ? `${rotated.piece.part} ajustada y conectada con ${correction.other.part}`
+                : `${rotated.piece.part} girada desde su conexión`
+              : correction
+                ? `${rotated.piece.part} snapped and connected to ${correction.other.part}`
+                : `${rotated.piece.part} rotated around its connection`,
+          );
+        }
+        refreshDebug();
+        return;
+      }
       if (state.manualConnect) {
         const draft = state.manualConnect;
         cast(e);
@@ -5029,6 +5566,11 @@ export default function Home() {
       const target = e.target as HTMLElement | null;
       if (target?.matches("input, textarea, select, [contenteditable=true]"))
         return;
+      if (e.code === "KeyR") {
+        rotationPivotHeld = true;
+        e.preventDefault();
+        return;
+      }
       const command = e.ctrlKey || e.metaKey;
       if (command && !e.altKey) {
         const redoShortcut =
@@ -5085,8 +5627,12 @@ export default function Home() {
       if (!rotation) return;
       e.preventDefault();
       state.recordHistory();
-      if (rotation.axis === "x") piece.mesh.rotateX(rotation.angle);
-      else piece.mesh.rotateY(rotation.angle);
+      rotatePieceAroundPivotWithGlobalSnap(
+        piece,
+        rotation.axis,
+        rotation.angle,
+        state.rotationSnapStep,
+      );
       piece.mesh.updateMatrixWorld(true);
       if (piece.renderBatched) state.rebuildRenderBatches();
       else state.renderBatchesDirty = true;
@@ -5097,9 +5643,11 @@ export default function Home() {
     const keyup = (e: KeyboardEvent) => {
       if (e.code === "ShiftLeft" || e.code === "ShiftRight")
         shiftHeld = false;
+      if (e.code === "KeyR") rotationPivotHeld = false;
     };
     const clearModifiers = () => {
       shiftHeld = false;
+      rotationPivotHeld = false;
     };
     const canvas = renderer.domElement;
     let pointerMoveStarted = 0;
@@ -5667,9 +6215,12 @@ export default function Home() {
     if (!s || !p || running) return;
     s.recordHistory();
     const radians = THREE.MathUtils.degToRad(rotationAngle * dir);
-    if (axis === "x") p.mesh.rotateX(radians);
-    else if (axis === "y") p.mesh.rotateY(radians);
-    else p.mesh.rotateZ(radians);
+    rotatePieceAroundPivotWithGlobalSnap(
+      p,
+      axis,
+      radians,
+      s.rotationSnapStep,
+    );
     if (p.renderBatched) s.rebuildRenderBatches();
     else s.renderBatchesDirty = true;
     s.refreshDebug();
@@ -6597,6 +7148,61 @@ export default function Home() {
           (link) => link.a.value === selected || link.b.value === selected,
         ) ?? [])
       : [];
+  const selectedPivotOptions = selected
+    ? [
+        ...new Map(
+          (appRef.current?.connections ?? [])
+            .filter(
+              (connection) =>
+                connection.a === selected || connection.b === selected,
+            )
+            .map((connection) => {
+              const connector =
+                  connection.a === selected
+                    ? connection.socket
+                    : connection.shaft,
+                connectorIndex = selected.connectors.indexOf(connector),
+                other =
+                  connection.a === selected ? connection.b : connection.a,
+                local = selected.mesh.worldToLocal(
+                  connection.a.mesh.localToWorld(
+                    connection.socket.local.clone(),
+                  ),
+                );
+        const typeName =
+          connector.kind === "axle"
+            ? connector.role === "shaft"
+              ? language === "es"
+                ? "eje morado"
+                : "purple axle"
+              : language === "es"
+                ? "hueco verde"
+                : "green socket"
+            : connector.role === "shaft"
+              ? language === "es"
+                ? "pin naranja"
+                : "orange pin"
+              : language === "es"
+                ? "hueco azul"
+                : "blue socket";
+              const key = jointPivotKey(connection);
+              return [
+                key,
+                {
+                  key,
+                  local: local.clone(),
+                  label: `${t.connectionPivot} ${connectorIndex + 1} · ${typeName} ↔ ${other.part}`,
+                },
+              ] as const;
+            }),
+        ).values(),
+      ]
+    : [];
+  const selectedPivotValue = selectedPivotOptions.some(
+    (option) => option.key === selected?.rotationPivotKey,
+  )
+    ? selected!.rotationPivotKey!
+    : "center";
   const toggleDebug = (key: keyof DebugFlags) =>
     setDebugViews((current) => {
       const next = { ...current, [key]: !current[key] },
@@ -7801,6 +8407,31 @@ export default function Home() {
               <button onClick={() => nudge("y", -(gridStep || 0.25))}>Y−</button>
               <button onClick={() => nudge("z", gridStep || 0.25)}>Z+</button>
             </div>
+            <label>{t.rotationPivot}</label>
+            <select
+              className="pivot-select"
+              value={selectedPivotValue}
+              disabled={running}
+              onChange={(event) => {
+                const state = appRef.current;
+                if (!state) return;
+                state.recordHistory();
+                const option = selectedPivotOptions.find(
+                  (candidate) => candidate.key === event.target.value,
+                );
+                selected.rotationPivotKey = option?.key ?? "center";
+                selected.rotationPivotLocal = option?.local.clone();
+                state.refreshDebug();
+                setConnectorRevision((value) => value + 1);
+              }}
+            >
+              <option value="center">{t.pieceCenter}</option>
+              {selectedPivotOptions.map((option) => (
+                <option value={option.key} key={option.key}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
             <div className="angle-head">
               <label>{t.rotateAny}</label>
               <input
@@ -8479,6 +9110,19 @@ export default function Home() {
                 onClick={() => setAxleSnapStep(step)}
               >
                 {step === 0 ? t.noGridSnap : `${step} u`}
+              </button>
+            ))}
+          </div>
+          <label className="grid-setting-title">{t.rotationSnap}</label>
+          <div className="grid-setting" role="group" aria-label={t.rotationSnap}>
+            {([45, 22.5, 11.25, 0] as RotationSnapStep[]).map((step) => (
+              <button
+                key={step}
+                className={rotationSnapStep === step ? "active" : ""}
+                disabled={running}
+                onClick={() => setRotationSnapStep(step)}
+              >
+                {step === 0 ? t.noGridSnap : `${step}°`}
               </button>
             ))}
           </div>
