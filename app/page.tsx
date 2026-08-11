@@ -228,6 +228,14 @@ type PerformanceTrace = {
   cursor: number;
   totalFrames: number;
 };
+type PhysicsSettings = {
+  pieceFriction: number;
+  rubberFriction: number;
+  frictionlessPinRotation: number;
+  axleSlidingFriction: number;
+  axleRotationFriction: number;
+  axleTolerance: number;
+};
 type AppState = {
   scene: THREE.Scene;
   renderer: THREE.WebGLRenderer;
@@ -237,6 +245,7 @@ type AppState = {
   pieces: Piece[];
   selected?: Piece;
   running: boolean;
+  physicsSettings: PhysicsSettings;
   world?: RAPIER.World;
   physicsHooks?: RAPIER.PhysicsHooks;
   physicsEventQueue?: RAPIER.EventQueue;
@@ -647,6 +656,15 @@ const translations = {
     rigidStructure: "Rígido",
     flexibleStructure: "Flexible",
     structuralStiffness: "Rigidez de uniones",
+    globalPhysicsParameters: "PARÁMETROS GLOBALES",
+    pieceFriction: "Fricción entre piezas",
+    rubberFriction: "Fricción de goma",
+    frictionlessPinRotation: "Giro de pines sin fricción",
+    axleSlidingFriction: "Deslizamiento de ejes",
+    axleRotationFriction: "Rotación de ejes",
+    axleTolerance: "Holgura de ejes",
+    globalPhysicsHelp: "Los cambios se aplican al iniciar la simulación.",
+    resetPhysicsParameters: "Restablecer parámetros",
     rigidStructureHelp:
       "Las conexiones fijas se fusionan. La rigidez controla las articulaciones móviles.",
     flexibleStructureHelp:
@@ -780,6 +798,15 @@ const translations = {
     rigidStructure: "Rigid",
     flexibleStructure: "Flexible",
     structuralStiffness: "Joint stiffness",
+    globalPhysicsParameters: "GLOBAL PHYSICS PARAMETERS",
+    pieceFriction: "Part-to-part friction",
+    rubberFriction: "Rubber friction",
+    frictionlessPinRotation: "Frictionless pin rotation",
+    axleSlidingFriction: "Axle sliding friction",
+    axleRotationFriction: "Axle rotation friction",
+    axleTolerance: "Axle clearance",
+    globalPhysicsHelp: "Changes are applied when the simulation starts.",
+    resetPhysicsParameters: "Reset parameters",
     rigidStructureHelp:
       "Fixed connections are merged. Stiffness controls the moving joints.",
     flexibleStructureHelp:
@@ -810,15 +837,22 @@ const kindFor = (category: string, name = ""): PieceKind =>
 const modelText = (p: CatalogPart) =>
   `0 FILE ${p.part}.ldr\n1 ${p.color} 0 0 0 1 0 0 0 1 0 0 0 1 ${p.modelPart ?? p.part}.dat\n0`;
 const frictionPinRefs = new Set(["2780", "6558", "32054", "43093"]);
+const frictionlessPinRefs = new Set(["3749", "3673", "32556"]);
 // Rapier combines the friction coefficients of both colliders. LEGO-like
 // plastic must slide over plastic without behaving as if both surfaces were
 // rubber, while tyres and the floor still need enough grip to drive a model.
 const CONTACT_FRICTION = {
-  plastic: 0.18,
   gearMesh: 0.12,
-  tyre: 1.35,
   floor: 0.9,
 } as const;
+const DEFAULT_PHYSICS_SETTINGS: PhysicsSettings = {
+  pieceFriction: 0.18,
+  rubberFriction: 1.35,
+  frictionlessPinRotation: 0.05,
+  axleSlidingFriction: 0.08,
+  axleRotationFriction: 0.02,
+  axleTolerance: 0.02,
+};
 const isPinPart = (p: CatalogPart) =>
   /^Technic (Axle )?Pin/i.test(p.name) || frictionPinRefs.has(p.part);
 const isAxlePart = (p: CatalogPart) => /^Technic Axle(?! Pin)/i.test(p.name);
@@ -1248,10 +1282,13 @@ export default function Home() {
     ),
     [importDraft, setImportDraft] = useState<ImportDraft | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">("light"),
-    [language, setLanguage] = useState<Language>("es"),
+    [language, setLanguage] = useState<Language>("en"),
     [inspectorWidth, setInspectorWidth] = useState(270),
     [structuralMode, setStructuralMode] = useState<StructuralMode>("rigid"),
-    [structuralStiffness, setStructuralStiffness] = useState(85);
+    [structuralStiffness, setStructuralStiffness] = useState(85),
+    [physicsSettings, setPhysicsSettings] = useState<PhysicsSettings>({
+      ...DEFAULT_PHYSICS_SETTINGS,
+    });
   const t = translations[language],
     modeLabels: Record<JointMode, string> =
       language === "es"
@@ -1279,7 +1316,7 @@ export default function Home() {
         localStorage.getItem("sim-studio:theme") === "dark" ? "dark" : "light",
       );
       setLanguage(
-        localStorage.getItem("sim-studio:language") === "en" ? "en" : "es",
+        localStorage.getItem("sim-studio:language") === "es" ? "es" : "en",
       );
       setStructuralMode(
         localStorage.getItem("sim-studio:structural-mode") === "flexible"
@@ -1291,6 +1328,17 @@ export default function Home() {
       );
       if (Number.isFinite(savedStiffness) && savedStiffness >= 1)
         setStructuralStiffness(THREE.MathUtils.clamp(savedStiffness, 1, 100));
+      const savedPhysics = JSON.parse(
+        localStorage.getItem("sim-studio:physics-settings") ?? "null",
+      ) as Partial<PhysicsSettings> | null;
+      if (savedPhysics) {
+        const restored = { ...DEFAULT_PHYSICS_SETTINGS };
+        (Object.keys(restored) as (keyof PhysicsSettings)[]).forEach((key) => {
+          const value = Number(savedPhysics[key]);
+          if (Number.isFinite(value) && value >= 0) restored[key] = value;
+        });
+        setPhysicsSettings(restored);
+      }
     } catch {}
   }, []);
   useEffect(() => {
@@ -1313,6 +1361,15 @@ export default function Home() {
       );
     } catch {}
   }, [structuralMode, structuralStiffness]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "sim-studio:physics-settings",
+        JSON.stringify(physicsSettings),
+      );
+    } catch {}
+    if (appRef.current) appRef.current.physicsSettings = physicsSettings;
+  }, [physicsSettings]);
 
   useEffect(() => {
     const source =
@@ -2668,6 +2725,7 @@ export default function Home() {
         }
       >(),
       running: false,
+      physicsSettings: { ...physicsSettings },
       performanceTrace: {
         startedAt: new Date().toISOString(),
         startedAtMs: performance.now(),
@@ -4798,7 +4856,10 @@ export default function Home() {
               .multiplyScalar(42)
               .addScaledVector(
                 new THREE.Vector3(velocity.x, velocity.y, velocity.z),
-                -1.2,
+                // Critical damping for k=42 (2 * sqrt(42) ≈ 13).
+                // This prevents the mouse spring from storing energy against
+                // a collider and launching the dragged assembly past it.
+                -13,
               ),
             movingMass = Math.max(0.25, spring.piece.body.mass());
           if (acceleration.length() > 90) acceleration.setLength(90);
@@ -4840,7 +4901,9 @@ export default function Home() {
               (velocityB.z - velocityA.z) * axis.z,
             // A free connector should only have a slight guide resistance.
             // Contact friction already accounts for surfaces rubbing together.
-            damping = connection.mode === "linear" ? 0.08 : 0.03,
+            damping =
+              state.physicsSettings.axleSlidingFriction *
+              (connection.mode === "linear" ? 1 : 0.375),
             forceMagnitude = THREE.MathUtils.clamp(
               relativeSpeed * damping,
               -0.35,
@@ -4865,6 +4928,36 @@ export default function Home() {
               },
               true,
             );
+          if (
+            connection.mode === "rotation-linear" &&
+            (connection.profile === "axle-cross" ||
+              connection.profile === "axle-round") &&
+            state.physicsSettings.axleRotationFriction > 0
+          ) {
+            const angularA = connection.a.body.angvel(),
+              angularB = connection.b.body.angvel(),
+              relativeAngularSpeed =
+                (angularB.x - angularA.x) * axis.x +
+                (angularB.y - angularA.y) * axis.y +
+                (angularB.z - angularA.z) * axis.z,
+              torqueMagnitude = THREE.MathUtils.clamp(
+                relativeAngularSpeed *
+                  state.physicsSettings.axleRotationFriction,
+                -1,
+                1,
+              ),
+              torque = axis.clone().multiplyScalar(torqueMagnitude);
+            if (!connection.b.physicsIslandFixed)
+              connection.b.body.addTorque(
+                { x: -torque.x, y: -torque.y, z: -torque.z },
+                true,
+              );
+            if (!connection.a.physicsIslandFixed)
+              connection.a.body.addTorque(
+                { x: torque.x, y: torque.y, z: torque.z },
+                true,
+              );
+          }
         }
         jointForcesMs = performance.now() - phaseStarted;
         phaseStarted = performance.now();
@@ -5353,6 +5446,7 @@ export default function Home() {
         `Inicio con ${s.pieces.length} piezas agrupadas en ${rigidIslands.length} cuerpos rígidos y ${s.connections.length} uniones`;
       s.simLog.events.push(
         `Modo estructural ${structuralMode}; rigidez ${structuralStiffness}%`,
+        `Fricción: piezas ${s.physicsSettings.pieceFriction}, goma ${s.physicsSettings.rubberFriction}, pines libres ${s.physicsSettings.frictionlessPinRotation}, ejes lineal ${s.physicsSettings.axleSlidingFriction}, ejes rotación ${s.physicsSettings.axleRotationFriction}; holgura ${s.physicsSettings.axleTolerance} studs`,
         `Solver: ${solverIterations} iteraciones × ${internalPgsIterations} PGS interno + ${additionalSolverIterations} adicionales`,
         structuralMode === "rigid"
           ? `${fixedConnectionCount} conexiones fijas fusionadas en islas rígidas compuestas`
@@ -5449,6 +5543,14 @@ export default function Home() {
             primitive: CollisionPrimitive,
             gearLayer: boolean,
           ) => {
+            // Bushes and axle joiners often sit in an exactly one-stud gap.
+            // Keep the authored/debug collider unchanged, but leave a tiny
+            // axial solver clearance so floating-point contact correction
+            // cannot pull a freely sliding axle into either neighbouring part.
+            const axleClearance =
+              !gearLayer && /bush|axle joiner/i.test(p.name)
+                ? s.physicsSettings.axleTolerance
+                : 0;
             const collider =
               primitive.shape === "box"
                 ? RAPIER.ColliderDesc.cuboid(
@@ -5457,7 +5559,7 @@ export default function Home() {
                     primitive.size!.z / 2,
                   )
                 : RAPIER.ColliderDesc.cylinder(
-                    primitive.halfHeight!,
+                    Math.max(0.01, primitive.halfHeight! - axleClearance / 2),
                     primitive.radius!,
                   );
             const center = p.physicsOffset
@@ -5473,8 +5575,8 @@ export default function Home() {
                 gearLayer
                   ? CONTACT_FRICTION.gearMesh
                   : p.kind === "wheel" && !p.gear
-                    ? CONTACT_FRICTION.tyre
-                    : CONTACT_FRICTION.plastic,
+                    ? s.physicsSettings.rubberFriction
+                    : s.physicsSettings.pieceFriction,
               )
               .setRestitution(0)
               .setActiveHooks(RAPIER.ActiveHooks.FILTER_CONTACT_PAIRS)
@@ -5514,6 +5616,7 @@ export default function Home() {
       });
       let movingJointCount = 0,
         redundantMovingJoints = 0;
+      const movingGuideJoints = new Map<string, string>();
       s.physicsJoints.clear();
       s.dynamicNoContactPairs.clear();
       s.contactCandidates.clear();
@@ -5564,6 +5667,30 @@ export default function Home() {
           dynamicAxle =
             (c.profile === "axle-cross" || c.profile === "axle-round") &&
             c.b.dynamicAxleConnections;
+        if (c.mode === "linear" || c.mode === "rotation-linear") {
+          const axisKey = worldAxis.clone();
+          if (
+            axisKey.x < -1e-6 ||
+            (Math.abs(axisKey.x) <= 1e-6 && axisKey.y < -1e-6) ||
+            (Math.abs(axisKey.x) <= 1e-6 &&
+              Math.abs(axisKey.y) <= 1e-6 &&
+              axisKey.z < 0)
+          )
+            axisKey.multiplyScalar(-1);
+          const handles = [c.a.body.handle, c.b.body.handle].sort(
+              (left, right) => left - right,
+            ),
+            guideKey = `${handles[0]}:${handles[1]}:${c.mode}:${axisKey.x.toFixed(3)}:${axisKey.y.toFixed(3)}:${axisKey.z.toFixed(3)}`,
+            existingConnectionId = movingGuideJoints.get(guideKey);
+          if (
+            existingConnectionId &&
+            s.physicsJoints.has(existingConnectionId)
+          ) {
+            redundantMovingJoints++;
+            return;
+          }
+          movingGuideJoints.set(guideKey, c.id);
+        }
         let joint: RAPIER.JointData;
         if (c.mode === "rotation" || c.mode === "motor")
           joint = RAPIER.JointData.revolute(a, b, axis);
@@ -5605,6 +5732,15 @@ export default function Home() {
           (created as RAPIER.RevoluteImpulseJoint).configureMotorVelocity(
             0,
             3.5,
+          );
+        else if (
+          c.mode === "rotation" &&
+          frictionlessPinRefs.has(c.b.part) &&
+          s.physicsSettings.frictionlessPinRotation > 0
+        )
+          (created as RAPIER.RevoluteImpulseJoint).configureMotorVelocity(
+            0,
+            s.physicsSettings.frictionlessPinRotation,
           );
         if (c.mode === "linear" && !dynamicAxle) {
           const limit = Math.max(0.15, c.travel / 2);
@@ -7939,6 +8075,55 @@ export default function Home() {
               ? t.rigidStructureHelp
               : t.flexibleStructureHelp}
           </p>
+          <label className="physics-parameters-title">
+            {t.globalPhysicsParameters}
+          </label>
+          {(
+            [
+              ["pieceFriction", t.pieceFriction, 0, 2, 0.01, ""],
+              ["rubberFriction", t.rubberFriction, 0, 3, 0.05, ""],
+              ["frictionlessPinRotation", t.frictionlessPinRotation, 0, 5, 0.05, ""],
+              ["axleSlidingFriction", t.axleSlidingFriction, 0, 1, 0.01, ""],
+              ["axleRotationFriction", t.axleRotationFriction, 0, 1, 0.01, ""],
+              ["axleTolerance", t.axleTolerance, 0, 0.1, 0.005, " studs"],
+            ] as [keyof PhysicsSettings, string, number, number, number, string][]
+          ).map(([key, label, min, max, step, unit]) => (
+            <div className="physics-parameter" key={key}>
+              <div>
+                <span>{label}</span>
+                <output>
+                  {physicsSettings[key].toFixed(step < 0.01 ? 3 : 2)}
+                  {unit}
+                </output>
+              </div>
+              <input
+                type="range"
+                min={min}
+                max={max}
+                step={step}
+                value={physicsSettings[key]}
+                disabled={running}
+                onChange={(event) =>
+                  setPhysicsSettings((current) => ({
+                    ...current,
+                    [key]: Number(event.target.value),
+                  }))
+                }
+              />
+            </div>
+          ))}
+          <p className="physics-parameters-help">{t.globalPhysicsHelp}</p>
+          <button
+            className="physics-reset"
+            disabled={running}
+            onClick={() => {
+              setStructuralMode("rigid");
+              setStructuralStiffness(85);
+              setPhysicsSettings({ ...DEFAULT_PHYSICS_SETTINGS });
+            }}
+          >
+            ↺ {t.resetPhysicsParameters}
+          </button>
           <b>{t.physicsEngine}</b>
           <span>
             <i /> Rapier + LDraw Connect

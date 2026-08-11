@@ -180,9 +180,16 @@ test("gears, tyres and axle connector shells use a 0.95 envelope", () => {
 });
 
 test("keeps every restored correction map preloaded", () => {
-  for (const part of ["3713", "32016", "32034", "32192", "55615", "4265c", "11478"])
+  for (const part of [
+    "3713", "32016", "32034", "32192", "55615", "4265c", "11478",
+    "32062", "99773",
+  ])
     assert.ok(preloadedConnectionMaps[part]?.length, `${part} connection map`);
-  for (const part of ["32013", "32016", "32034", "32192", "3713", "87408"])
+  for (const part of [
+    "32013", "32016", "32034", "32192", "3713", "87408", "18654",
+    "2825", "32062", "32184", "32271", "4265c", "45590", "55615",
+    "60484", "64179", "99773",
+  ])
     assert.ok(preloadedCollisionMaps[part]?.length, `${part} collision map`);
 });
 

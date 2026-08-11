@@ -559,6 +559,88 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
       "length": 1
     }
   ],
+  "11478": [
+    {
+      "local": [
+        0,
+        0,
+        1
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "half",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 0.5000000000000006
+    },
+    {
+      "local": [
+        0,
+        0,
+        0
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "half",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 0.5000000000000006
+    },
+    {
+      "local": [
+        0,
+        0,
+        -1
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "half",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 0.5000000000000006
+    },
+    {
+      "local": [
+        0,
+        0,
+        -2
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "axle",
+      "role": "socket",
+      "diameter": 0.6,
+      "length": 0.5000000000000006
+    },
+    {
+      "local": [
+        0,
+        0,
+        2
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "axle",
+      "role": "socket",
+      "diameter": 0.6,
+      "length": 0.5000000000000006
+    }
+  ],
   "15100": [
     {
       "local": [
@@ -1044,6 +1126,24 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
       "role": "socket",
       "diameter": 0.8,
       "length": 1
+    }
+  ],
+  "32062": [
+    {
+      "local": [
+        0,
+        0,
+        0
+      ],
+      "axis": [
+        1,
+        0,
+        0
+      ],
+      "kind": "axle",
+      "role": "shaft",
+      "diameter": 0.6000000000000002,
+      "length": 2
     }
   ],
   "32063": [
@@ -2551,6 +2651,115 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
       "diameter": 0.8
     }
   ],
+  "99773": [
+    {
+      "local": [
+        0,
+        0,
+        0
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "half",
+      "role": "socket",
+      "diameter": 0.7089799970388413
+    },
+    {
+      "local": [
+        -1,
+        0,
+        0
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "half",
+      "role": "socket",
+      "diameter": 0.7089799970388413
+    },
+    {
+      "local": [
+        1,
+        0,
+        0
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "half",
+      "role": "socket",
+      "diameter": 0.7089799970388413
+    },
+    {
+      "local": [
+        0,
+        0,
+        -1
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "half",
+      "role": "socket",
+      "diameter": 0.8
+    },
+    {
+      "local": [
+        0,
+        0,
+        -2
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "half",
+      "role": "socket",
+      "diameter": 0.8000000000000002
+    },
+    {
+      "local": [
+        -2,
+        0,
+        0
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "axle",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 1
+    },
+    {
+      "local": [
+        2,
+        0,
+        0
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "axle",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 1
+    }
+  ],
   "4265c": [
     {
       "local": [
@@ -2566,88 +2775,6 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
       "kind": "axle",
       "role": "socket",
       "diameter": 0.6325250029563905
-    }
-  ],
-  "11478": [
-    {
-      "local": [
-        0,
-        0,
-        1
-      ],
-      "axis": [
-        0,
-        1,
-        0
-      ],
-      "kind": "half",
-      "role": "socket",
-      "diameter": 0.8,
-      "length": 0.5000000000000006
-    },
-    {
-      "local": [
-        0,
-        0,
-        0
-      ],
-      "axis": [
-        0,
-        1,
-        0
-      ],
-      "kind": "half",
-      "role": "socket",
-      "diameter": 0.8,
-      "length": 0.5000000000000006
-    },
-    {
-      "local": [
-        0,
-        0,
-        -1
-      ],
-      "axis": [
-        0,
-        1,
-        0
-      ],
-      "kind": "half",
-      "role": "socket",
-      "diameter": 0.8,
-      "length": 0.5000000000000006
-    },
-    {
-      "local": [
-        0,
-        0,
-        -2
-      ],
-      "axis": [
-        0,
-        1,
-        0
-      ],
-      "kind": "axle",
-      "role": "socket",
-      "diameter": 0.6,
-      "length": 0.5000000000000006
-    },
-    {
-      "local": [
-        0,
-        0,
-        2
-      ],
-      "axis": [
-        0,
-        1,
-        0
-      ],
-      "kind": "axle",
-      "role": "socket",
-      "diameter": 0.6,
-      "length": 0.5000000000000006
     }
   ],
   "6538c": [
