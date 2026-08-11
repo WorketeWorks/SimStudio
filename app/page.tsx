@@ -163,6 +163,10 @@ type Connection = {
   motorSpeed: number;
   motorForce: number;
   userConfigured: boolean;
+  forced?: boolean;
+  forcedOffset?: number;
+  localPointA?: THREE.Vector3;
+  localPointB?: THREE.Vector3;
 };
 type RuntimeGearLink = GearPair<Piece> & {
   axisA: THREE.Vector3;
@@ -177,6 +181,8 @@ type ManualConnectDraft = {
   cursor: THREE.Vector3;
   plane: THREE.Plane;
   line: THREE.Line;
+  label: HTMLDivElement;
+  forced: boolean;
   connectorsWereVisible: boolean;
 };
 type DebugFlags = { colliders: boolean; connectors: boolean; physics: boolean };
@@ -600,6 +606,8 @@ const translations = {
     rotationPivot: "CENTRO DE GIRO",
     pieceCenter: "Centro de la pieza",
     connectionPivot: "Conexión",
+    forceConnect: "FORZANDO UNIÓN",
+    forcedJoint: "forzada",
     pieceJoints: "UNIONES DE ESTA PIEZA",
     joint: "Unión",
     speed: "VELOCIDAD",
@@ -749,6 +757,8 @@ const translations = {
     rotationPivot: "ROTATION PIVOT",
     pieceCenter: "Part center",
     connectionPivot: "Connection",
+    forceConnect: "FORCING JOINT",
+    forcedJoint: "forced",
     pieceJoints: "JOINTS ON THIS PART",
     joint: "Joint",
     speed: "SPEED",
@@ -1254,6 +1264,45 @@ const rotatePieceAroundPivotWithGlobalSnap = (
       ? Math.round((current + radians) / step) * step - current
       : radians;
   rotatePieceAroundLocalAxis(piece, localAxis, appliedRadians);
+};
+const forcedConnectionAxesAligned = (connection: Connection) => {
+  connection.a.mesh.updateMatrixWorld(true);
+  connection.b.mesh.updateMatrixWorld(true);
+  const socketAxis = connection.socket.axis
+      .clone()
+      .transformDirection(connection.a.mesh.matrixWorld)
+      .normalize(),
+    shaftAxis = connection.shaft.axis
+      .clone()
+      .transformDirection(connection.b.mesh.matrixWorld)
+      .normalize();
+  return Math.abs(socketAxis.dot(shaftAxis)) >= 0.985;
+};
+const removeMisalignedForcedConnections = (
+  state: AppState,
+  movedPiece: Piece,
+) => {
+  const removed = state.connections.filter(
+    (connection) =>
+      connection.forced &&
+      (connection.a === movedPiece || connection.b === movedPiece) &&
+      !forcedConnectionAxesAligned(connection),
+  );
+  if (!removed.length) return 0;
+  const affected = new Set<Piece>([movedPiece]);
+  removed.forEach((connection) => {
+    affected.add(connection.a);
+    affected.add(connection.b);
+  });
+  const removedIds = new Set(removed.map((connection) => connection.id));
+  state.connections = state.connections.filter(
+    (connection) => !removedIds.has(connection.id),
+  );
+  affected.forEach((piece) =>
+    ensurePieceRotationPivot(piece, state.connections),
+  );
+  rebalanceAllSmartDefaults(state);
+  return removed.length;
 };
 const detectShaftTraversals = (pieces: Piece[]) => {
   type SocketEntry = {
@@ -2450,6 +2499,16 @@ export default function Home() {
             a = connection.a.mesh.getWorldPosition(new THREE.Vector3()),
             b = connection.b.mesh.getWorldPosition(new THREE.Vector3());
           (object as THREE.Line).geometry.setFromPoints([a, b]);
+        } else if (data.debugKind === "forced-joint-link") {
+          const connection = data.connection as Connection;
+          if (!connection.localPointA || !connection.localPointB) return;
+          const a = connection.a.mesh.localToWorld(
+              connection.localPointA.clone(),
+            ),
+            b = connection.b.mesh.localToWorld(
+              connection.localPointB.clone(),
+            );
+          (object as THREE.Line).geometry.setFromPoints([a, b]);
         }
       });
     };
@@ -2660,6 +2719,41 @@ export default function Home() {
           axes.renderOrder = 42;
           debugRoot.add(axes);
         }
+      }
+      for (const connection of state.connections.filter(
+        (candidate) => candidate.forced,
+      )) {
+        if (!connection.localPointA || !connection.localPointB) continue;
+        const addForcedPoint = (piece: Piece, local: THREE.Vector3) => {
+          const point = new THREE.Mesh(
+            new THREE.SphereGeometry(0.13, 12, 8),
+            new THREE.MeshBasicMaterial({
+              color: 0xff2d2d,
+              depthTest: false,
+            }),
+          );
+          point.renderOrder = 55;
+          point.userData = {
+            debugKind: "connector-point",
+            piece,
+            local: local.clone(),
+          };
+          debugRoot.add(point);
+        };
+        addForcedPoint(connection.a, connection.localPointA);
+        addForcedPoint(connection.b, connection.localPointB);
+        const line = new THREE.Line(
+          new THREE.BufferGeometry(),
+          new THREE.LineBasicMaterial({
+            color: 0xff2d2d,
+            depthTest: false,
+            transparent: true,
+            opacity: 0.9,
+          }),
+        );
+        line.renderOrder = 54;
+        line.userData = { debugKind: "forced-joint-link", connection };
+        debugRoot.add(line);
       }
       if (state.debug.physics)
         for (const connection of state.connections) {
@@ -3127,6 +3221,18 @@ export default function Home() {
             right.world.distanceToSquared(target),
         )[0];
     };
+    const forceConnectorAxesCompatible = (
+      sourcePiece: Piece,
+      sourceConnector: MeshConnector,
+      targetPiece: Piece,
+      targetConnector: MeshConnector,
+    ) => {
+      const sourceAxis = worldConnector(sourcePiece, sourceConnector).axis,
+        targetAxis = worldConnector(targetPiece, targetConnector).axis;
+      // Both directions on the same line are valid. Crossing or oblique axes
+      // cannot describe a physical pin/axle joint and must be rejected.
+      return Math.abs(sourceAxis.dot(targetAxis)) >= 0.985;
+    };
     const socketSurfaceHalfThickness = (
       host: Piece,
       socket: MeshConnector,
@@ -3146,6 +3252,10 @@ export default function Home() {
         point: THREE.Vector3;
         axis: THREE.Vector3;
         localAxisA: THREE.Vector3;
+      },
+      forcedAnchors?: {
+        pointA: THREE.Vector3;
+        pointB: THREE.Vector3;
       },
     ) => {
       const profile = connectorProfile(shaft, socket);
@@ -3194,6 +3304,14 @@ export default function Home() {
         motorSpeed,
         motorForce,
         userConfigured,
+        forced: !!forcedAnchors,
+        forcedOffset: forcedAnchors?.pointA.distanceTo(forcedAnchors.pointB),
+        localPointA: forcedAnchors
+          ? host.mesh.worldToLocal(forcedAnchors.pointA.clone())
+          : undefined,
+        localPointB: forcedAnchors
+          ? rod.mesh.worldToLocal(forcedAnchors.pointB.clone())
+          : undefined,
       };
       state.connections.push(addedConnection);
       ensurePieceRotationPivot(host, state.connections);
@@ -3279,6 +3397,57 @@ export default function Home() {
         shaftPiece,
         socketConnector,
         shaftConnector,
+      );
+    };
+    const connectForced = (
+      sourcePiece: Piece,
+      sourceConnector: MeshConnector,
+      sourceAnchorLocal: THREE.Vector3,
+      targetPiece: Piece,
+      targetConnector: MeshConnector,
+      targetAnchorLocal: THREE.Vector3,
+    ) => {
+      if (
+        !pairProfile(sourceConnector, targetConnector) ||
+        !forceConnectorAxesCompatible(
+          sourcePiece,
+          sourceConnector,
+          targetPiece,
+          targetConnector,
+        )
+      )
+        return false;
+      const sourcePoint = sourcePiece.mesh.localToWorld(
+          sourceAnchorLocal.clone(),
+        ),
+        targetPoint = targetPiece.mesh.localToWorld(targetAnchorLocal.clone());
+      if (sourcePoint.distanceTo(targetPoint) > 5) return false;
+      const socketPiece =
+          sourceConnector.role === "socket" ? sourcePiece : targetPiece,
+        socketConnector =
+          sourceConnector.role === "socket"
+            ? sourceConnector
+            : targetConnector,
+        shaftPiece =
+          sourceConnector.role === "shaft" ? sourcePiece : targetPiece,
+        shaftConnector =
+          sourceConnector.role === "shaft" ? sourceConnector : targetConnector,
+        pointA =
+          sourceConnector.role === "socket" ? sourcePoint : targetPoint,
+        pointB =
+          sourceConnector.role === "shaft" ? sourcePoint : targetPoint,
+        socketWorld = worldConnector(socketPiece, socketConnector);
+      return addConnection(
+        socketPiece,
+        shaftPiece,
+        socketConnector,
+        shaftConnector,
+        {
+          point: pointA.clone(),
+          axis: socketWorld.axis.clone(),
+          localAxisA: socketConnector.axis.clone().normalize(),
+        },
+        { pointA, pointB },
       );
     };
     type IndexedSocket = {
@@ -3451,7 +3620,9 @@ export default function Home() {
       }
       const started = performance.now();
       state.connectionScanVersion++;
-      state.connections = [];
+      state.connections = state.connections.filter(
+        (connection) => connection.forced,
+      );
       state.bulkConnecting = true;
       const { sockets, shaftGrid } = buildConnectionIndex();
       sockets.forEach((socket) => scanSocketOnce(socket, shaftGrid));
@@ -3463,7 +3634,9 @@ export default function Home() {
       if (!AUTO_CONNECTIONS_ENABLED) return state.connections.length;
       const scanVersion = ++state.connectionScanVersion;
       let operationStarted = performance.now();
-      state.connections = [];
+      state.connections = state.connections.filter(
+        (connection) => connection.forced,
+      );
       state.bulkConnecting = true;
       const { sockets, shaftGrid } = buildConnectionIndex();
       state.pendingConnectionMs += performance.now() - operationStarted;
@@ -3613,6 +3786,7 @@ export default function Home() {
         removedPairs: { a: Piece; b: Piece }[] = [];
       for (const connection of state.connections) {
         const dynamicAxle =
+          !connection.forced &&
           (connection.profile === "axle-cross" ||
             connection.profile === "axle-round") &&
           connection.b.dynamicAxleConnections;
@@ -4262,6 +4436,25 @@ export default function Home() {
       }
       return best;
     };
+    const updateManualForceMode = (forced: boolean) => {
+      const draft = state.manualConnect;
+      if (!draft || draft.forced === forced) return;
+      draft.forced = forced;
+      (draft.line.material as THREE.LineBasicMaterial).color.setHex(
+        forced ? 0xff2d2d : 0xffee38,
+      );
+      draft.label.textContent = forced ? t.forceConnect : "CONNECT";
+      draft.label.classList.toggle("forced", forced);
+      setMessage(
+        forced
+          ? language === "es"
+            ? "Force Connect: las piezas no se moverán"
+            : "Force Connect: parts will not be moved"
+          : language === "es"
+            ? "Connect manual normal"
+            : "Normal manual Connect",
+      );
+    };
     const pieceFrom = (object: THREE.Object3D, instanceId?: number) => {
       const instancePieces = object.userData.instancePieces as Piece[] | undefined;
       if (instancePieces && instanceId !== undefined)
@@ -4613,6 +4806,8 @@ export default function Home() {
         point: connection.point.clone(),
         axis: connection.axis.clone(),
         localAxisA: connection.localAxisA.clone(),
+        localPointA: connection.localPointA?.clone(),
+        localPointB: connection.localPointB?.clone(),
       }),
       cloneConnector = (connector: MeshConnector): MeshConnector => ({
         ...connector,
@@ -4990,15 +5185,23 @@ export default function Home() {
         }
         const { connector, anchorLocal } = selectedConnector,
           origin = hitPiece.mesh.localToWorld(anchorLocal.clone()),
+          forced = e.shiftKey,
           line = new THREE.Line(
             new THREE.BufferGeometry().setFromPoints([origin, origin]),
             new THREE.LineBasicMaterial({
-              color: 0xffee38,
+              color: forced ? 0xff2d2d : 0xffee38,
               depthTest: false,
               transparent: true,
               opacity: 0.95,
             }),
           );
+        const forceLabel = document.createElement("div"),
+          hostBounds = host.getBoundingClientRect();
+        forceLabel.className = `manual-connect-label${forced ? " forced" : ""}`;
+        forceLabel.textContent = forced ? t.forceConnect : "CONNECT";
+        forceLabel.style.left = `${e.clientX - hostBounds.left + 14}px`;
+        forceLabel.style.top = `${e.clientY - hostBounds.top + 14}px`;
+        host.appendChild(forceLabel);
         line.renderOrder = 60;
         scene.add(line);
         state.manualConnect = {
@@ -5011,6 +5214,8 @@ export default function Home() {
             origin,
           ),
           line,
+          label: forceLabel,
+          forced,
           connectorsWereVisible: state.debug.connectors,
         };
         state.selected = hitPiece;
@@ -5018,7 +5223,9 @@ export default function Home() {
         setSelectedId(hitPiece.id);
         setDebugViews((current) => ({ ...current, connectors: true }));
         setMessage(
-          `Connect manual: ${hitPiece.part} · suelta cerca de un punto compatible`,
+          forced
+            ? `${t.forceConnect}: ${hitPiece.part} · máximo 5 u`
+            : `Connect manual: ${hitPiece.part} · suelta cerca de un punto compatible`,
         );
         refreshDebug();
         return;
@@ -5173,6 +5380,7 @@ export default function Home() {
       }
       if (state.manualConnect) {
         moved = true;
+        updateManualForceMode(e.shiftKey);
         cast(e);
         const selectedOrigin = state.manualConnect.piece.mesh.localToWorld(
             state.manualConnect.anchorLocal.clone(),
@@ -5187,6 +5395,9 @@ export default function Home() {
           candidate,
         ]);
         state.manualConnect.line.geometry.attributes.position.needsUpdate = true;
+        const hostBounds = host.getBoundingClientRect();
+        state.manualConnect.label.style.left = `${e.clientX - hostBounds.left + 14}px`;
+        state.manualConnect.label.style.top = `${e.clientY - hostBounds.top + 14}px`;
         return;
       }
       if (spring) {
@@ -5374,6 +5585,7 @@ export default function Home() {
               rayDistance: number;
             }
           | undefined;
+        let rejectedByOrientation = false;
         for (const piece of state.pieces) {
           if (piece === draft.piece) continue;
           piece.mesh.updateMatrixWorld(true);
@@ -5399,6 +5611,19 @@ export default function Home() {
                 ),
                 rayDistance = ray.ray.distanceToPoint(worldPoint);
               if (
+                draft.forced &&
+                screenDistance <= maximumScreenDistance &&
+                !forceConnectorAxesCompatible(
+                  draft.piece,
+                  draft.connector,
+                  piece,
+                  connector,
+                )
+              ) {
+                rejectedByOrientation = true;
+                continue;
+              }
+              if (
                 screenDistance <= maximumScreenDistance &&
                 (!best ||
                   screenDistance < best.screenDistance - 0.5 ||
@@ -5418,16 +5643,26 @@ export default function Home() {
         let connected = false;
         if (best) {
           state.recordHistory();
-          connected = connectManual(
-            draft.piece,
-            draft.connector,
-            draft.anchorLocal,
-            best.piece,
-            best.connector,
-            best.anchorLocal,
-          );
+          connected = draft.forced
+            ? connectForced(
+                draft.piece,
+                draft.connector,
+                draft.anchorLocal,
+                best.piece,
+                best.connector,
+                best.anchorLocal,
+              )
+            : connectManual(
+                draft.piece,
+                draft.connector,
+                draft.anchorLocal,
+                best.piece,
+                best.connector,
+                best.anchorLocal,
+              );
         }
         scene.remove(draft.line);
+        draft.label.remove();
         draft.line.geometry.dispose();
         (draft.line.material as THREE.Material).dispose();
         state.manualConnect = undefined;
@@ -5441,11 +5676,21 @@ export default function Home() {
         setConnectionRevision((value) => value + 1);
         setMessage(
           connected && best
-            ? `Connect manual: ${draft.piece.part} ↔ ${best.piece.part} · verificando el resto de uniones…`
-            : "Connect manual cancelado: no hay un punto compatible bajo el cursor",
+            ? draft.forced
+              ? `${t.forceConnect}: ${draft.piece.part} ↔ ${best.piece.part} · ${draft.piece.mesh.localToWorld(draft.anchorLocal.clone()).distanceTo(best.piece.mesh.localToWorld(best.anchorLocal.clone())).toFixed(2)} u`
+              : `Connect manual: ${draft.piece.part} ↔ ${best.piece.part} · verificando el resto de uniones…`
+            : draft.forced && best
+              ? language === "es"
+                ? "Force Connect cancelado: la separación supera 5 u"
+                : "Force Connect cancelled: separation exceeds 5 u"
+              : draft.forced && rejectedByOrientation
+                ? language === "es"
+                  ? "Force Connect rechazado: los ejes de los conectores no están alineados"
+                  : "Force Connect rejected: connector axes are not aligned"
+              : "Connect manual cancelado: no hay un punto compatible bajo el cursor",
         );
         refreshDebug();
-        if (connected) {
+        if (connected && !draft.forced) {
           const connections = verifyPieceConnections(draft.piece);
           setMessage(
             `Connect manual: ${draft.piece.part} ↔ ${best!.piece.part} · ${connections} uniones verificadas`,
@@ -5561,8 +5806,10 @@ export default function Home() {
       renderer.setSize(host.clientWidth, host.clientHeight);
     };
     const keydown = (e: KeyboardEvent) => {
-      if (e.code === "ShiftLeft" || e.code === "ShiftRight")
+      if (e.code === "ShiftLeft" || e.code === "ShiftRight") {
         shiftHeld = true;
+        updateManualForceMode(true);
+      }
       const target = e.target as HTMLElement | null;
       if (target?.matches("input, textarea, select, [contenteditable=true]"))
         return;
@@ -5633,21 +5880,33 @@ export default function Home() {
         rotation.angle,
         state.rotationSnapStep,
       );
+      const disconnected = removeMisalignedForcedConnections(state, piece);
       piece.mesh.updateMatrixWorld(true);
       if (piece.renderBatched) state.rebuildRenderBatches();
       else state.renderBatchesDirty = true;
       refreshDebug();
+      if (disconnected)
+        setConnectionRevision((value) => value + 1);
       setSelectedId(piece.id);
-      setMessage(`${piece.part} rotada 90° · ${rotation.axis.toUpperCase()}`);
+      setMessage(
+        disconnected
+          ? language === "es"
+            ? `${piece.part} rotada · ${disconnected} unión forzada desconectada por desalineación`
+            : `${piece.part} rotated · ${disconnected} forced joint disconnected after misalignment`
+          : `${piece.part} rotada 90° · ${rotation.axis.toUpperCase()}`,
+      );
     };
     const keyup = (e: KeyboardEvent) => {
-      if (e.code === "ShiftLeft" || e.code === "ShiftRight")
+      if (e.code === "ShiftLeft" || e.code === "ShiftRight") {
         shiftHeld = false;
+        updateManualForceMode(false);
+      }
       if (e.code === "KeyR") rotationPivotHeld = false;
     };
     const clearModifiers = () => {
       shiftHeld = false;
       rotationPivotHeld = false;
+      updateManualForceMode(false);
     };
     const canvas = renderer.domElement;
     let pointerMoveStarted = 0;
@@ -6221,10 +6480,18 @@ export default function Home() {
       radians,
       s.rotationSnapStep,
     );
+    const disconnected = removeMisalignedForcedConnections(s, p);
     if (p.renderBatched) s.rebuildRenderBatches();
     else s.renderBatchesDirty = true;
     s.refreshDebug();
+    if (disconnected) setConnectionRevision((value) => value + 1);
     setSelectedId(p.id);
+    if (disconnected)
+      setMessage(
+        language === "es"
+          ? `${disconnected} unión forzada desconectada por desalineación`
+          : `${disconnected} forced joint disconnected after misalignment`,
+      );
   };
   const nudge = (axis: "x" | "y" | "z", amount: number) => {
     const s = appRef.current,
@@ -6320,6 +6587,8 @@ export default function Home() {
         point: connection.point.clone(),
         axis: connection.axis.clone(),
         localAxisA: connection.localAxisA.clone(),
+        localPointA: connection.localPointA?.clone(),
+        localPointB: connection.localPointB?.clone(),
       }));
       s.simLog = {
         startedAt: new Date().toISOString(),
@@ -6605,11 +6874,21 @@ export default function Home() {
             rotationB.z,
             rotationB.w,
           ).invert(),
-          a = c.point
+          forcedPivot =
+            c.forced && c.localPointB
+              ? c.b.mesh.localToWorld(c.localPointB.clone())
+              : undefined,
+          // A forced joint represents a virtual extension between the two red
+          // points. Rapier still needs one common pivot; using the shaft point
+          // for both local anchors preserves the current visual offset instead
+          // of pulling or teleporting the pieces together at simulation start.
+          worldAnchorA = forcedPivot ?? c.point,
+          worldAnchorB = forcedPivot ?? c.point,
+          a = worldAnchorA
             .clone()
             .sub(new THREE.Vector3(positionA.x, positionA.y, positionA.z))
             .applyQuaternion(inverseRotationA),
-          b = c.point
+          b = worldAnchorB
             .clone()
             .sub(new THREE.Vector3(positionB.x, positionB.y, positionB.z))
             .applyQuaternion(inverseRotationB),
@@ -6766,6 +7045,8 @@ export default function Home() {
             point: connection.point.clone(),
             axis: connection.axis.clone(),
             localAxisA: connection.localAxisA.clone(),
+            localPointA: connection.localPointA?.clone(),
+            localPointB: connection.localPointB?.clone(),
             mode: configured?.mode ?? connection.mode,
             motorSpeed: configured?.motorSpeed ?? connection.motorSpeed,
             motorForce: configured?.motorForce ?? connection.motorForce,
@@ -7137,7 +7418,8 @@ export default function Home() {
       : [];
   const selectedConnections = selected
     ? (appRef.current?.connections.filter(
-        (connection) => connection.b === selected,
+        (connection) =>
+          connection.a === selected || connection.b === selected,
       ) ?? [])
     : [];
   const selectedGearSpec = selected
@@ -8546,21 +8828,25 @@ export default function Home() {
                 )}
               </div>
             )}
-            {selected.connectors.some(
-              (connector) => connector.role === "shaft",
-            ) && (
+            {selectedConnections.length > 0 && (
               <div className="connection-editor">
                 <label>{t.pieceJoints}</label>
                 {selectedConnections.length ? (
                   selectedConnections.map((connection, index) => {
-                    const other = connection.a;
+                    const other =
+                      connection.a === selected ? connection.b : connection.a;
                     return (
                       <div className="connection-card" key={connection.id}>
                         <div>
                           <b>
                             {t.joint} {index + 1} · {other.part}
                           </b>
-                          <span>{profileLabels[connection.profile]}</span>
+                          <span>
+                            {profileLabels[connection.profile]} · {modeLabels[connection.mode]}
+                            {connection.forced
+                              ? ` (${t.forcedJoint} ${(connection.forcedOffset ?? 0).toFixed(2)} u)`
+                              : ""}
+                          </span>
                         </div>
                         <select
                           value={connection.mode}
