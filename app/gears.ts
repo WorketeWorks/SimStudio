@@ -30,6 +30,8 @@ const exactSpecs: Record<string, Omit<GearSpec, "pitchRadius">> = {
   "32269": { teeth: 20, kind: "double-bevel" },
   "3648": { teeth: 24, kind: "spur" },
   "3648b": { teeth: 24, kind: "spur" },
+  "3649": { teeth: 40, kind: "spur" },
+  "32198": { teeth: 20, kind: "bevel" },
   "46372": { teeth: 28, kind: "double-bevel" },
   "32498": { teeth: 36, kind: "double-bevel" },
 };
@@ -116,6 +118,67 @@ export function findParallelGearPairs<T>(
         centerDistance,
         expectedDistance,
         distanceError,
+      });
+    }
+  }
+  return pairs;
+}
+
+/** Finds bevel and double-bevel gears meshing on perpendicular axles. */
+export function findPerpendicularGearPairs<T>(
+  gears: GearPose<T>[],
+  options: {
+    axisTolerance?: number;
+    intersectionTolerance?: number;
+    pitchTolerance?: number;
+  } = {},
+): GearPair<T>[] {
+  const axisTolerance = options.axisTolerance ?? 0.1,
+    intersectionTolerance = options.intersectionTolerance ?? 0.2,
+    pitchTolerance = options.pitchTolerance ?? 0.32,
+    pairs: GearPair<T>[] = [];
+  for (let aIndex = 0; aIndex < gears.length; aIndex++) {
+    const a = gears[aIndex],
+      axisA = normalized(a.axis);
+    if (a.spec.kind === "spur") continue;
+    for (let bIndex = aIndex + 1; bIndex < gears.length; bIndex++) {
+      const b = gears[bIndex],
+        axisB = normalized(b.axis);
+      if (b.spec.kind === "spur" || Math.abs(dot(axisA, axisB)) > axisTolerance)
+        continue;
+      const delta = [
+          b.center[0] - a.center[0],
+          b.center[1] - a.center[1],
+          b.center[2] - a.center[2],
+        ],
+        cross: [number, number, number] = [
+          axisA[1] * axisB[2] - axisA[2] * axisB[1],
+          axisA[2] * axisB[0] - axisA[0] * axisB[2],
+          axisA[0] * axisB[1] - axisA[1] * axisB[0],
+        ],
+        lineSeparation = Math.abs(dot(delta, normalized(cross))),
+        offsetA = Math.abs(dot(delta, axisA)),
+        offsetB = Math.abs(dot(delta, axisB)),
+        errorA = Math.abs(offsetA - b.spec.pitchRadius),
+        errorB = Math.abs(offsetB - a.spec.pitchRadius);
+      if (
+        lineSeparation > intersectionTolerance ||
+        errorA > pitchTolerance ||
+        errorB > pitchTolerance
+      )
+        continue;
+      const centerDistance = length(delta),
+        expectedDistance = Math.hypot(
+          a.spec.pitchRadius,
+          b.spec.pitchRadius,
+        );
+      pairs.push({
+        a,
+        b,
+        ratio: gearRatio(a.spec.teeth, b.spec.teeth),
+        centerDistance,
+        expectedDistance,
+        distanceError: Math.hypot(errorA, errorB, lineSeparation),
       });
     }
   }

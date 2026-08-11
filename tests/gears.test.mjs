@@ -8,7 +8,13 @@ const source = readFileSync(new URL("../app/gears.ts", import.meta.url), "utf8")
   js = ts.transpile(source, { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }),
   module = { exports: {} };
 vm.runInNewContext(`(function(exports,module){${js}\n})(module.exports,module);`, { module });
-const { findParallelGearPairs, gearCenterDistance, gearRatio, gearSpecFor } = module.exports;
+const {
+  findParallelGearPairs,
+  findPerpendicularGearPairs,
+  gearCenterDistance,
+  gearRatio,
+  gearSpecFor,
+} = module.exports;
 
 test("recognises palette gears and pitch radius", () => {
   assert.deepEqual({ ...gearSpecFor("32269", "Technic Gear 20 Tooth Double Bevel") }, {
@@ -18,6 +24,34 @@ test("recognises palette gears and pitch radius", () => {
   });
   assert.equal(gearCenterDistance(8, 24), 2);
   assert.equal(gearRatio(8, 24), -1 / 3);
+  assert.equal(gearSpecFor("3649")?.teeth, 40);
+  assert.deepEqual({ ...gearSpecFor("32198") }, {
+    teeth: 20,
+    kind: "bevel",
+    pitchRadius: 1.25,
+  });
+});
+
+test("links compatible bevel gears on perpendicular intersecting axles", () => {
+  const bevel = (id, teeth, center, axis, kind = "double-bevel") => ({
+    value: id,
+    spec: { teeth, kind, pitchRadius: teeth / 16 },
+    center,
+    axis,
+  });
+  const result = findPerpendicularGearPairs([
+    bevel("32198", 20, [0, 0, 0], [1, 0, 0], "bevel"),
+    bevel("32270", 12, [0.75, 1.25, 0], [0, 1, 0]),
+  ]);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].ratio, -20 / 12);
+  assert.equal(
+    findPerpendicularGearPairs([
+      bevel("32198", 20, [0, 0, 0], [1, 0, 0], "bevel"),
+      bevel("far", 12, [2, 2, 0], [0, 1, 0]),
+    ]).length,
+    0,
+  );
 });
 
 test("links compatible parallel gears and rejects wrong distances", () => {
