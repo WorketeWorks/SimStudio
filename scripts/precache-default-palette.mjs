@@ -17,6 +17,10 @@ import {
   straightAxleConnectors,
 } from "../app/connectors.ts";
 import { preloadedConnectionMaps } from "../app/connection-maps.ts";
+import {
+  preloadedCollisionMaps,
+  preloadedGearCollisionMaps,
+} from "../app/collision-maps.ts";
 import { paletteParts } from "../app/palette.ts";
 
 globalThis.ProgressEvent ??= class ProgressEvent extends Event {
@@ -237,7 +241,20 @@ const modelText = (part) =>
     ...(collider.radius === undefined ? {} : { radius: collider.radius }),
     ...(collider.halfHeight === undefined ? {} : { halfHeight: collider.halfHeight }),
     rotation: collider.rotation.toArray(),
-  });
+  }),
+  colliderVectors = (colliders) =>
+    colliders.map((collider) => ({
+      shape: collider.shape,
+      center: new THREE.Vector3(...collider.center),
+      ...(collider.size
+        ? { size: new THREE.Vector3(...collider.size) }
+        : {}),
+      ...(collider.radius === undefined ? {} : { radius: collider.radius }),
+      ...(collider.halfHeight === undefined
+        ? {}
+        : { halfHeight: collider.halfHeight }),
+      rotation: new THREE.Quaternion(...collider.rotation),
+    }));
 
 let catalog = { version: 1, parts: {}, assets: {} };
 if (selectedReferences.size) {
@@ -323,12 +340,15 @@ try {
             ? "half"
             : connector.kind,
       }));
-    const colliders =
-        straightAxleCollisionPrimitives(part.name) ??
-        approximateCollisionPrimitives(wrapper, part.name, connectors),
-      gearColliders = part.gear
-        ? approximateGearCollisionPrimitives(colliders)
-        : [],
+    const colliders = preloadedCollisionMaps[part.part]
+        ? colliderVectors(preloadedCollisionMaps[part.part])
+        : straightAxleCollisionPrimitives(part.name) ??
+          approximateCollisionPrimitives(wrapper, part.name, connectors),
+      gearColliders = preloadedGearCollisionMaps[part.part]
+        ? colliderVectors(preloadedGearCollisionMaps[part.part])
+        : part.gear
+          ? approximateGearCollisionPrimitives(colliders)
+          : [],
       box = new THREE.Box3().setFromObject(wrapper),
       rootFile = resolvedFiles.get(`${(part.modelPart ?? part.part).toLowerCase()}.dat`);
     catalog.parts[part.part] = {

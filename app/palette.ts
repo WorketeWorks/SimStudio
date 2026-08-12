@@ -30,7 +30,7 @@ const groups:Record<PaletteFamily,Entry[]>={
 
 const ldrawColor:Record<number,number>={2:19,5:4,7:1,11:0,85:72,86:71,88:70};
 const defaultColorOverride:Record<string,number>={"4265c":14,"15458":72};
-const invalidGeometry=new Set<string>(["32198","3649"]);
+const invalidGeometry=new Set<string>();
 const modelAlias:Record<string,string>={"4265c":"32123b","4185":"4185b","6538c":"59443","3648":"3648b"};
 export const paletteRequestAliases:Record<string,string>={"32123a":"4265c","32556b":"32556"};
 const thumbAlias:Record<string,string>={"32556":"32556b"};

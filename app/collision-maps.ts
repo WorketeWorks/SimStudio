@@ -9,6 +9,81 @@ export type StoredCollisionPrimitive = {
 
 // Generated from the reviewed maps exported by Sim Studio's collider editor.
 export const preloadedCollisionMaps: Record<string, StoredCollisionPrimitive[]> = {
+  "6589": [
+    {
+      "shape": "cylinder",
+      "center": [0, 0, -0.1],
+      "radius": 0.6,
+      "halfHeight": 0.25,
+      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865476]
+    },
+    {
+      "shape": "cylinder",
+      "center": [0, 0, -0.175],
+      "radius": 0.8,
+      "halfHeight": 0.175,
+      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865476]
+    }
+  ],
+  "3648": [
+    {
+      "shape": "cylinder",
+      "center": [0, 0, 0],
+      "radius": 1.6,
+      "halfHeight": 0.25,
+      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865476]
+    },
+    {
+      "shape": "cylinder",
+      "center": [0, 0, 0],
+      "radius": 0.45,
+      "halfHeight": 0.48,
+      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865476]
+    }
+  ],
+  "46372": [
+    {
+      "shape": "cylinder",
+      "center": [0, 0, 0],
+      "radius": 1.85,
+      "halfHeight": 0.5,
+      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865475]
+    }
+  ],
+  "32198": [
+    {
+      "shape": "cylinder",
+      "center": [0, 0, 0.175],
+      "radius": 1.3,
+      "halfHeight": 0.175,
+      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865475]
+    },
+    {
+      "shape": "cylinder",
+      "center": [0, 0, 0],
+      "radius": 0.6,
+      "halfHeight": 0.15,
+      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865476]
+    }
+  ],
+  "32270": [
+    {
+      "shape": "cylinder",
+      "center": [0, 0, 0],
+      "radius": 0.85,
+      "halfHeight": 0.5,
+      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865475]
+    }
+  ],
+  "32269": [
+    {
+      "shape": "cylinder",
+      "center": [0, 0, 0],
+      "radius": 1.35,
+      "halfHeight": 0.5,
+      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865475]
+    }
+  ],
   "2825": [
     {
       "shape": "box",
@@ -1150,6 +1225,67 @@ export const preloadedCollisionMaps: Record<string, StoredCollisionPrimitive[]> 
 
 // Optional second layer used exclusively for gear-to-gear contacts.
 export const preloadedGearCollisionMaps: Record<string, StoredCollisionPrimitive[]> = {
+  "6589": [
+    {
+      "shape": "cylinder",
+      "center": [0, 0, -0.1],
+      "radius": 0.55,
+      "halfHeight": 0.25,
+      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865476]
+    },
+    {
+      "shape": "cylinder",
+      "center": [0, 0, -0.05],
+      "radius": 0.8,
+      "halfHeight": 0.05,
+      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865476]
+    }
+  ],
+  "3648": [
+    {
+      "shape": "cylinder",
+      "center": [0, 0, 0],
+      "radius": 1.3539019744873046,
+      "halfHeight": 0.25,
+      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865475]
+    }
+  ],
+  "46372": [
+    {
+      "shape": "cylinder",
+      "center": [0, 0, 0],
+      "radius": 1.5,
+      "halfHeight": 0.5,
+      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865475]
+    }
+  ],
+  "32198": [
+    {
+      "shape": "cylinder",
+      "center": [0, 0, 0.175],
+      "radius": 1,
+      "halfHeight": 0.175,
+      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865475]
+    }
+  ],
+  "32270": [
+    {
+      "shape": "cylinder",
+      "center": [0, 0, 0],
+      "radius": 0.5,
+      "halfHeight": 0.5,
+      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865475]
+    }
+  ],
+  "32269": [
+    {
+      "shape": "cylinder",
+      "center": [0, 0, 0],
+      "radius": 1,
+      "halfHeight": 0.5,
+      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865475]
+    }
+  ],
   "2825": [],
   "32062": [],
   "32184": [],

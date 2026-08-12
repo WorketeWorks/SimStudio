@@ -43,8 +43,6 @@ import {
   contactPairKey,
 } from "./physics-contact-filter";
 import {
-  findParallelGearPairs,
-  findPerpendicularGearPairs,
   gearSpecFor,
   type GearPair,
   type GearPose,
@@ -167,6 +165,13 @@ type Connection = {
   forcedOffset?: number;
   localPointA?: THREE.Vector3;
   localPointB?: THREE.Vector3;
+  axialStops?: {
+    piece: Piece;
+    primitive: CollisionPrimitive;
+    side: 1 | -1;
+    minimumDistance: number;
+    lastLoggedMs?: number;
+  }[];
 };
 type RuntimeGearLink = GearPair<Piece> & {
   axisA: THREE.Vector3;
@@ -594,7 +599,7 @@ const translations = {
     ready: "Catálogo local listo",
     running: "SIMULACIÓN: arrastra una pieza para aplicarle fuerza",
     cameraHelp:
-      "Arrastrar: mover · R+arrastrar: girar desde una conexión · Rueda central: desplazar cámara · Doble rueda: centrar/restaurar · Alt/botón derecho: orbitar · Rueda: zoom · Ctrl+arrastrar: Connect manual · Ctrl+Z/Y: deshacer/rehacer · Ctrl+C/V: copiar/pegar · Shift: mover Y · WASD/flechas: rotar 90° · Alt+clic: fijar",
+      "Arrastrar: mover · R+arrastrar: girar desde una conexión · Rueda central: desplazar cámara · Doble rueda: centrar/restaurar · Alt/botón derecho: orbitar · Rueda: zoom · Ctrl+arrastrar: Connect manual · Ctrl+Z/Y: deshacer/rehacer · Ctrl+C/V: copiar/pegar · Shift: mover Y · WASD/Q/E/flechas: rotar 90° · Alt+clic: fijar",
     properties: "PROPIEDADES",
     piece: "PIEZA",
     color: "COLOR",
@@ -745,7 +750,7 @@ const translations = {
     ready: "Local catalog ready",
     running: "SIMULATION: drag a part to apply force",
     cameraHelp:
-      "Drag: move · R+drag: rotate from a connection · Middle drag: pan camera · Middle double-click: focus/reset · Alt/right button: orbit · Wheel: zoom · Ctrl+drag: manual Connect · Ctrl+Z/Y: undo/redo · Ctrl+C/V: copy/paste · Shift: move Y · WASD/arrows: rotate 90° · Alt+click: fix",
+      "Drag: move · R+drag: rotate from a connection · Middle drag: pan camera · Middle double-click: focus/reset · Alt/right button: orbit · Wheel: zoom · Ctrl+drag: manual Connect · Ctrl+Z/Y: undo/redo · Ctrl+C/V: copy/paste · Shift: move Y · WASD/Q/E/arrows: rotate 90° · Alt+click: fix",
     properties: "PROPERTIES",
     piece: "PART",
     color: "COLOR",
@@ -882,7 +887,12 @@ const frictionlessPinRefs = new Set(["3749", "3673", "32556"]);
 // plastic must slide over plastic without behaving as if both surfaces were
 // rubber, while tyres and the floor still need enough grip to drive a model.
 const CONTACT_FRICTION = {
-  gearMesh: 0.12,
+  // The magenta gear layer is a continuous cylindrical approximation, not an
+  // actual tooth mesh. Tangential friction makes perpendicular cylinders bind
+  // and eventually depenetrate by ejecting an axle island. Tooth torque is
+  // already transmitted by the ratio constraint, so this layer only supplies
+  // a frictionless normal contact.
+  gearMesh: 0,
   floor: 0.9,
 } as const;
 const DEFAULT_PHYSICS_SETTINGS: PhysicsSettings = {
@@ -945,6 +955,62 @@ const gearPoseForPiece = (piece: Piece): GearPose<Piece> | undefined => {
     axis: axis.normalize().toArray(),
   };
 };
+type WorldGearVolume = {
+  piece: Piece;
+  center: THREE.Vector3;
+  axis: THREE.Vector3;
+  radius: number;
+  halfHeight: number;
+};
+const worldGearVolumes = (piece: Piece): WorldGearVolume[] => {
+  piece.mesh.updateMatrixWorld(true);
+  const scale = piece.mesh.getWorldScale(new THREE.Vector3()),
+    scaleFactor = Math.max(Math.abs(scale.x), Math.abs(scale.y), Math.abs(scale.z));
+  // The regular green collision envelope determines whether two gears are
+  // close enough to engage. The magenta gear collider remains a real physical
+  // tooth-contact layer and is not used as the link trigger.
+  return piece.colliders.flatMap((primitive) => {
+    if (primitive.shape !== "cylinder") return [];
+    const localAxis = new THREE.Vector3(0, 1, 0)
+      .applyQuaternion(primitive.rotation)
+      .normalize();
+    return [{
+      piece,
+      center: piece.mesh.localToWorld(primitive.center.clone()),
+      axis: localAxis.transformDirection(piece.mesh.matrixWorld).normalize(),
+      radius: (primitive.radius ?? 0) * scaleFactor,
+      halfHeight: (primitive.halfHeight ?? 0) * scaleFactor,
+    }];
+  });
+};
+const gearVolumesOverlap = (a: WorldGearVolume, b: WorldGearVolume) => {
+  const delta = b.center.clone().sub(a.center),
+    alignment = Math.abs(a.axis.dot(b.axis)),
+    tolerance = 0.025;
+  if (alignment >= 0.985) {
+    const axial = Math.abs(delta.dot(a.axis)),
+      radial = delta
+        .clone()
+        .addScaledVector(a.axis, -delta.dot(a.axis))
+        .length();
+    return (
+      axial <= a.halfHeight + b.halfHeight + tolerance &&
+      radial <= a.radius + b.radius + tolerance
+    );
+  }
+  const cross = new THREE.Vector3().crossVectors(a.axis, b.axis),
+    crossLength = cross.length();
+  if (crossLength < 0.1) return false;
+  cross.multiplyScalar(1 / crossLength);
+  const separation = Math.abs(delta.dot(cross)),
+    alongA = Math.abs(delta.dot(a.axis)),
+    alongB = Math.abs(delta.dot(b.axis));
+  return (
+    separation <= a.radius + b.radius + tolerance &&
+    alongA <= a.halfHeight + b.radius + 0.1 &&
+    alongB <= b.halfHeight + a.radius + 0.1
+  );
+};
 const detectGearLinks = (
   pieces: Piece[],
   rigidIslandByPiece?: Map<Piece, Piece[]>,
@@ -953,10 +1019,32 @@ const detectGearLinks = (
       const pose = gearPoseForPiece(piece);
       return pose ? [pose] : [];
     }),
-    pairs = [
-      ...findParallelGearPairs(poses),
-      ...findPerpendicularGearPairs(poses),
-    ];
+    volumes = new Map(
+      poses.map((pose) => [pose.value, worldGearVolumes(pose.value)]),
+    ),
+    pairs: GearPair<Piece>[] = [];
+  for (let left = 0; left < poses.length; left++)
+    for (let right = left + 1; right < poses.length; right++) {
+      const a = poses[left],
+        b = poses[right],
+        overlaps = (volumes.get(a.value) ?? []).some((volumeA) =>
+          (volumes.get(b.value) ?? []).some((volumeB) =>
+            gearVolumesOverlap(volumeA, volumeB),
+          ),
+        );
+      if (!overlaps) continue;
+      const centerDistance = new THREE.Vector3(...a.center).distanceTo(
+        new THREE.Vector3(...b.center),
+      );
+      pairs.push({
+        a,
+        b,
+        ratio: -a.spec.teeth / b.spec.teeth,
+        centerDistance,
+        expectedDistance: a.spec.pitchRadius + b.spec.pitchRadius,
+        distanceError: 0,
+      });
+    }
   return pairs.flatMap((pair) => {
     if (
       rigidIslandByPiece &&
@@ -2512,6 +2600,40 @@ export default function Home() {
         }
       });
     };
+    const configureDebugOverlay = () => {
+      debugRoot.children.forEach((rootObject) => {
+        const kind = rootObject.userData.debugKind as string | undefined,
+          order =
+            kind === "connector-point"
+              ? 90
+              : kind === "connector-axis" || kind === "joint-axis"
+                ? 80
+                : kind === "forced-joint-link" || kind === "joint-link"
+                  ? 75
+                  : kind === "connector-volume"
+                    ? 70
+                    : 60;
+        rootObject.traverse((object) => {
+          object.renderOrder = order;
+          object.frustumCulled = false;
+          if (
+            !(object instanceof THREE.Mesh) &&
+            !(object instanceof THREE.Line) &&
+            !(object instanceof THREE.Points)
+          )
+            return;
+          const materials = Array.isArray(object.material)
+            ? object.material
+            : [object.material];
+          materials.forEach((material) => {
+            material.depthTest = false;
+            material.depthWrite = false;
+            material.transparent = true;
+            material.needsUpdate = true;
+          });
+        });
+      });
+    };
     const refreshDebug = () => {
       disposeDebug();
       for (const piece of state.pieces) {
@@ -2804,6 +2926,7 @@ export default function Home() {
           link.userData = { debugKind: "joint-link", connection };
           debugRoot.add(link);
         }
+      configureDebugOverlay();
       updateDebug();
     };
     const disposeRenderBatches = () => {
@@ -3767,8 +3890,28 @@ export default function Home() {
     };
     const updateDynamicMechanisms = () => {
       const dynamicScanStarted = performance.now();
-      const previousGearLinks = state.gearLinks.length;
-      state.gearLinks = detectGearLinks(state.pieces);
+      const previousGearLinks = state.gearLinks.length,
+        previousLinksByKey = new Map(
+          state.gearLinks.map((link) => [gearLinkKey(link), link]),
+        ),
+        detectedGearLinks = detectGearLinks(state.pieces);
+      // Dynamic overlap scans must not redefine the reference axes or the
+      // transmission direction of a pair that is already engaged. On bevel
+      // gears a numerically ambiguous tangent can otherwise flip sign between
+      // scans; the phase solver then sees a 240-unit error and injects a
+      // 20-rad/s kick into a 12-tooth gear.
+      detectedGearLinks.forEach((link) => {
+        const previous = previousLinksByKey.get(gearLinkKey(link));
+        if (!previous) return;
+        const sameOrder = previous.a.value === link.a.value;
+        link.axisA.copy(sameOrder ? previous.axisA : previous.axisB);
+        link.axisB.copy(sameOrder ? previous.axisB : previous.axisA);
+        link.signB = previous.signB;
+        link.perpendicular = previous.perpendicular;
+        link.ratio =
+          -link.a.spec.teeth / (link.signB * link.b.spec.teeth);
+      });
+      state.gearLinks = detectedGearLinks;
       const activeGearKeys = new Set(state.gearLinks.map(gearLinkKey));
       for (const key of state.gearPhases.keys())
         if (!activeGearKeys.has(key)) state.gearPhases.delete(key);
@@ -4180,6 +4323,7 @@ export default function Home() {
           startAbsoluteAngle: number;
           startPosition: THREE.Vector3;
           startQuaternion: THREE.Quaternion;
+          lastAppliedAngle: number;
           prepared: boolean;
         }
       | undefined;
@@ -4611,44 +4755,146 @@ export default function Home() {
         );
       }
     };
+    const colliderExtentAlongWorldAxis = (
+      piece: Piece,
+      primitive: CollisionPrimitive,
+      axis: THREE.Vector3,
+    ) => {
+      if (primitive.shape === "cylinder") {
+        const cylinderAxis = new THREE.Vector3(0, 1, 0)
+            .applyQuaternion(primitive.rotation)
+            .transformDirection(piece.mesh.matrixWorld)
+            .normalize(),
+          alignment = Math.abs(cylinderAxis.dot(axis));
+        return (
+          alignment * (primitive.halfHeight ?? 0) +
+          Math.sqrt(Math.max(0, 1 - alignment * alignment)) *
+            (primitive.radius ?? 0)
+        );
+      }
+      const rotation = piece.mesh.getWorldQuaternion(new THREE.Quaternion())
+          .multiply(primitive.rotation),
+        size = primitive.size!,
+        x = new THREE.Vector3(1, 0, 0).applyQuaternion(rotation),
+        y = new THREE.Vector3(0, 1, 0).applyQuaternion(rotation),
+        z = new THREE.Vector3(0, 0, 1).applyQuaternion(rotation);
+      return (
+        Math.abs(axis.dot(x)) * size.x * 0.5 +
+        Math.abs(axis.dot(y)) * size.y * 0.5 +
+        Math.abs(axis.dot(z)) * size.z * 0.5
+      );
+    };
+    const enforceAxialStops = () => {
+      for (const connection of state.connections) {
+        if (
+          connection.mode !== "rotation-linear" ||
+          !connection.a.body ||
+          !connection.b.body ||
+          connection.a.body === connection.b.body
+        )
+          continue;
+        const socketWorld = worldConnector(connection.a, connection.socket),
+          axis = socketWorld.axis.normalize();
+        if (!connection.axialStops) {
+          const surface = socketSurfaceHalfThickness(
+            connection.a,
+            connection.socket,
+          );
+          connection.axialStops = [];
+          for (const piece of connection.b.physicsIsland ?? [connection.b]) {
+            if (!/bush|nut/i.test(piece.name)) continue;
+            piece.mesh.updateMatrixWorld(true);
+            for (const primitive of piece.colliders) {
+              const center = piece.mesh.localToWorld(primitive.center.clone()),
+                delta = center.clone().sub(socketWorld.point),
+                distance = delta.dot(axis),
+                radial = delta.clone().addScaledVector(axis, -distance).length(),
+                radialReach =
+                  primitive.shape === "cylinder"
+                    ? (primitive.radius ?? 0)
+                    : Math.max(
+                        primitive.size?.x ?? 0,
+                        primitive.size?.y ?? 0,
+                        primitive.size?.z ?? 0,
+                      ) * 0.5,
+                extent = colliderExtentAlongWorldAxis(piece, primitive, axis),
+                minimumDistance =
+                  surface +
+                  Math.max(
+                    0.01,
+                    extent - state.physicsSettings.axleTolerance * 0.5,
+                  );
+              if (
+                radial <= radialReach + 0.12 &&
+                Math.abs(Math.abs(distance) - minimumDistance) <= 0.2
+              )
+                connection.axialStops.push({
+                  piece,
+                  primitive,
+                  side: distance >= 0 ? 1 : -1,
+                  minimumDistance,
+                });
+            }
+          }
+        }
+        for (const stop of connection.axialStops) {
+          stop.piece.mesh.updateMatrixWorld(true);
+          const center = stop.piece.mesh.localToWorld(
+              stop.primitive.center.clone(),
+            ),
+            signedDistance =
+              center.clone().sub(socketWorld.point).dot(axis) * stop.side;
+          if (signedDistance >= stop.minimumDistance) continue;
+          const correctionDistance = stop.minimumDistance - signedDistance,
+            correction = axis
+              .clone()
+              .multiplyScalar(stop.side * correctionDistance),
+            body = connection.b.body,
+            translation = body.translation();
+          body.setTranslation(
+            {
+              x: translation.x + correction.x,
+              y: translation.y + correction.y,
+              z: translation.z + correction.z,
+            },
+            true,
+          );
+          for (const piece of connection.b.physicsIsland ?? [connection.b])
+            piece.mesh.position.add(correction);
+          const velocityA = connection.a.body.linvel(),
+            velocityB = body.linvel(),
+            relativeAxial =
+              (velocityB.x - velocityA.x) * axis.x +
+              (velocityB.y - velocityA.y) * axis.y +
+              (velocityB.z - velocityA.z) * axis.z;
+          if (relativeAxial * stop.side < 0)
+            body.setLinvel(
+              {
+                x: velocityB.x - axis.x * relativeAxial,
+                y: velocityB.y - axis.y * relativeAxial,
+                z: velocityB.z - axis.z * relativeAxial,
+              },
+              true,
+            );
+          const now = performance.now();
+          if (
+            state.simLog &&
+            correctionDistance > 0.02 &&
+            now - (stop.lastLoggedMs ?? -Infinity) > 250
+          ) {
+            stop.lastLoggedMs = now;
+            state.simLog.events.push(
+              `Tope axial ${stop.piece.part} ↔ ${connection.a.part}: corrección ${correctionDistance.toFixed(3)} studs`,
+            );
+          }
+        }
+      }
+    };
     const enforceGearLinks = () => {
       // Keep an unwrapped angular coordinate for each gear. Velocity-only
       // coupling can preserve the average ratio while still accumulating phase
       // drift until a tooth appears to skip; the phase term removes that drift.
       const timestep = state.world?.timestep ?? 1 / 60;
-      for (const link of state.gearLinks) {
-        const linkKey = gearLinkKey(link);
-        for (const [pose, localAxis] of [
-          [link.a, link.axisA],
-          [link.b, link.axisB],
-        ] as [GearPose<Piece>, THREE.Vector3][]) {
-          const piece = pose.value,
-            body = piece.body;
-          if (!body) continue;
-          const rotation = body.rotation(),
-            worldAxis = localAxis
-              .clone()
-              .applyQuaternion(
-                new THREE.Quaternion(
-                  rotation.x,
-                  rotation.y,
-                  rotation.z,
-                  rotation.w,
-                ),
-              )
-              .normalize(),
-            angular = body.angvel(),
-            speed =
-              angular.x * worldAxis.x +
-              angular.y * worldAxis.y +
-              angular.z * worldAxis.z;
-          const angleKey = `${linkKey}:${piece.id}`;
-          state.gearAngles.set(
-            angleKey,
-            (state.gearAngles.get(angleKey) ?? 0) + speed * timestep,
-          );
-        }
-      }
       // A symmetric sequential projection transmits in either direction. The
       // phase correction is intentionally much stronger than a normal motor;
       // it behaves like engaged teeth instead of a soft friction drive.
@@ -4700,7 +4946,16 @@ export default function Home() {
             targetPhase = state.gearPhases.get(key) ?? phase;
           if (!state.gearPhases.has(key)) state.gearPhases.set(key, targetPhase);
           const phaseError = phase - targetPhase,
-            phaseVelocity = THREE.MathUtils.clamp(-phaseError * 36, -240, 240),
+            // Phase is only a small tooth-alignment correction. The velocity
+            // constraint below remains rigid; limiting this term prevents an
+            // obstructed mechanism from storing angular energy and reversing
+            // the whole train when it is released or fully stalled.
+            maximumPhaseVelocity = Math.min(teethA, teethB) * 1.5,
+            phaseVelocity = THREE.MathUtils.clamp(
+              -phaseError * 36,
+              -maximumPhaseVelocity,
+              maximumPhaseVelocity,
+            ),
             error =
               teethA * velocityA + signedTeethB * velocityB - phaseVelocity;
           if (Math.abs(error) < 1e-5) return;
@@ -4742,6 +4997,43 @@ export default function Home() {
         state.gearLinks.forEach(solveLink);
         for (let index = state.gearLinks.length - 1; index >= 0; index--)
           solveLink(state.gearLinks[index]);
+      }
+      // Integrate the virtual tooth phase from the velocities after the entire
+      // train has been projected. Recording the pre-projection motor/contact
+      // velocities caused phase wind-up under a blockage and later commanded
+      // an artificial reverse rotation.
+      for (const link of state.gearLinks) {
+        const linkKey = gearLinkKey(link);
+        for (const [pose, localAxis] of [
+          [link.a, link.axisA],
+          [link.b, link.axisB],
+        ] as [GearPose<Piece>, THREE.Vector3][]) {
+          const piece = pose.value,
+            body = piece.body;
+          if (!body) continue;
+          const rotation = body.rotation(),
+            worldAxis = localAxis
+              .clone()
+              .applyQuaternion(
+                new THREE.Quaternion(
+                  rotation.x,
+                  rotation.y,
+                  rotation.z,
+                  rotation.w,
+                ),
+              )
+              .normalize(),
+            angular = body.angvel(),
+            speed =
+              angular.x * worldAxis.x +
+              angular.y * worldAxis.y +
+              angular.z * worldAxis.z,
+            angleKey = `${linkKey}:${piece.id}`;
+          state.gearAngles.set(
+            angleKey,
+            (state.gearAngles.get(angleKey) ?? 0) + speed * timestep,
+          );
+        }
       }
     };
     const makeLock = () => {
@@ -5165,6 +5457,7 @@ export default function Home() {
           ),
           startPosition: hitPiece.mesh.position.clone(),
           startQuaternion: hitPiece.mesh.quaternion.clone(),
+          lastAppliedAngle: 0,
           prepared: false,
         };
         showRotationPivot = true;
@@ -5191,6 +5484,7 @@ export default function Home() {
             new THREE.LineBasicMaterial({
               color: forced ? 0xff2d2d : 0xffee38,
               depthTest: false,
+              depthWrite: false,
               transparent: true,
               opacity: 0.95,
             }),
@@ -5327,11 +5621,20 @@ export default function Home() {
       if (pivotRotate) {
         const rawAngle = (e.clientX - pivotRotate.startX) * 0.012,
           angleStep = THREE.MathUtils.degToRad(state.rotationSnapStep),
-          angle = angleStep
+          requestedAngle = angleStep
             ? Math.round(
                 (pivotRotate.startAbsoluteAngle + rawAngle) / angleStep,
               ) * angleStep - pivotRotate.startAbsoluteAngle
-            : rawAngle;
+            : rawAngle,
+          angle =
+            angleStep &&
+            Math.abs(requestedAngle - pivotRotate.lastAppliedAngle) >
+              angleStep + 1e-6
+              ? pivotRotate.lastAppliedAngle +
+                Math.sign(requestedAngle - pivotRotate.lastAppliedAngle) *
+                  angleStep
+              : requestedAngle;
+        pivotRotate.lastAppliedAngle = angle;
         if (Math.abs(angle) < 0.01) return;
         if (!pivotRotate.prepared) {
           pivotRotate.prepared = true;
@@ -5870,7 +6173,11 @@ export default function Home() {
               ? { axis: "y" as const, angle: -Math.PI / 2 }
               : code === "KeyD" || code === "ArrowRight"
                 ? { axis: "y" as const, angle: Math.PI / 2 }
-                : undefined;
+                : code === "KeyQ"
+                  ? { axis: "z" as const, angle: -Math.PI / 2 }
+                  : code === "KeyE"
+                    ? { axis: "z" as const, angle: Math.PI / 2 }
+                    : undefined;
       if (!rotation) return;
       e.preventDefault();
       state.recordHistory();
@@ -6095,10 +6402,12 @@ export default function Home() {
               .normalize(),
             velocityA = connection.a.body.linvel(),
             velocityB = connection.b.body.linvel(),
-            relativeSpeed =
-              (velocityB.x - velocityA.x) * axis.x +
-              (velocityB.y - velocityA.y) * axis.y +
-              (velocityB.z - velocityA.z) * axis.z,
+            relativeVelocity = new THREE.Vector3(
+              velocityB.x - velocityA.x,
+              velocityB.y - velocityA.y,
+              velocityB.z - velocityA.z,
+            ),
+            relativeSpeed = relativeVelocity.dot(axis),
             // A free connector should only have a slight guide resistance.
             // Contact friction already accounts for surfaces rubbing together.
             damping =
@@ -6109,7 +6418,55 @@ export default function Home() {
               -0.35,
               0.35,
             ),
-            frictionForce = axis.multiplyScalar(forceMagnitude);
+            frictionForce = axis.clone().multiplyScalar(forceMagnitude);
+          // The generic rotation+linear guide can keep the bodies visually
+          // aligned while a perpendicular velocity from gravity/contact keeps
+          // accumulating. When a bush reaches its physical stop, Rapier may
+          // convert that hidden velocity into a large axial depenetration.
+          // Project only the relative velocity onto the permitted axle axis;
+          // common motion, axial sliding and axial rotation remain untouched.
+          const perpendicularVelocity = relativeVelocity.addScaledVector(
+            axis,
+            -relativeSpeed,
+          );
+          if (perpendicularVelocity.lengthSq() > 1e-10) {
+            if (connection.a.physicsIslandFixed) {
+              connection.b.body.setLinvel(
+                {
+                  x: velocityB.x - perpendicularVelocity.x,
+                  y: velocityB.y - perpendicularVelocity.y,
+                  z: velocityB.z - perpendicularVelocity.z,
+                },
+                true,
+              );
+            } else if (connection.b.physicsIslandFixed) {
+              connection.a.body.setLinvel(
+                {
+                  x: velocityA.x + perpendicularVelocity.x,
+                  y: velocityA.y + perpendicularVelocity.y,
+                  z: velocityA.z + perpendicularVelocity.z,
+                },
+                true,
+              );
+            } else {
+              connection.a.body.setLinvel(
+                {
+                  x: velocityA.x + perpendicularVelocity.x * 0.5,
+                  y: velocityA.y + perpendicularVelocity.y * 0.5,
+                  z: velocityA.z + perpendicularVelocity.z * 0.5,
+                },
+                true,
+              );
+              connection.b.body.setLinvel(
+                {
+                  x: velocityB.x - perpendicularVelocity.x * 0.5,
+                  y: velocityB.y - perpendicularVelocity.y * 0.5,
+                  z: velocityB.z - perpendicularVelocity.z * 0.5,
+                },
+                true,
+              );
+            }
+          }
           if (!connection.b.physicsIslandFixed)
             connection.b.body.addForce(
               {
@@ -6206,6 +6563,7 @@ export default function Home() {
             );
           }
         });
+        enforceAxialStops();
         state.dynamicConnectionFrame++;
         if (state.dynamicConnectionFrame % 8 === 0)
           updateDynamicMechanisms();
@@ -6677,7 +7035,7 @@ export default function Home() {
         structuralMode === "rigid"
           ? `${fixedConnectionCount} conexiones fijas fusionadas en islas rígidas compuestas`
           : `${fixedConnectionCount} conexiones fijas conservadas como joints entre piezas`,
-        `${s.gearLinks.length} pares de engranajes compatibles enlazados por distancia y relación de dientes`,
+        `${s.gearLinks.length} pares de engranajes enlazados por solapamiento de malla verde y relación de dientes`,
       );
       const colliderOwners = new Map<number, Piece>(),
         traversedConnectorPairs = detectShaftTraversals(s.pieces),
@@ -6769,12 +7127,13 @@ export default function Home() {
             primitive: CollisionPrimitive,
             gearLayer: boolean,
           ) => {
-            // Bushes and axle joiners often sit in an exactly one-stud gap.
-            // Keep the authored/debug collider unchanged, but leave a tiny
-            // axial solver clearance so floating-point contact correction
-            // cannot pull a freely sliding axle into either neighbouring part.
+            // Bushes, axle joiners and gears often sit in an exactly sized
+            // axial gap. Keep the authored/debug maps unchanged, but apply the
+            // configured clearance only to the normal collider. The magenta
+            // layer is exclusively gear-to-gear contact and keeps its authored
+            // thickness unchanged.
             const axleClearance =
-              !gearLayer && /bush|axle joiner/i.test(p.name)
+              !gearLayer && (p.gear || /bush|axle joiner/i.test(p.name))
                 ? s.physicsSettings.axleTolerance
                 : 0;
             const collider =
@@ -6794,6 +7153,10 @@ export default function Home() {
                   primitive.center.clone().applyQuaternion(p.physicsBase),
                 ),
               rotation = p.physicsBase.clone().multiply(primitive.rotation);
+            if (gearLayer)
+              collider.setFrictionCombineRule(
+                RAPIER.CoefficientCombineRule.Min,
+              );
             collider
               .setTranslation(center.x, center.y, center.z)
               .setRotation(rotation)
