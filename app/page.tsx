@@ -278,6 +278,7 @@ type AppState = {
   connections: Connection[];
   gearLinks: RuntimeGearLink[];
   gearAngles: Map<string, number>;
+  gearBodyRotations: Map<number, THREE.Quaternion>;
   gearPhases: Map<string, number>;
   physicsJoints: Map<string, RAPIER.ImpulseJoint>;
   dynamicNoContactPairs: Set<string>;
@@ -3260,6 +3261,7 @@ export default function Home() {
       connections: [],
       gearLinks: [],
       gearAngles: new Map(),
+      gearBodyRotations: new Map(),
       gearPhases: new Map(),
       physicsJoints: new Map(),
       dynamicNoContactPairs: new Set(),
@@ -3902,7 +3904,24 @@ export default function Home() {
       // 20-rad/s kick into a 12-tooth gear.
       detectedGearLinks.forEach((link) => {
         const previous = previousLinksByKey.get(gearLinkKey(link));
-        if (!previous) return;
+        if (!previous) {
+          for (const [piece, axis] of [
+            [link.a.value, link.axisA],
+            [link.b.value, link.axisB],
+          ] as [Piece, THREE.Vector3][]) {
+            const rotation = piece.body?.rotation();
+            if (!rotation) continue;
+            axis.applyQuaternion(
+              new THREE.Quaternion(
+                rotation.x,
+                rotation.y,
+                rotation.z,
+                rotation.w,
+              ).invert(),
+            ).normalize();
+          }
+          return;
+        }
         const sameOrder = previous.a.value === link.a.value;
         link.axisA.copy(sameOrder ? previous.axisA : previous.axisB);
         link.axisB.copy(sameOrder ? previous.axisB : previous.axisA);
@@ -4891,10 +4910,202 @@ export default function Home() {
       }
     };
     const enforceGearLinks = () => {
-      // Keep an unwrapped angular coordinate for each gear. Velocity-only
-      // coupling can preserve the average ratio while still accumulating phase
-      // drift until a tooth appears to skip; the phase term removes that drift.
-      const timestep = state.world?.timestep ?? 1 / 60;
+      const gearNodes = new Map<
+          number,
+          { piece: Piece; localAxis: THREE.Vector3 }
+        >(),
+        bodyRotations = new Map<number, THREE.Quaternion>(),
+        bodyRotationVectors = new Map<number, THREE.Vector3>();
+      for (const link of state.gearLinks)
+        for (const [pose, localAxis] of [
+          [link.a, link.axisA],
+          [link.b, link.axisB],
+        ] as [GearPose<Piece>, THREE.Vector3][]) {
+          const piece = pose.value,
+            body = piece.body;
+          if (!body) continue;
+          gearNodes.set(piece.id, { piece, localAxis });
+          if (bodyRotations.has(body.handle)) continue;
+          const rotation = body.rotation(),
+            current = new THREE.Quaternion(
+              rotation.x,
+              rotation.y,
+              rotation.z,
+              rotation.w,
+            ).normalize(),
+            previous = state.gearBodyRotations.get(body.handle) ?? current,
+            delta = current.clone().multiply(previous.clone().invert());
+          if (delta.w < 0)
+            delta.set(-delta.x, -delta.y, -delta.z, -delta.w);
+          const vectorLength = Math.hypot(delta.x, delta.y, delta.z),
+            angle = 2 * Math.atan2(vectorLength, Math.max(0, delta.w)),
+            rotationVector =
+              vectorLength > 1e-9
+                ? new THREE.Vector3(delta.x, delta.y, delta.z).multiplyScalar(
+                    angle / vectorLength,
+                  )
+                : new THREE.Vector3();
+          bodyRotations.set(body.handle, current);
+          bodyRotationVectors.set(body.handle, rotationVector);
+          state.gearBodyRotations.set(body.handle, current.clone());
+        }
+      // Accumulate the rotation Rapier actually produced, not the velocity we
+      // requested in the previous frame. This makes physical tooth phase
+      // measurable and prevents invisible drift under load.
+      for (const { piece, localAxis } of gearNodes.values()) {
+        const body = piece.body,
+          rotation = bodyRotations.get(body!.handle);
+        if (!body || !rotation) continue;
+        const worldAxis = localAxis.clone().applyQuaternion(rotation).normalize(),
+          deltaAngle =
+            bodyRotationVectors.get(body.handle)?.dot(worldAxis) ?? 0,
+          angleKey = `piece:${piece.id}`;
+        state.gearAngles.set(
+          angleKey,
+          (state.gearAngles.get(angleKey) ?? 0) + deltaAngle,
+        );
+      }
+      const gearCenter = (piece: Piece) => {
+          const body = piece.body!,
+            translation = body.translation(),
+            rotation = body.rotation();
+          return new THREE.Vector3(
+            translation.x,
+            translation.y,
+            translation.z,
+          ).add(
+            (piece.physicsOffset ?? new THREE.Vector3())
+              .clone()
+              .applyQuaternion(
+                new THREE.Quaternion(
+                  rotation.x,
+                  rotation.y,
+                  rotation.z,
+                  rotation.w,
+                ),
+              ),
+          );
+        },
+        rotateBodyAtGear = (
+          piece: Piece,
+          localAxis: THREE.Vector3,
+          angle: number,
+        ) => {
+          const body = piece.body;
+          if (!body || piece.physicsIslandFixed || Math.abs(angle) < 1e-8)
+            return;
+          const rotation = body.rotation(),
+            current = new THREE.Quaternion(
+              rotation.x,
+              rotation.y,
+              rotation.z,
+              rotation.w,
+            ).normalize(),
+            worldAxis = localAxis.clone().applyQuaternion(current).normalize(),
+            delta = new THREE.Quaternion().setFromAxisAngle(worldAxis, angle),
+            next = delta.clone().multiply(current).normalize(),
+            pivot = gearCenter(piece),
+            translation = body.translation(),
+            nextPosition = new THREE.Vector3(
+              translation.x,
+              translation.y,
+              translation.z,
+            )
+              .sub(pivot)
+              .applyQuaternion(delta)
+              .add(pivot);
+          body.setTranslation(nextPosition, true);
+          body.setRotation(next, true);
+          state.gearBodyRotations.set(body.handle, next.clone());
+          // One rigid island may carry several fixed gears. Apply this exact
+          // body rotation to every phase coordinate on that island.
+          for (const node of gearNodes.values()) {
+            if (node.piece.body !== body) continue;
+            const nodeAxis = node.localAxis
+              .clone()
+              .applyQuaternion(current)
+              .normalize();
+            const key = `piece:${node.piece.id}`;
+            state.gearAngles.set(
+              key,
+              (state.gearAngles.get(key) ?? 0) +
+                angle * worldAxis.dot(nodeAxis),
+            );
+          }
+        },
+        solvePhase = (link: RuntimeGearLink) => {
+          const pieceA = link.a.value,
+            pieceB = link.b.value,
+            bodyA = pieceA.body,
+            bodyB = pieceB.body;
+          if (!bodyA || !bodyB || bodyA === bodyB) return;
+          const teethA = link.a.spec.teeth,
+            signedTeethB = link.signB * link.b.spec.teeth,
+            angleA = state.gearAngles.get(`piece:${pieceA.id}`) ?? 0,
+            angleB = state.gearAngles.get(`piece:${pieceB.id}`) ?? 0,
+            phase = teethA * angleA + signedTeethB * angleB,
+            key = gearLinkKey(link),
+            target = state.gearPhases.get(key) ?? phase,
+            error = phase - target;
+          if (!state.gearPhases.has(key)) state.gearPhases.set(key, target);
+          if (Math.abs(error) < 1e-6) return;
+          const fixedA = !!pieceA.physicsIslandFixed,
+            fixedB = !!pieceB.physicsIslandFixed;
+          if (fixedA && fixedB) return;
+          const rotationA = bodyA.rotation(),
+            rotationB = bodyB.rotation(),
+            axisA = link.axisA.clone().applyQuaternion(
+              new THREE.Quaternion(
+                rotationA.x,
+                rotationA.y,
+                rotationA.z,
+                rotationA.w,
+              ),
+            ),
+            axisB = link.axisB.clone().applyQuaternion(
+              new THREE.Quaternion(
+                rotationB.x,
+                rotationB.y,
+                rotationB.z,
+                rotationB.w,
+              ),
+            ),
+            angularA = bodyA.angvel(),
+            angularB = bodyB.angvel(),
+            speedA = Math.abs(
+              angularA.x * axisA.x +
+                angularA.y * axisA.y +
+                angularA.z * axisA.z,
+            ),
+            speedB = Math.abs(
+              angularB.x * axisB.x +
+                angularB.y * axisB.y +
+                angularB.z * axisB.z,
+            );
+          let correctionA = 0,
+            correctionB = 0;
+          if (fixedA) correctionB = -error / signedTeethB;
+          else if (fixedB) correctionA = -error / teethA;
+          else if (speedA > speedB * 1.15 + 0.01)
+            correctionA = -error / teethA;
+          else if (speedB > speedA * 1.15 + 0.01)
+            correctionB = -error / signedTeethB;
+          else {
+            const denominator =
+              teethA * teethA + signedTeethB * signedTeethB;
+            correctionA = (-error * teethA) / denominator;
+            correctionB = (-error * signedTeethB) / denominator;
+          }
+          rotateBodyAtGear(pieceA, link.axisA, correctionA);
+          rotateBodyAtGear(pieceB, link.axisB, correctionB);
+        };
+      // Position projection is deliberately hard: a blocked output rotates the
+      // driving side back instead of allowing even one tooth of phase loss.
+      for (let iteration = 0; iteration < 6; iteration++) {
+        state.gearLinks.forEach(solvePhase);
+        for (let index = state.gearLinks.length - 1; index >= 0; index--)
+          solvePhase(state.gearLinks[index]);
+      }
       // A symmetric sequential projection transmits in either direction. The
       // phase correction is intentionally much stronger than a normal motor;
       // it behaves like engaged teeth instead of a soft friction drive.
@@ -4938,26 +5149,12 @@ export default function Home() {
               angularB.z * axisB.z,
             teethA = link.a.spec.teeth,
             teethB = link.b.spec.teeth,
-            signedTeethB = link.signB * teethB,
-            key = gearLinkKey(link),
-            angleA = state.gearAngles.get(`${key}:${pieceA.id}`) ?? 0,
-            angleB = state.gearAngles.get(`${key}:${pieceB.id}`) ?? 0,
-            phase = teethA * angleA + signedTeethB * angleB,
-            targetPhase = state.gearPhases.get(key) ?? phase;
-          if (!state.gearPhases.has(key)) state.gearPhases.set(key, targetPhase);
-          const phaseError = phase - targetPhase,
-            // Phase is only a small tooth-alignment correction. The velocity
-            // constraint below remains rigid; limiting this term prevents an
-            // obstructed mechanism from storing angular energy and reversing
-            // the whole train when it is released or fully stalled.
-            maximumPhaseVelocity = Math.min(teethA, teethB) * 1.5,
-            phaseVelocity = THREE.MathUtils.clamp(
-              -phaseError * 36,
-              -maximumPhaseVelocity,
-              maximumPhaseVelocity,
-            ),
-            error =
-              teethA * velocityA + signedTeethB * velocityB - phaseVelocity;
+            signedTeethB = link.signB * teethB;
+          // Tooth position is already projected rigidly above. Mixing its old
+          // phase-velocity correction into this equation deformed the actual
+          // ratio under load (e.g. 20:28 became roughly 20:6). Velocity now has
+          // one exact invariant only: teethA*wA + signedTeethB*wB = 0.
+          const error = teethA * velocityA + signedTeethB * velocityB;
           if (Math.abs(error) < 1e-5) return;
           const fixedA = !!pieceA.physicsIslandFixed,
             fixedB = !!pieceB.physicsIslandFixed;
@@ -4998,42 +5195,95 @@ export default function Home() {
         for (let index = state.gearLinks.length - 1; index >= 0; index--)
           solveLink(state.gearLinks[index]);
       }
-      // Integrate the virtual tooth phase from the velocities after the entire
-      // train has been projected. Recording the pre-projection motor/contact
-      // velocities caused phase wind-up under a blockage and later commanded
-      // an artificial reverse rotation.
-      for (const link of state.gearLinks) {
-        const linkKey = gearLinkKey(link);
-        for (const [pose, localAxis] of [
-          [link.a, link.axisA],
-          [link.b, link.axisB],
-        ] as [GearPose<Piece>, THREE.Vector3][]) {
-          const piece = pose.value,
-            body = piece.body;
-          if (!body) continue;
-          const rotation = body.rotation(),
-            worldAxis = localAxis
-              .clone()
-              .applyQuaternion(
-                new THREE.Quaternion(
-                  rotation.x,
-                  rotation.y,
-                  rotation.z,
-                  rotation.w,
-                ),
-              )
-              .normalize(),
-            angular = body.angvel(),
-            speed =
-              angular.x * worldAxis.x +
-              angular.y * worldAxis.y +
-              angular.z * worldAxis.z,
-            angleKey = `${linkKey}:${piece.id}`;
-          state.gearAngles.set(
-            angleKey,
-            (state.gearAngles.get(angleKey) ?? 0) + speed * timestep,
-          );
+    };
+    // Non-positional gear constraint. It never writes a quaternion or an
+    // absolute angle: only the angular velocities that physically exist are
+    // projected onto the exact tooth ratio. Running this around small Rapier
+    // substeps lets contacts and motor torque participate without teleporting
+    // either gear when the applied force changes direction.
+    const projectGearVelocities = () => {
+      const solve = (link: RuntimeGearLink) => {
+        const pieceA = link.a.value,
+          pieceB = link.b.value,
+          bodyA = pieceA.body,
+          bodyB = pieceB.body;
+        if (!bodyA || !bodyB || bodyA === bodyB) return;
+        const rotationA = bodyA.rotation(),
+          rotationB = bodyB.rotation(),
+          axisA = link.axisA
+            .clone()
+            .applyQuaternion(
+              new THREE.Quaternion(
+                rotationA.x,
+                rotationA.y,
+                rotationA.z,
+                rotationA.w,
+              ),
+            )
+            .normalize(),
+          axisB = link.axisB
+            .clone()
+            .applyQuaternion(
+              new THREE.Quaternion(
+                rotationB.x,
+                rotationB.y,
+                rotationB.z,
+                rotationB.w,
+              ),
+            )
+            .normalize(),
+          angularA = bodyA.angvel(),
+          angularB = bodyB.angvel(),
+          velocityA =
+            angularA.x * axisA.x +
+            angularA.y * axisA.y +
+            angularA.z * axisA.z,
+          velocityB =
+            angularB.x * axisB.x +
+            angularB.y * axisB.y +
+            angularB.z * axisB.z,
+          teethA = link.a.spec.teeth,
+          signedTeethB = link.signB * link.b.spec.teeth,
+          error = teethA * velocityA + signedTeethB * velocityB;
+        if (Math.abs(error) < 1e-6) return;
+        const fixedA = !!pieceA.physicsIslandFixed,
+          fixedB = !!pieceB.physicsIslandFixed;
+        if (fixedA && fixedB) return;
+        let deltaA = 0,
+          deltaB = 0;
+        if (fixedA) deltaB = -error / signedTeethB;
+        else if (fixedB) deltaA = -error / teethA;
+        else {
+          const denominator =
+            teethA * teethA + signedTeethB * signedTeethB;
+          deltaA = (-error * teethA) / denominator;
+          deltaB = (-error * signedTeethB) / denominator;
         }
+        if (!fixedA)
+          bodyA.setAngvel(
+            {
+              x: angularA.x + axisA.x * deltaA,
+              y: angularA.y + axisA.y * deltaA,
+              z: angularA.z + axisA.z * deltaA,
+            },
+            true,
+          );
+        if (!fixedB)
+          bodyB.setAngvel(
+            {
+              x: angularB.x + axisB.x * deltaB,
+              y: angularB.y + axisB.y * deltaB,
+              z: angularB.z + axisB.z * deltaB,
+            },
+            true,
+          );
+      };
+      // More sweeps than the former position solver are cheap for the usual
+      // small gear trains and make long chains direction-independent.
+      for (let iteration = 0; iteration < 16; iteration++) {
+        state.gearLinks.forEach(solve);
+        for (let index = state.gearLinks.length - 1; index >= 0; index--)
+          solve(state.gearLinks[index]);
       }
     };
     const makeLock = () => {
@@ -6518,9 +6768,14 @@ export default function Home() {
         }
         jointForcesMs = performance.now() - phaseStarted;
         phaseStarted = performance.now();
-        state.world.timestep = Math.min(clock.getDelta(), 1 / 60);
-        state.world.step(state.physicsEventQueue, state.physicsHooks);
-        enforceGearLinks();
+        const frameTimestep = Math.min(clock.getDelta(), 1 / 60),
+          gearSubsteps = state.gearLinks.length ? 4 : 1;
+        state.world.timestep = frameTimestep / gearSubsteps;
+        for (let substep = 0; substep < gearSubsteps; substep++) {
+          projectGearVelocities();
+          state.world.step(state.physicsEventQueue, state.physicsHooks);
+          projectGearVelocities();
+        }
         worldStepMs = performance.now() - phaseStarted;
         phaseStarted = performance.now();
         const startup = performance.now() - (state.simStartedMs ?? 0) < 350;
@@ -6908,6 +7163,7 @@ export default function Home() {
     s.connections = [];
     s.gearLinks = [];
     s.gearAngles.clear();
+    s.gearBodyRotations.clear();
     s.gearPhases.clear();
     s.physicsJoints.clear();
     s.dynamicNoContactPairs.clear();
@@ -7002,6 +7258,7 @@ export default function Home() {
         island.forEach((piece) => rigidIslandByPiece.set(piece, island)),
       );
       s.gearAngles.clear();
+      s.gearBodyRotations.clear();
       s.gearPhases.clear();
       s.gearLinks = detectGearLinks(s.pieces, rigidIslandByPiece);
       const fixedConnectionCount = s.connections.filter(
@@ -7032,6 +7289,7 @@ export default function Home() {
         `Modo estructural ${structuralMode}; rigidez ${structuralStiffness}%`,
         `Fricción: piezas ${s.physicsSettings.pieceFriction}, goma ${s.physicsSettings.rubberFriction}, pines libres ${s.physicsSettings.frictionlessPinRotation}, ejes lineal ${s.physicsSettings.axleSlidingFriction}, ejes rotación ${s.physicsSettings.axleRotationFriction}; holgura ${s.physicsSettings.axleTolerance} studs`,
         `Solver: ${solverIterations} iteraciones × ${internalPgsIterations} PGS interno + ${additionalSolverIterations} adicionales`,
+        `Engranajes: relación rígida de velocidad en 4 subpasos; sin sobrescritura de ángulo`,
         structuralMode === "rigid"
           ? `${fixedConnectionCount} conexiones fijas fusionadas en islas rígidas compuestas`
           : `${fixedConnectionCount} conexiones fijas conservadas como joints entre piezas`,
@@ -7366,6 +7624,7 @@ export default function Home() {
       s.running = false;
       s.gearLinks = [];
       s.gearAngles.clear();
+      s.gearBodyRotations.clear();
       s.gearPhases.clear();
       s.physicsJoints.clear();
       s.dynamicNoContactPairs.clear();
