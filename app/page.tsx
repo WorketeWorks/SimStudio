@@ -48,7 +48,25 @@ import {
   type GearPose,
 } from "./gears";
 import preloadedCatalog from "./preloaded-catalog.json";
-
+import {
+  PROJECT_EXTENSION,
+  PROJECT_MIME,
+  decodeProjectFile,
+  deleteBrowserProject,
+  encodeProjectFile,
+  listBrowserProjects,
+  loadBrowserProject,
+  loadRecoveryProject,
+  projectSummary,
+  safeProjectFileName,
+  saveBrowserProject,
+  saveRecoveryProject,
+  type JsonObject,
+  type ProjectSummary,
+  type SavedCollisionPrimitive,
+  type SavedConnector,
+  type SimStudioProjectDocument,
+} from "./project-format";
 type PieceKind = "beam" | "wheel" | "motor";
 type PartOrigin = "default-palette" | "catalog-search" | "model-import";
 type PartSource = "packaged-cache" | "external-catalog" | "ldraw-network";
@@ -73,6 +91,9 @@ type CatalogPart = {
   importFile?: string;
   downloadUrl?: string;
   downloadSource?: "local" | "primary" | "legacy";
+  /** Runtime-only geometry restored from a self-contained .simstudio file. */
+  embeddedGeometry?: JsonObject;
+  projectAssetKey?: string;
 };
 type Piece = CatalogPart & {
   id: number;
@@ -262,6 +283,7 @@ type AppState = {
   scene: THREE.Scene;
   renderer: THREE.WebGLRenderer;
   camera: THREE.PerspectiveCamera;
+  cameraTarget: THREE.Vector3;
   floor: THREE.Mesh;
   grid: THREE.Group;
   gridStep: GridStep;
@@ -306,6 +328,13 @@ type AppState = {
   recordHistory: () => void;
   undo: () => Promise<boolean>;
   redo: () => Promise<boolean>;
+  createProjectDocument: (identity?: {
+    id?: string;
+    name?: string;
+    createdAt?: string;
+  }) => SimStudioProjectDocument;
+  restoreProjectDocument: (document: SimStudioProjectDocument) => Promise<void>;
+  scheduleRecoverySave: (immediate?: boolean, markDirty?: boolean) => void;
   copySelected: () => boolean;
   pasteClipboard: () => Promise<Piece | null>;
   addPart: (
@@ -575,6 +604,43 @@ const translations = {
     switchTheme: "Cambiar tema",
     project: "Proyecto",
     mechanism: "Mi mecanismo",
+    projects: "PROYECTOS",
+    manageProjects: "Abrir proyectos",
+    projectsButton: "Proyectos",
+    currentProject: "Proyecto actual",
+    projectName: "Nombre del proyecto",
+    editProjectName: "Renombrar proyecto",
+    confirmProjectName: "Confirmar nombre",
+    duplicateProject: "Duplicar proyecto",
+    duplicateTitle: "Duplicar proyecto",
+    duplicateHelp: "Elige un nombre para la nueva copia guardada.",
+    duplicateName: "Nombre de la copia",
+    createCopy: "Crear copia",
+    newProject: "Nuevo proyecto",
+    saveProject: "Guardar proyecto",
+    openProject: "Abrir",
+    exportProject: "Exportar .simstudio",
+    importProject: "Importar .simstudio",
+    deleteProject: "Eliminar",
+    noProjects: "Todavía no hay proyectos guardados en este navegador.",
+    localProjects: "Guardados en este navegador",
+    previousPage: "Página anterior",
+    nextPage: "Página siguiente",
+    recoverySaved: "Recuperación automática activa",
+    autosaving: "Guardando recuperación automática…",
+    changesPending: "Recuperado, pero falta guardar el proyecto",
+    projectUpToDate: "Proyecto completamente guardado",
+    close: "Cerrar",
+    unsavedTitle: "Cambios sin guardar",
+    unsavedWarning:
+      "Los cambios que no hayas guardado en el administrador de proyectos se descartarán.",
+    createAnyway: "Crear de todos modos",
+    openAnyway: "Cambiar de todos modos",
+    deleteTitle: "Eliminar proyecto",
+    deleteWarning:
+      "Esta copia se eliminará del navegador. Esta acción no se puede deshacer.",
+    cancel: "Cancelar",
+    nameBeforeSave: "Ponle un nombre para crear y guardar el proyecto.",
     import: "Importar",
     export: "Exportar",
     importTitle: "Importar modelo LDraw / Studio",
@@ -726,6 +792,43 @@ const translations = {
     switchTheme: "Switch theme",
     project: "Project",
     mechanism: "My mechanism",
+    projects: "PROJECTS",
+    manageProjects: "Open projects",
+    projectsButton: "Projects",
+    currentProject: "Current project",
+    projectName: "Project name",
+    editProjectName: "Rename project",
+    confirmProjectName: "Confirm name",
+    duplicateProject: "Duplicate project",
+    duplicateTitle: "Duplicate project",
+    duplicateHelp: "Choose a name for the new saved copy.",
+    duplicateName: "Copy name",
+    createCopy: "Create copy",
+    newProject: "New project",
+    saveProject: "Save project",
+    openProject: "Open",
+    exportProject: "Export .simstudio",
+    importProject: "Import .simstudio",
+    deleteProject: "Delete",
+    noProjects: "No projects have been saved in this browser yet.",
+    localProjects: "Saved in this browser",
+    previousPage: "Previous page",
+    nextPage: "Next page",
+    recoverySaved: "Automatic recovery active",
+    autosaving: "Saving automatic recovery…",
+    changesPending: "Recovered, but the project still needs saving",
+    projectUpToDate: "Project fully saved",
+    close: "Close",
+    unsavedTitle: "Unsaved changes",
+    unsavedWarning:
+      "Changes not saved in the project manager will be discarded.",
+    createAnyway: "Create anyway",
+    openAnyway: "Switch anyway",
+    deleteTitle: "Delete project",
+    deleteWarning:
+      "This browser copy will be deleted. This action cannot be undone.",
+    cancel: "Cancel",
+    nameBeforeSave: "Give the project a name to create and save it.",
     import: "Import",
     export: "Export",
     importTitle: "Import LDraw / Studio model",
@@ -1603,15 +1706,46 @@ function DeferredNumberInput({
   );
 }
 
+const createProjectId = () =>
+  globalThis.crypto?.randomUUID?.() ??
+  `project-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+const uniqueProjectName = (
+  requestedName: string,
+  existingProjects: ProjectSummary[],
+  fallback: string,
+) => {
+  const base = requestedName.trim().slice(0, 20) || fallback.slice(0, 20),
+    names = new Set(existingProjects.map((project) => project.name.toLocaleLowerCase()));
+  if (!names.has(base.toLocaleLowerCase())) return base;
+  for (let index = 2; index < 10000; index++) {
+    const suffix = ` (${index})`,
+      candidate = `${base.slice(0, 20 - suffix.length)}${suffix}`;
+    if (!names.has(candidate.toLocaleLowerCase())) return candidate;
+  }
+  return `${base.slice(0, 14)}-${Date.now().toString(36).slice(-5)}`;
+};
+
 export default function Home() {
   const studioRef = useRef<HTMLElement>(null),
     mountRef = useRef<HTMLDivElement>(null),
     fpsRef = useRef<HTMLDivElement>(null),
     fileRef = useRef<HTMLInputElement>(null),
+    projectFileRef = useRef<HTMLInputElement>(null),
+    projectNameInputRef = useRef<HTMLInputElement>(null),
+    suppressProjectNameDirtyRef = useRef(false),
     connectorFileRef = useRef<HTMLInputElement>(null),
     colliderFileRef = useRef<HTMLInputElement>(null),
     importTokenRef = useRef(0),
-    appRef = useRef<AppState | null>(null);
+    appRef = useRef<AppState | null>(null),
+    activeProjectIdRef = useRef(createProjectId()),
+    projectNameRef = useRef("Untitled mechanism"),
+    projectCreatedAtRef = useRef(new Date().toISOString()),
+    structuralModeRef = useRef<StructuralMode>("rigid"),
+    structuralStiffnessRef = useRef(85),
+    projectRevisionRef = useRef(0),
+    savedProjectRevisionRef = useRef<number | null>(null),
+    projectRestoringRef = useRef(false),
+    saveShortcutRef = useRef<() => void>(() => undefined);
   const [running, setRunning] = useState(false),
     [count, setCount] = useState(0),
     [selectedId, setSelectedId] = useState<number | null>(null);
@@ -1649,7 +1783,29 @@ export default function Home() {
     [structuralStiffness, setStructuralStiffness] = useState(85),
     [physicsSettings, setPhysicsSettings] = useState<PhysicsSettings>({
       ...DEFAULT_PHYSICS_SETTINGS,
-    });
+    }),
+    [projectName, setProjectName] = useState("Untitled mechanism"),
+    [projectNameEditing, setProjectNameEditing] = useState(false),
+    [projectNameDraft, setProjectNameDraft] = useState(""),
+    [duplicateProjectDocument, setDuplicateProjectDocument] =
+      useState<SimStudioProjectDocument | null>(null),
+    [duplicateProjectName, setDuplicateProjectName] = useState(""),
+    [projectMenuOpen, setProjectMenuOpen] = useState(false),
+    [projects, setProjects] = useState<ProjectSummary[]>([]),
+    [projectPage, setProjectPage] = useState(0),
+    [projectBusy, setProjectBusy] = useState(false),
+    [currentProjectSaved, setCurrentProjectSaved] = useState(false),
+    [projectDirty, setProjectDirty] = useState(false),
+    [saveNamePrompt, setSaveNamePrompt] = useState(false),
+    [projectConfirmation, setProjectConfirmation] = useState<
+      | { kind: "new" }
+      | { kind: "open" | "delete"; project: ProjectSummary }
+      | { kind: "import"; document: SimStudioProjectDocument }
+      | null
+    >(null),
+    [recoveryStatus, setRecoveryStatus] = useState<
+      "idle" | "saving" | "saved"
+    >("idle");
   const t = translations[language],
     modeLabels: Record<JointMode, string> =
       language === "es"
@@ -1749,12 +1905,14 @@ export default function Home() {
       localStorage.setItem("sim-studio:grid-step", String(gridStep));
     } catch {}
     if (appRef.current) appRef.current.gridStep = gridStep;
+    appRef.current?.scheduleRecoverySave();
   }, [gridStep]);
   useEffect(() => {
     try {
       localStorage.setItem("sim-studio:axle-snap", String(axleSnapStep));
     } catch {}
     if (appRef.current) appRef.current.axleSnapStep = axleSnapStep;
+    appRef.current?.scheduleRecoverySave();
   }, [axleSnapStep]);
   useEffect(() => {
     try {
@@ -1764,6 +1922,7 @@ export default function Home() {
       );
     } catch {}
     if (appRef.current) appRef.current.rotationSnapStep = rotationSnapStep;
+    appRef.current?.scheduleRecoverySave();
   }, [rotationSnapStep]);
   useEffect(() => {
     try {
@@ -1773,6 +1932,9 @@ export default function Home() {
         String(structuralStiffness),
       );
     } catch {}
+    structuralModeRef.current = structuralMode;
+    structuralStiffnessRef.current = structuralStiffness;
+    appRef.current?.scheduleRecoverySave();
   }, [structuralMode, structuralStiffness]);
   useEffect(() => {
     try {
@@ -1782,7 +1944,14 @@ export default function Home() {
       );
     } catch {}
     if (appRef.current) appRef.current.physicsSettings = physicsSettings;
+    appRef.current?.scheduleRecoverySave();
   }, [physicsSettings]);
+  useEffect(() => {
+    projectNameRef.current = projectName.trim() || "Untitled mechanism";
+    const markDirty = !suppressProjectNameDirtyRef.current;
+    suppressProjectNameDirtyRef.current = false;
+    appRef.current?.scheduleRecoverySave(false, markDirty);
+  }, [projectName]);
 
   useEffect(() => {
     const source =
@@ -1945,7 +2114,9 @@ export default function Home() {
       gearCollisionCache = new Map<string, CollisionPrimitive[]>();
     const assetUrl = (path: string) => new URL(path, document.baseURI).href;
     const modelSourceIdentity = (p: CatalogPart) =>
-      p.geometry
+      p.embeddedGeometry
+        ? `project:${p.projectAssetKey ?? p.part}`
+        : p.geometry
         ? `asset:${p.geometry}`
         : `ldraw:${p.modelPart ?? p.resolvedPart ?? p.part}`;
     const modelRenderKey = (p: CatalogPart) =>
@@ -1964,7 +2135,9 @@ export default function Home() {
       Object.assign(
         p,
         cachedSource ??
-          (p.geometry
+          (p.embeddedGeometry
+            ? {}
+            : p.geometry
             ? {
                 downloadUrl: assetUrl(p.geometry),
                 downloadSource: "local" as const,
@@ -1978,7 +2151,11 @@ export default function Home() {
       if (cached) return cached.clone(true);
       let exact = sourceModelCache.get(sourceKey)?.clone(true);
       if (!exact) {
-        if (p.geometry)
+        if (p.embeddedGeometry)
+          try {
+            exact = new THREE.ObjectLoader().parse(p.embeddedGeometry);
+          } catch {}
+        if (!exact && p.geometry)
           try {
             exact = await new THREE.ObjectLoader().loadAsync(assetUrl(p.geometry));
             const source = {
@@ -3169,7 +3346,7 @@ export default function Home() {
           color,
           sourceColor,
         });
-        prepareModel(exact);
+        if (!piece.embeddedGeometry) prepareModel(exact);
         exact.traverse((object) => {
           if (object instanceof THREE.Mesh) {
             object.castShadow = true;
@@ -3199,7 +3376,7 @@ export default function Home() {
       try {
         const exact = await loadPartModel(p);
         preloaded.add(modelRenderKey(p));
-        prepareModel(exact);
+        if (!p.embeddedGeometry) prepareModel(exact);
         exact.traverse((object) => {
           if (object instanceof THREE.Mesh) {
             object.castShadow = true;
@@ -3252,6 +3429,7 @@ export default function Home() {
       scene,
       renderer,
       camera,
+      cameraTarget,
       floor,
       grid,
       gridStep,
@@ -5466,6 +5644,7 @@ export default function Home() {
       undoStack.push(captureEditorSnapshot());
       if (undoStack.length > 80) undoStack.shift();
       redoStack.length = 0;
+      scheduleRecoverySave();
     };
     const undo = async () => {
       if (historyBusy || state.running) return false;
@@ -5521,6 +5700,242 @@ export default function Home() {
       downloadUrl: piece.downloadUrl,
       downloadSource: piece.downloadSource,
     });
+    const tuple3 = (vector: THREE.Vector3) =>
+        vector.toArray() as [number, number, number],
+      tuple4 = (quaternion: THREE.Quaternion) =>
+        quaternion.toArray() as [number, number, number, number],
+      saveConnector = (connector: MeshConnector): SavedConnector => ({
+        local: tuple3(connector.local), axis: tuple3(connector.axis),
+        kind: connector.kind, role: connector.role,
+        diameter: connector.diameter, length: connector.length,
+      }),
+      saveCollider = (collider: CollisionPrimitive): SavedCollisionPrimitive => ({
+        shape: collider.shape, center: tuple3(collider.center),
+        size: collider.size ? tuple3(collider.size) : undefined,
+        radius: collider.radius, halfHeight: collider.halfHeight,
+        rotation: tuple4(collider.rotation),
+      }),
+      loadConnector = (connector: SavedConnector): MeshConnector => ({
+        ...connector,
+        local: new THREE.Vector3().fromArray(connector.local),
+        axis: new THREE.Vector3().fromArray(connector.axis),
+      }),
+      loadCollider = (collider: SavedCollisionPrimitive): CollisionPrimitive => ({
+        ...collider,
+        center: new THREE.Vector3().fromArray(collider.center),
+        size: collider.size ? new THREE.Vector3().fromArray(collider.size) : undefined,
+        rotation: new THREE.Quaternion().fromArray(collider.rotation),
+      });
+    let recoveryTimer = 0, recoveryGeneration = 0, restoringProject = false;
+    const createProjectDocument = (identity?: {
+      id?: string; name?: string; createdAt?: string;
+    }): SimStudioProjectDocument => {
+      const now = new Date().toISOString(),
+        id = identity?.id ?? activeProjectIdRef.current,
+        name = identity?.name ?? projectNameRef.current,
+        createdAt = identity?.createdAt ?? projectCreatedAtRef.current,
+        assets: Record<string, JsonObject> = {},
+        pieceIds = new Map(
+          state.pieces.map((piece, index) => [piece, `piece-${index + 1}`]),
+        ),
+        connectorIndex = (piece: Piece, connector: MeshConnector) => {
+          const direct = piece.connectors.indexOf(connector);
+          if (direct >= 0) return direct;
+          return Math.max(0, piece.connectors.findIndex((candidate) =>
+            candidate.kind === connector.kind &&
+            candidate.role === connector.role &&
+            candidate.local.distanceToSquared(connector.local) < 1e-8));
+        };
+      const pieces = state.pieces.map((piece) => {
+          const asset = modelRenderKey(piece);
+          if (!assets[asset]) {
+            const visual = (piece.mesh.children[0] ?? piece.mesh).clone(true);
+            visual.traverse((object) => { object.visible = true; });
+            assets[asset] = visual.toJSON() as unknown as JsonObject;
+          }
+          const catalog = catalogFromPiece(piece);
+          delete catalog.embeddedGeometry;
+          delete catalog.projectAssetKey;
+          return {
+            id: pieceIds.get(piece)!, catalog: catalog as unknown as JsonObject,
+            asset, position: tuple3(piece.mesh.position),
+            rotation: tuple4(piece.mesh.quaternion), scale: tuple3(piece.mesh.scale),
+            fixed: piece.fixed,
+            dynamicAxleConnections: piece.dynamicAxleConnections,
+            rotationPivotLocal: piece.rotationPivotLocal
+              ? tuple3(piece.rotationPivotLocal) : undefined,
+            rotationPivotKey: piece.rotationPivotKey,
+            connectors: piece.connectors.map(saveConnector),
+            colliders: piece.colliders.map(saveCollider),
+            gearColliders: piece.gearColliders.map(saveCollider),
+          };
+        }),
+        connections = state.connections.map((connection) => ({
+          id: connection.id, a: pieceIds.get(connection.a)!,
+          b: pieceIds.get(connection.b)!,
+          socketIndex: connectorIndex(connection.a, connection.socket),
+          shaftIndex: connectorIndex(connection.b, connection.shaft),
+          mode: connection.mode, profile: connection.profile,
+          point: tuple3(connection.point), axis: tuple3(connection.axis),
+          localAxisA: tuple3(connection.localAxisA), travel: connection.travel,
+          motorSpeed: connection.motorSpeed, motorForce: connection.motorForce,
+          userConfigured: connection.userConfigured, forced: connection.forced,
+          forcedOffset: connection.forcedOffset,
+          localPointA: connection.localPointA ? tuple3(connection.localPointA) : undefined,
+          localPointB: connection.localPointB ? tuple3(connection.localPointB) : undefined,
+        })),
+        gearLinks = state.gearLinks.flatMap((link) => {
+          const a = pieceIds.get(link.a.value), b = pieceIds.get(link.b.value);
+          return !a || !b ? [] : [{
+            a, b, specA: link.a.spec, specB: link.b.spec,
+            centerA: link.a.center, centerB: link.b.center,
+            poseAxisA: link.a.axis, poseAxisB: link.b.axis,
+            axisA: tuple3(link.axisA), axisB: tuple3(link.axisB),
+            ratio: link.ratio, centerDistance: link.centerDistance,
+            expectedDistance: link.expectedDistance,
+            distanceError: link.distanceError, signB: link.signB,
+            perpendicular: link.perpendicular,
+          }];
+        }),
+        importedCatalog = [...new Map(
+          state.pieces.filter((piece) => !belongsToDefaultPalette(piece)).map((piece) => {
+            const catalog = catalogFromPiece(piece);
+            return [`${catalog.part}:${catalog.color}`, catalog as unknown as JsonObject];
+          }),
+        ).values()];
+      return {
+        format: "simstudio-project", version: 1, id, name, createdAt,
+        updatedAt: now, appVersion: "0.4",
+        revision: projectRevisionRef.current,
+        savedRevision: savedProjectRevisionRef.current,
+        assets, pieces, connections,
+        gearLinks, importedCatalog,
+        camera: { position: tuple3(camera.position),
+          quaternion: tuple4(camera.quaternion), target: tuple3(cameraTarget) },
+        settings: { gridStep: state.gridStep, axleSnapStep: state.axleSnapStep,
+          rotationSnapStep: state.rotationSnapStep,
+          structuralMode: structuralModeRef.current,
+          structuralStiffness: structuralStiffnessRef.current,
+          physics: { ...state.physicsSettings } },
+      };
+    };
+    const scheduleRecoverySave = (immediate = false, markDirty = true) => {
+      if (restoringProject || projectRestoringRef.current || state.running) return;
+      if (markDirty) {
+        projectRevisionRef.current++;
+        setProjectDirty(true);
+      }
+      const generation = ++recoveryGeneration;
+      if (recoveryTimer) window.clearTimeout(recoveryTimer);
+      setRecoveryStatus("saving");
+      recoveryTimer = window.setTimeout(() => {
+        if (generation !== recoveryGeneration || restoringProject) return;
+        void saveRecoveryProject(createProjectDocument())
+          .then(() => setRecoveryStatus("saved"))
+          .catch(() => setRecoveryStatus("idle"));
+      }, immediate ? 0 : 450);
+    };
+    const restoreProjectDocument = async (document: SimStudioProjectDocument) => {
+      if (state.running) return;
+      restoringProject = true;
+      projectRestoringRef.current = true;
+      recoveryGeneration++;
+      if (recoveryTimer) window.clearTimeout(recoveryTimer);
+      state.bulkLoading = true;
+      state.disposeRenderBatches();
+      state.pieces.forEach((piece) => { scene.remove(piece.mesh); disposeLock(piece); });
+      state.pieces = []; state.connections = []; state.connectionModes.clear();
+      state.gearLinks = []; state.selected = undefined;
+      const piecesById = new Map<string, Piece>();
+      try {
+        for (const saved of document.pieces) {
+          const asset = document.assets[saved.asset];
+          if (!asset) throw new Error(`Missing embedded asset ${saved.asset}`);
+          const catalog = { ...(saved.catalog as unknown as CatalogPart),
+              embeddedGeometry: asset, projectAssetKey: saved.asset,
+              sourceKind: "packaged-cache" as const },
+            piece = await addPart(catalog,
+              new THREE.Vector3().fromArray(saved.position),
+              new THREE.Quaternion().fromArray(saved.rotation));
+          if (!piece) throw new Error(`Could not restore ${catalog.part}`);
+          piece.mesh.scale.fromArray(saved.scale);
+          piece.connectors = saved.connectors.map(loadConnector);
+          piece.colliders = saved.colliders.map(loadCollider);
+          piece.gearColliders = saved.gearColliders.map(loadCollider);
+          piece.fixed = saved.fixed;
+          piece.dynamicAxleConnections = saved.dynamicAxleConnections;
+          piece.rotationPivotLocal = saved.rotationPivotLocal
+            ? new THREE.Vector3().fromArray(saved.rotationPivotLocal) : undefined;
+          piece.rotationPivotKey = saved.rotationPivotKey;
+          piece.mesh.visible = true; piece.mesh.updateMatrixWorld(true);
+          if (piece.fixed) { piece.lockSprite = makeLock(); scene.add(piece.lockSprite); }
+          piecesById.set(saved.id, piece);
+        }
+        state.connections = document.connections.flatMap((saved) => {
+          const a = piecesById.get(saved.a), b = piecesById.get(saved.b);
+          if (!a || !b) return [];
+          const socket = a.connectors[saved.socketIndex], shaft = b.connectors[saved.shaftIndex];
+          if (!socket || !shaft) return [];
+          const connection: Connection = { id: saved.id, a, b, socket, shaft,
+            mode: saved.mode, profile: saved.profile,
+            point: new THREE.Vector3().fromArray(saved.point),
+            axis: new THREE.Vector3().fromArray(saved.axis),
+            localAxisA: new THREE.Vector3().fromArray(saved.localAxisA),
+            travel: saved.travel, motorSpeed: saved.motorSpeed,
+            motorForce: saved.motorForce, userConfigured: saved.userConfigured,
+            forced: saved.forced, forcedOffset: saved.forcedOffset,
+            localPointA: saved.localPointA ? new THREE.Vector3().fromArray(saved.localPointA) : undefined,
+            localPointB: saved.localPointB ? new THREE.Vector3().fromArray(saved.localPointB) : undefined };
+          state.connectionModes.set(connection.id, { mode: connection.mode,
+            motorSpeed: connection.motorSpeed, motorForce: connection.motorForce,
+            userConfigured: connection.userConfigured });
+          return [connection];
+        });
+        state.gearLinks = document.gearLinks.flatMap((saved) => {
+          const a = piecesById.get(saved.a), b = piecesById.get(saved.b);
+          return !a || !b ? [] : [{
+            a: { value: a, spec: saved.specA as GearPose<Piece>["spec"], center: saved.centerA, axis: saved.poseAxisA },
+            b: { value: b, spec: saved.specB as GearPose<Piece>["spec"], center: saved.centerB, axis: saved.poseAxisB },
+            ratio: saved.ratio, centerDistance: saved.centerDistance,
+            expectedDistance: saved.expectedDistance, distanceError: saved.distanceError,
+            axisA: new THREE.Vector3().fromArray(saved.axisA),
+            axisB: new THREE.Vector3().fromArray(saved.axisB),
+            signB: saved.signB, perpendicular: saved.perpendicular }];
+        });
+        camera.position.fromArray(document.camera.position);
+        camera.quaternion.fromArray(document.camera.quaternion);
+        cameraTarget.fromArray(document.camera.target); camera.lookAt(cameraTarget);
+        activeProjectIdRef.current = document.id;
+        projectCreatedAtRef.current = document.createdAt;
+        projectRevisionRef.current = document.revision ?? 0;
+        savedProjectRevisionRef.current = document.savedRevision ?? null;
+        setProjectDirty(
+          savedProjectRevisionRef.current !== projectRevisionRef.current,
+        );
+        projectNameRef.current = document.name.slice(0, 20);
+        suppressProjectNameDirtyRef.current = true;
+        setProjectName(document.name.slice(0, 20));
+        setGridStep(document.settings.gridStep as GridStep);
+        setAxleSnapStep(document.settings.axleSnapStep as AxleSnapStep);
+        setRotationSnapStep(document.settings.rotationSnapStep as RotationSnapStep);
+        setStructuralMode(document.settings.structuralMode);
+        setStructuralStiffness(document.settings.structuralStiffness);
+        setPhysicsSettings({ ...DEFAULT_PHYSICS_SETTINGS,
+          ...(document.settings.physics as Partial<PhysicsSettings>) });
+        setImported(document.importedCatalog.map((catalog) => catalog as unknown as CatalogPart));
+        state.rebuildRenderBatches(); state.refreshDebug();
+        setSelectedId(null); setCount(state.pieces.length);
+        setConnectionRevision((value) => value + 1);
+        undoStack.length = 0; redoStack.length = 0;
+      } finally {
+        state.bulkLoading = false;
+        restoringProject = false;
+        window.setTimeout(() => {
+          projectRestoringRef.current = false;
+          scheduleRecoverySave(true, false);
+        }, 50);
+      }
+    };
     const copySelected = () => {
       const piece = state.selected;
       if (!piece || state.running) return false;
@@ -5590,7 +6005,42 @@ export default function Home() {
       redo,
       copySelected,
       pasteClipboard,
+      createProjectDocument,
+      restoreProjectDocument,
+      scheduleRecoverySave,
     });
+    const flushRecovery = () => {
+      if (document.visibilityState === "hidden") scheduleRecoverySave(true);
+    };
+    document.addEventListener("visibilitychange", flushRecovery);
+    void Promise.all([listBrowserProjects(), loadRecoveryProject()])
+      .then(async ([savedProjects, recovery]) => {
+        setProjects(savedProjects);
+        if (recovery) {
+          await restoreProjectDocument(recovery);
+          const existsInProjectManager = savedProjects.some(
+            (project) => project.id === recovery.id,
+          );
+          setCurrentProjectSaved(existsInProjectManager);
+          if (
+            existsInProjectManager &&
+            recovery.savedRevision === undefined
+          ) {
+            savedProjectRevisionRef.current = projectRevisionRef.current;
+            setProjectDirty(false);
+          }
+          setMessage(
+            language === "es"
+              ? "Sesión anterior recuperada automáticamente"
+              : "Previous session recovered automatically",
+          );
+        } else {
+          setCurrentProjectSaved(false);
+          setProjectDirty(false);
+          scheduleRecoverySave(true, false);
+        }
+      })
+      .catch(() => setRecoveryStatus("idle"));
     const down = (e: PointerEvent) => {
       canvas.focus({ preventScroll: true });
       canvas.setPointerCapture(e.pointerId);
@@ -5718,6 +6168,7 @@ export default function Home() {
             : `Pivot selected on ${hitPiece.part} · drag to rotate`,
         );
         refreshDebug();
+        scheduleRecoverySave();
         return;
       }
       if (!state.running && e.ctrlKey && e.button === 0 && hitPiece) {
@@ -6122,6 +6573,7 @@ export default function Home() {
           );
         }
         refreshDebug();
+        scheduleRecoverySave();
         return;
       }
       if (state.manualConnect) {
@@ -6249,6 +6701,7 @@ export default function Home() {
             `Connect manual: ${draft.piece.part} ↔ ${best!.piece.part} · ${connections} uniones verificadas`,
           );
         }
+        scheduleRecoverySave();
         return;
       }
       if (spring) {
@@ -6276,7 +6729,9 @@ export default function Home() {
         released.label.remove();
         spring = undefined;
       }
-      if (orbit && !moved && altCandidate) {
+      const toggledFixed = Boolean(orbit && !moved && altCandidate),
+        cameraOnlyGesture = Boolean((orbit || pan || e.button === 1) && !toggledFixed);
+      if (toggledFixed && altCandidate) {
         state.recordHistory();
         toggleFixed(altCandidate);
       }
@@ -6296,6 +6751,7 @@ export default function Home() {
         state.rebuildRenderBatches();
       setConnectionRevision((value) => value + 1);
       refreshDebug();
+      if (!cameraOnlyGesture) scheduleRecoverySave();
     };
     const drop = (e: DragEvent) => {
       e.preventDefault();
@@ -6323,6 +6779,7 @@ export default function Home() {
             if (!piece) return;
             connect(piece);
             verifyPieceConnections(piece);
+            scheduleRecoverySave();
           });
           if (
             (p.origin === "catalog-search" || p.origin === "model-import") &&
@@ -6373,6 +6830,11 @@ export default function Home() {
       }
       const command = e.ctrlKey || e.metaKey;
       if (command && !e.altKey) {
+        if (e.code === "KeyS") {
+          e.preventDefault();
+          if (!e.repeat) saveShortcutRef.current();
+          return;
+        }
         const redoShortcut =
           e.code === "KeyY" || (e.code === "KeyZ" && e.shiftKey);
         if (e.code === "KeyZ" || redoShortcut) {
@@ -6966,6 +7428,7 @@ export default function Home() {
       window.removeEventListener("keyup", keyup, true);
       window.removeEventListener("blur", clearModifiers);
       renderer.dispose();
+      document.removeEventListener("visibilitychange", flushRecovery);
       state.physicsEventQueue?.free();
       state.physicsEventQueue = undefined;
       host.removeChild(canvas);
@@ -7130,6 +7593,7 @@ export default function Home() {
         : `${t.colorError} · LDraw ${color}`,
     );
     setSelectedId(piece.id);
+    s.scheduleRecoverySave();
   };
   const remove = () => {
     const s = appRef.current,
@@ -7185,6 +7649,7 @@ export default function Home() {
     setRunning(false);
     setSelectedId(null);
     setCount(0);
+    s.scheduleRecoverySave();
   };
   const physics = async () => {
     const s = appRef.current;
@@ -7999,6 +8464,7 @@ export default function Home() {
       connections = await s.verifyConnectionsAsync();
     }
     s.refreshDebug();
+    s.scheduleRecoverySave();
     setMessage(
       language === "es"
         ? AUTO_CONNECTIONS_ENABLED
@@ -8030,6 +8496,293 @@ export default function Home() {
     a.href = URL.createObjectURL(new Blob([makeLDR(lines)]));
     a.download = "sim-studio-model.ldr";
     a.click();
+  };
+  const refreshProjectList = async () => {
+    try {
+      const nextProjects = await listBrowserProjects();
+      setProjects(nextProjects);
+      setProjectPage((page) =>
+        Math.min(page, Math.max(0, Math.ceil(nextProjects.length / 9) - 1)),
+      );
+    } catch {}
+  };
+  const downloadProjectDocument = (document: SimStudioProjectDocument) => {
+    const url = URL.createObjectURL(
+        new Blob([encodeProjectFile(document)], { type: PROJECT_MIME }),
+      ),
+      anchor = window.document.createElement("a");
+    anchor.href = url;
+    anchor.download = safeProjectFileName(document.name);
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const saveCurrentProject = async () => {
+    const state = appRef.current;
+    if (!state || running || projectBusy) return;
+    setProjectBusy(true);
+    const previousSavedRevision = savedProjectRevisionRef.current;
+    try {
+      projectNameRef.current = projectName.trim() ||
+        (language === "es" ? "Mecanismo sin título" : "Untitled mechanism");
+      savedProjectRevisionRef.current = projectRevisionRef.current;
+      const document = state.createProjectDocument();
+      await saveBrowserProject(document);
+      await saveRecoveryProject(document);
+      await refreshProjectList();
+      setRecoveryStatus("saved");
+      setCurrentProjectSaved(true);
+      setProjectDirty(false);
+      setSaveNamePrompt(false);
+      setProjectNameEditing(false);
+      setMessage(
+        language === "es"
+          ? `Proyecto «${document.name}» guardado en el navegador`
+          : `Project “${document.name}” saved in this browser`,
+      );
+    } catch (error) {
+      savedProjectRevisionRef.current = previousSavedRevision;
+      setMessage(
+        `${language === "es" ? "No se pudo guardar" : "Could not save"}: ${error instanceof Error ? error.message : "IndexedDB"}`,
+      );
+    } finally { setProjectBusy(false); }
+  };
+  const requestProjectSave = () => {
+    if (running || projectBusy) return;
+    if (currentProjectSaved) {
+      void saveCurrentProject();
+      return;
+    }
+    setProjectMenuOpen(true);
+    setSaveNamePrompt(true);
+    setMessage(t.nameBeforeSave);
+    window.setTimeout(() => {
+      projectNameInputRef.current?.focus();
+      projectNameInputRef.current?.select();
+    }, 0);
+  };
+  saveShortcutRef.current = requestProjectSave;
+  const performOpenSavedProject = async (id: string) => {
+    const state = appRef.current;
+    if (!state || running || projectBusy) return;
+    setProjectBusy(true);
+    try {
+      const document = await loadBrowserProject(id);
+      if (!document) throw new Error("Project not found");
+      await state.restoreProjectDocument(document);
+      savedProjectRevisionRef.current = projectRevisionRef.current;
+      setCurrentProjectSaved(true);
+      setProjectDirty(false);
+      setProjectNameEditing(false);
+      setProjectMenuOpen(false);
+      setMessage(
+        language === "es"
+          ? `Proyecto «${document.name}» cargado sin recalcular conexiones`
+          : `Project “${document.name}” loaded without rescanning connections`,
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not open project");
+    } finally { setProjectBusy(false); }
+  };
+  const performCreateNewProject = () => {
+    if (running || projectBusy) return;
+    reset();
+    const id = createProjectId(), createdAt = new Date().toISOString(),
+      name = language === "es" ? "Mecanismo sin título" : "Untitled mechanism";
+    activeProjectIdRef.current = id;
+    projectCreatedAtRef.current = createdAt;
+    projectRevisionRef.current = 0;
+    savedProjectRevisionRef.current = null;
+    projectNameRef.current = name;
+    suppressProjectNameDirtyRef.current = true;
+    setProjectName(name);
+    setImported([]);
+    setCurrentProjectSaved(false);
+    setProjectDirty(false);
+    setSaveNamePrompt(false);
+    setProjectNameEditing(false);
+    appRef.current?.scheduleRecoverySave(true, false);
+    setProjectMenuOpen(false);
+    setMessage(language === "es" ? "Proyecto nuevo" : "New project");
+  };
+  const requestCreateNewProject = () => {
+    if (projectDirty) setProjectConfirmation({ kind: "new" });
+    else performCreateNewProject();
+  };
+  const requestOpenSavedProject = (project: ProjectSummary) => {
+    if (projectDirty) setProjectConfirmation({ kind: "open", project });
+    else void performOpenSavedProject(project.id);
+  };
+  const exportCurrentProject = () => {
+    const state = appRef.current;
+    if (!state || running) return;
+    projectNameRef.current = projectName.trim() || "Untitled mechanism";
+    downloadProjectDocument(state.createProjectDocument());
+  };
+  const performImportProject = async (document: SimStudioProjectDocument) => {
+    const state = appRef.current;
+    if (!state || running || projectBusy) return;
+    setProjectBusy(true);
+    try {
+      const existingProjects = await listBrowserProjects(),
+        now = new Date().toISOString(),
+        importedDocument: SimStudioProjectDocument = {
+          ...document,
+          id: createProjectId(),
+          name: uniqueProjectName(
+            document.name,
+            existingProjects,
+            language === "es" ? "Proyecto importado" : "Imported project",
+          ),
+          createdAt: now,
+          updatedAt: now,
+        };
+      savedProjectRevisionRef.current = importedDocument.revision ?? 0;
+      importedDocument.savedRevision = savedProjectRevisionRef.current;
+      await saveBrowserProject(importedDocument);
+      await state.restoreProjectDocument(importedDocument);
+      setCurrentProjectSaved(true);
+      setProjectDirty(false);
+      setProjectNameEditing(false);
+      await refreshProjectList();
+      setProjectMenuOpen(false);
+      setMessage(
+        language === "es"
+          ? `Proyecto «${importedDocument.name}» importado como proyecto nuevo`
+          : `Project “${importedDocument.name}” imported as a new project`,
+      );
+    } catch (error) {
+      setMessage(
+        `${language === "es" ? "Archivo de proyecto no válido" : "Invalid project file"}: ${error instanceof Error ? error.message : "error"}`,
+      );
+    } finally { setProjectBusy(false); }
+  };
+  const importProjectFile = async (file: File) => {
+    try {
+      const document = decodeProjectFile(await file.arrayBuffer());
+      if (projectDirty) setProjectConfirmation({ kind: "import", document });
+      else void performImportProject(document);
+    } catch (error) {
+      setMessage(
+        `${language === "es" ? "Archivo de proyecto no válido" : "Invalid project file"}: ${error instanceof Error ? error.message : "error"}`,
+      );
+    }
+  };
+  const performRemoveSavedProject = async (id: string) => {
+    if (projectBusy) return;
+    setProjectBusy(true);
+    try {
+      await deleteBrowserProject(id);
+      await refreshProjectList();
+      if (id === activeProjectIdRef.current) {
+        savedProjectRevisionRef.current = null;
+        setCurrentProjectSaved(false);
+        setProjectDirty(true);
+        appRef.current?.scheduleRecoverySave(true, false);
+      }
+    }
+    finally { setProjectBusy(false); }
+  };
+  const resolveProjectConfirmation = () => {
+    const confirmation = projectConfirmation;
+    setProjectConfirmation(null);
+    if (!confirmation) return;
+    if (confirmation.kind === "new") performCreateNewProject();
+    else if (confirmation.kind === "open")
+      void performOpenSavedProject(confirmation.project.id);
+    else if (confirmation.kind === "delete")
+      void performRemoveSavedProject(confirmation.project.id);
+    else void performImportProject(confirmation.document);
+  };
+  const beginProjectRename = () => {
+    if (!currentProjectSaved || projectBusy || running) return;
+    setProjectNameDraft(projectName);
+    setProjectNameEditing(true);
+    window.setTimeout(() => {
+      projectNameInputRef.current?.focus();
+      projectNameInputRef.current?.select();
+    }, 0);
+  };
+  const cancelProjectRename = () => {
+    setProjectNameDraft("");
+    setProjectNameEditing(false);
+  };
+  const confirmProjectRename = async () => {
+    const name = projectNameDraft.trim().slice(0, 20);
+    if (!name || !currentProjectSaved || projectBusy || running) return;
+    if (name === projectName) {
+      cancelProjectRename();
+      return;
+    }
+    setProjectBusy(true);
+    try {
+      const document = await loadBrowserProject(activeProjectIdRef.current);
+      if (!document) throw new Error("Project not found");
+      document.name = name;
+      document.updatedAt = new Date().toISOString();
+      await saveBrowserProject(document);
+      suppressProjectNameDirtyRef.current = true;
+      projectNameRef.current = name;
+      setProjectName(name);
+      setProjectNameDraft("");
+      setProjectNameEditing(false);
+      appRef.current?.scheduleRecoverySave(true, false);
+      await refreshProjectList();
+      setMessage(
+        language === "es"
+          ? `Proyecto renombrado como «${name}»`
+          : `Project renamed to “${name}”`,
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not rename project");
+    } finally { setProjectBusy(false); }
+  };
+  const beginDuplicateProject = async () => {
+    if (!currentProjectSaved || projectBusy || running) return;
+    setProjectBusy(true);
+    try {
+      const document = await loadBrowserProject(activeProjectIdRef.current);
+      if (!document) throw new Error("Project not found");
+      const suffix = language === "es" ? " copia" : " copy";
+      setDuplicateProjectDocument(document);
+      setDuplicateProjectName(
+        `${document.name.slice(0, Math.max(1, 20 - suffix.length))}${suffix}`,
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not duplicate project");
+    } finally { setProjectBusy(false); }
+  };
+  const confirmDuplicateProject = async () => {
+    const name = duplicateProjectName.trim().slice(0, 20),
+      source = duplicateProjectDocument;
+    if (!name || !source || projectBusy) return;
+    setProjectBusy(true);
+    try {
+      const existingProjects = await listBrowserProjects(),
+        uniqueName = uniqueProjectName(
+          name,
+          existingProjects,
+          language === "es" ? "Copia" : "Copy",
+        ),
+        now = new Date().toISOString(),
+        copy: SimStudioProjectDocument = {
+          ...source,
+          id: createProjectId(),
+          name: uniqueName,
+          createdAt: now,
+          updatedAt: now,
+        };
+      await saveBrowserProject(copy);
+      setDuplicateProjectDocument(null);
+      setDuplicateProjectName("");
+      await refreshProjectList();
+      setMessage(
+        language === "es"
+          ? `Copia «${uniqueName}» creada`
+          : `Copy “${uniqueName}” created`,
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not duplicate project");
+    } finally { setProjectBusy(false); }
   };
   const selected = appRef.current?.selected;
   const selectedCollisionLayer = selected?.gear ? collisionLayer : "normal",
@@ -8858,6 +9611,18 @@ export default function Home() {
     window.addEventListener("pointerup", finish);
     window.addEventListener("pointercancel", finish);
   };
+  const projectSaveState =
+      recoveryStatus === "saving"
+        ? "saving"
+        : currentProjectSaved && !projectDirty
+          ? "clean"
+          : "dirty",
+    projectSaveLabel =
+      projectSaveState === "saving"
+        ? t.autosaving
+        : projectSaveState === "clean"
+          ? t.projectUpToDate
+          : t.changesPending;
 
   return (
     <main
@@ -8902,10 +9667,20 @@ export default function Home() {
           <span>{theme === "dark" ? "☀" : "◐"}</span>
           {theme === "dark" ? t.light : t.dark}
         </button>
-        <div className="project">
+        <button
+          className="project project-button"
+          onClick={() => setProjectMenuOpen(true)}
+          title={t.manageProjects}
+        >
           <span>{t.project}</span>
-          <b>{t.mechanism}</b>
-        </div>
+          <b>{projectName.slice(0, 20)}</b>
+          <small
+            className={`recovery-dot ${projectSaveState}`}
+            title={projectSaveLabel}
+          >
+            {projectSaveState === "clean" ? "✓" : projectSaveState === "saving" ? "…" : "!"}
+          </small>
+        </button>
         <div className="header-actions">
           <input
             ref={fileRef}
@@ -8916,6 +9691,24 @@ export default function Home() {
               const file = e.target.files?.[0];
               e.currentTarget.value = "";
               if (file) void importModel(file);
+            }}
+          />
+          <button
+            className="ghost project-manager-trigger"
+            onClick={() => setProjectMenuOpen(true)}
+            title={`${t.manageProjects} · Ctrl+S`}
+          >
+            ▣ {t.projectsButton}
+          </button>
+          <input
+            ref={projectFileRef}
+            type="file"
+            hidden
+            accept={PROJECT_EXTENSION}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.currentTarget.value = "";
+              if (file) void importProjectFile(file);
             }}
           />
           <button
@@ -8969,6 +9762,280 @@ export default function Home() {
           </button>
         </div>
       </header>
+      {projectMenuOpen && (
+        <div className="project-backdrop" role="presentation">
+          <section
+            className="project-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="projects-title"
+          >
+            <div className="project-dialog-head">
+              <div>
+                <small>SIM STUDIO {PROJECT_EXTENSION}</small>
+                <h2 id="projects-title">{t.projects}</h2>
+              </div>
+              <button
+                className="project-close"
+                onClick={() => setProjectMenuOpen(false)}
+                aria-label={t.close}
+              >
+                ×
+              </button>
+            </div>
+            <div className="current-project-card">
+              <label>{t.currentProject}</label>
+              <div className="project-name-row">
+                <input
+                  ref={projectNameInputRef}
+                  value={currentProjectSaved
+                    ? projectNameEditing ? projectNameDraft : projectName
+                    : projectName}
+                  onChange={(event) => {
+                    const name = event.target.value.slice(0, 20);
+                    if (currentProjectSaved) setProjectNameDraft(name);
+                    else setProjectName(name);
+                  }}
+                  onKeyDown={(event) => {
+                    if (!projectNameEditing) return;
+                    if (event.key === "Enter") void confirmProjectRename();
+                    if (event.key === "Escape") cancelProjectRename();
+                  }}
+                  aria-label={t.projectName}
+                  readOnly={currentProjectSaved && !projectNameEditing}
+                  className={currentProjectSaved && !projectNameEditing ? "locked" : ""}
+                  maxLength={20}
+                />
+                {currentProjectSaved && (
+                  <div className="project-name-actions">
+                    {projectNameEditing ? (
+                      <>
+                        <button
+                          className="confirm-name"
+                          onClick={() => void confirmProjectRename()}
+                          disabled={!projectNameDraft.trim() || projectBusy}
+                          title={t.confirmProjectName}
+                          aria-label={t.confirmProjectName}
+                        >
+                          ✓
+                        </button>
+                        <button
+                          onClick={cancelProjectRename}
+                          disabled={projectBusy}
+                          title={t.cancel}
+                          aria-label={t.cancel}
+                        >
+                          ×
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          onClick={beginProjectRename}
+                          disabled={projectBusy || running}
+                          title={t.editProjectName}
+                          aria-label={t.editProjectName}
+                        >
+                          ✎
+                        </button>
+                        <button
+                          onClick={() => void beginDuplicateProject()}
+                          disabled={projectBusy || running}
+                          title={t.duplicateProject}
+                          aria-label={t.duplicateProject}
+                        >
+                          ⧉
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+              {saveNamePrompt && (
+                <p className="save-name-prompt">{t.nameBeforeSave}</p>
+              )}
+              <p>
+                <span className={`recovery-dot ${projectSaveState}`}>
+                  {projectSaveState === "clean" ? "✓" : projectSaveState === "saving" ? "…" : "!"}
+                </span>
+                {projectSaveLabel}
+              </p>
+              <div className="project-primary-actions">
+                <button onClick={requestCreateNewProject} disabled={projectBusy || running}>
+                  ＋ {t.newProject}
+                </button>
+                <button
+                  className="primary"
+                  onClick={() => void saveCurrentProject()}
+                  disabled={projectBusy || running}
+                >
+                  {projectBusy ? "…" : "✓"} {t.saveProject}
+                </button>
+              </div>
+              <div className="project-file-actions">
+                <button onClick={exportCurrentProject} disabled={running}>
+                  ↓ {t.exportProject}
+                </button>
+                <button
+                  onClick={() => projectFileRef.current?.click()}
+                  disabled={projectBusy || running}
+                >
+                  ↑ {t.importProject}
+                </button>
+              </div>
+            </div>
+            <div className="project-list-head">
+              <b>{t.localProjects}</b>
+              <span>{projects.length}</span>
+            </div>
+            <div className="project-list">
+              {projects.length ? projects
+                .slice(projectPage * 9, projectPage * 9 + 9)
+                .map((project) => (
+                <article
+                  key={project.id}
+                  className={
+                    project.id === activeProjectIdRef.current ? "active" : ""
+                  }
+                >
+                  <button
+                    className="project-open"
+                    onClick={() => requestOpenSavedProject(project)}
+                    disabled={projectBusy || running}
+                  >
+                    <span className="project-file-icon">S</span>
+                    <span>
+                      <b>{project.name}</b>
+                      <small>
+                        {project.pieceCount} {t.pieces} ·{" "}
+                        {new Date(project.updatedAt).toLocaleString(language)}
+                      </small>
+                    </span>
+                  </button>
+                  <button
+                    className="project-delete"
+                    title={t.deleteProject}
+                    aria-label={`${t.deleteProject}: ${project.name}`}
+                    onClick={() => setProjectConfirmation({ kind: "delete", project })}
+                    disabled={projectBusy}
+                  >
+                    ×
+                  </button>
+                </article>
+              )) : <p className="empty-projects">{t.noProjects}</p>}
+            </div>
+            {projects.length > 9 && (
+              <nav className="project-pagination" aria-label={t.localProjects}>
+                <button
+                  onClick={() => setProjectPage((page) => Math.max(0, page - 1))}
+                  disabled={projectPage === 0}
+                  title={t.previousPage}
+                  aria-label={t.previousPage}
+                >
+                  ‹
+                </button>
+                <span>
+                  {projectPage + 1} / {Math.ceil(projects.length / 9)}
+                </span>
+                <button
+                  onClick={() => setProjectPage((page) =>
+                    Math.min(Math.ceil(projects.length / 9) - 1, page + 1)
+                  )}
+                  disabled={projectPage >= Math.ceil(projects.length / 9) - 1}
+                  title={t.nextPage}
+                  aria-label={t.nextPage}
+                >
+                  ›
+                </button>
+              </nav>
+            )}
+          </section>
+        </div>
+      )}
+      {duplicateProjectDocument && (
+        <div className="project-confirm-backdrop" role="presentation">
+          <form
+            className="project-confirm-dialog duplicate-project-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="duplicate-project-title"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void confirmDuplicateProject();
+            }}
+          >
+            <span className="duplicate-project-icon">⧉</span>
+            <h2 id="duplicate-project-title">{t.duplicateTitle}</h2>
+            <p>{t.duplicateHelp}</p>
+            <label htmlFor="duplicate-project-name">{t.duplicateName}</label>
+            <input
+              id="duplicate-project-name"
+              autoFocus
+              value={duplicateProjectName}
+              onChange={(event) => setDuplicateProjectName(event.target.value.slice(0, 20))}
+              maxLength={20}
+              onFocus={(event) => event.currentTarget.select()}
+            />
+            <div>
+              <button
+                type="button"
+                onClick={() => {
+                  setDuplicateProjectDocument(null);
+                  setDuplicateProjectName("");
+                }}
+                disabled={projectBusy}
+              >
+                {t.cancel}
+              </button>
+              <button
+                type="submit"
+                className="duplicate-confirm"
+                disabled={!duplicateProjectName.trim() || projectBusy}
+              >
+                {projectBusy ? "…" : "⧉"} {t.createCopy}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+      {projectConfirmation && (
+        <div className="project-confirm-backdrop" role="presentation">
+          <section
+            className="project-confirm-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="project-confirm-title"
+          >
+            <span className="project-confirm-icon">!</span>
+            <h2 id="project-confirm-title">
+              {projectConfirmation.kind === "delete"
+                ? t.deleteTitle
+                : t.unsavedTitle}
+            </h2>
+            <p>
+              {projectConfirmation.kind === "delete"
+                ? `${t.deleteWarning} «${projectConfirmation.project.name}»`
+                : t.unsavedWarning}
+            </p>
+            <div>
+              <button
+                className="ghost"
+                onClick={() => setProjectConfirmation(null)}
+              >
+                {t.cancel}
+              </button>
+              <button className="danger-confirm" onClick={resolveProjectConfirmation}>
+                {projectConfirmation.kind === "delete"
+                  ? t.deleteProject
+                  : projectConfirmation.kind === "open" ||
+                      projectConfirmation.kind === "import"
+                    ? t.openAnyway
+                    : t.createAnyway}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {importDraft && (
         <div className="import-backdrop" role="presentation">
           <section

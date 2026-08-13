@@ -23,6 +23,7 @@ The GitHub Pages version includes the complete default palette and its locally p
 - Move placed parts on X/Z, use `Shift` for constrained movement, and rotate them by any angle.
 - Rotate the selected part in 90° steps with `WASD` or the arrow keys.
 - Import `.ldr`, `.mpd` and BrickLink Studio `.io` models and export the assembly as `.ldr`.
+- Browser-local project library, automatic crash/reload recovery and self-contained `.simstudio` project import/export.
 - Import preview and progress dialog that separates locally cached palette parts from external catalog parts.
 - Change a placed part to any supported LDraw color from its properties.
 - Light and dark themes, including the 3D environment.
@@ -115,6 +116,16 @@ During simulation, clicking a point on a part and dragging applies a visible spr
 
 The renderer caps presentation at 60 FPS. Dynamic resolution reduction is reserved for severe sustained drops, while instancing, cached geometry and visibility culling reduce the cost of larger models.
 
+## Projects and automatic recovery
+
+Click the project name in the top bar to open the project library. Named projects are stored locally in IndexedDB and remain available in that browser. The editor also maintains a separate invisible recovery document after edits, camera changes and settings changes; reopening or reloading Sim Studio restores that latest working state even when it was never added to the named project list.
+
+The custom `.simstudio` format is compressed and self-contained. It stores part transforms and colors, embedded 3D assets (including external catalog parts), connection and collider maps, exact joint endpoints and modes, gear links, camera position, snap settings, structural behavior and global physics settings. Loading it reconstructs the saved connection graph directly instead of running proximity-based auto-connect again.
+
+Use **Export .simstudio** to keep a portable backup and **Import .simstudio** to add it to another browser. `Ctrl + S` updates an existing named project or opens the naming flow for a new one. The status dot is red while recovery is being written, yellow when the recoverable working copy is newer than the named project, and a green check when both match. Sim Studio confirms before discarding unsaved changes or deleting a browser project.
+
+Saved project names are locked against accidental typing. Use the pencil button to rename the active project, or the duplicate button to create an independently named copy. Imported `.simstudio` files always become new browser projects; they receive a new internal ID and an automatic numeric suffix when their name is already in use, so an import never overwrites an existing project.
+
 ## Controls
 
 | Action | Control |
@@ -176,6 +187,7 @@ npm test                  # Build and automated tests
 - LDraw/MPD and Studio `.io` import restore part number, color, position and orientation.
 - `.io` export is not currently supported.
 - LDraw export creates `sim-studio-model.ldr`; Sim Studio-specific physics modes are not currently embedded in the exported model.
+- Named projects and automatic recovery are local to the current browser unless exported as `.simstudio` files.
 - Automatic connector detection is geometric and may require correction for unusual parts.
 - Compound colliders are simulation approximations, not manufacturing geometry.
 - Motors and large connected mechanisms remain experimental.
