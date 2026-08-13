@@ -618,6 +618,7 @@ const translations = {
     createCopy: "Crear copia",
     newProject: "Nuevo proyecto",
     saveProject: "Guardar proyecto",
+    saveShortcut: "Atajo: Ctrl+S",
     openProject: "Abrir",
     exportProject: "Exportar .simstudio",
     importProject: "Importar .simstudio",
@@ -631,6 +632,8 @@ const translations = {
     changesPending: "Recuperado, pero falta guardar el proyecto",
     projectUpToDate: "Proyecto completamente guardado",
     close: "Cerrar",
+    hideControls: "Ocultar ayuda de controles",
+    showControls: "Mostrar ayuda de controles",
     unsavedTitle: "Cambios sin guardar",
     unsavedWarning:
       "Los cambios que no hayas guardado en el administrador de proyectos se descartarán.",
@@ -806,6 +809,7 @@ const translations = {
     createCopy: "Create copy",
     newProject: "New project",
     saveProject: "Save project",
+    saveShortcut: "Shortcut: Ctrl+S",
     openProject: "Open",
     exportProject: "Export .simstudio",
     importProject: "Import .simstudio",
@@ -819,6 +823,8 @@ const translations = {
     changesPending: "Recovered, but the project still needs saving",
     projectUpToDate: "Project fully saved",
     close: "Close",
+    hideControls: "Hide controls help",
+    showControls: "Show controls help",
     unsavedTitle: "Unsaved changes",
     unsavedWarning:
       "Changes not saved in the project manager will be discarded.",
@@ -1774,6 +1780,7 @@ export default function Home() {
     [importDraft, setImportDraft] = useState<ImportDraft | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">("light"),
     [language, setLanguage] = useState<Language>("en"),
+    [controlsHelpVisible, setControlsHelpVisible] = useState(true),
     [gridStep, setGridStep] = useState<GridStep>(0.25),
     [axleSnapStep, setAxleSnapStep] = useState<AxleSnapStep>(0.25),
     [rotationSnapStep, setRotationSnapStep] =
@@ -1834,6 +1841,9 @@ export default function Home() {
       );
       setLanguage(
         localStorage.getItem("sim-studio:language") === "es" ? "es" : "en",
+      );
+      setControlsHelpVisible(
+        localStorage.getItem("sim-studio:controls-help-hidden") !== "1",
       );
       const savedGridStepText = localStorage.getItem("sim-studio:grid-step"),
         savedGridStep = savedGridStepText === null ? NaN : Number(savedGridStepText);
@@ -6117,6 +6127,7 @@ export default function Home() {
         setMessage(
           `${placed} piezas colocadas · ${connections} conexiones detectadas`,
         );
+        if (placed > 0) scheduleRecoverySave();
         return;
       }
       const hit = pickPiece(),
@@ -6168,7 +6179,7 @@ export default function Home() {
             : `Pivot selected on ${hitPiece.part} · drag to rotate`,
         );
         refreshDebug();
-        scheduleRecoverySave();
+        if (connected) scheduleRecoverySave();
         return;
       }
       if (!state.running && e.ctrlKey && e.button === 0 && hitPiece) {
@@ -6729,8 +6740,7 @@ export default function Home() {
         released.label.remove();
         spring = undefined;
       }
-      const toggledFixed = Boolean(orbit && !moved && altCandidate),
-        cameraOnlyGesture = Boolean((orbit || pan || e.button === 1) && !toggledFixed);
+      const toggledFixed = Boolean(orbit && !moved && altCandidate);
       if (toggledFixed && altCandidate) {
         state.recordHistory();
         toggleFixed(altCandidate);
@@ -6751,7 +6761,7 @@ export default function Home() {
         state.rebuildRenderBatches();
       setConnectionRevision((value) => value + 1);
       refreshDebug();
-      if (!cameraOnlyGesture) scheduleRecoverySave();
+      if (toggledFixed || (movedPiece && moved)) scheduleRecoverySave();
     };
     const drop = (e: DragEvent) => {
       e.preventDefault();
@@ -9871,6 +9881,7 @@ export default function Home() {
                 >
                   {projectBusy ? "…" : "✓"} {t.saveProject}
                 </button>
+                <small className="save-shortcut-hint">{t.saveShortcut}</small>
               </div>
               <div className="project-file-actions">
                 <button onClick={exportCurrentProject} disabled={running}>
@@ -10200,9 +10211,33 @@ export default function Home() {
               ? t.ready
               : message}
         </div>
-        <div className="camera-help">
-          {t.cameraHelp}
-        </div>
+        {controlsHelpVisible ? (
+          <div className="camera-help">
+            <span>{t.cameraHelp}</span>
+            <button
+              onClick={() => {
+                setControlsHelpVisible(false);
+                localStorage.setItem("sim-studio:controls-help-hidden", "1");
+              }}
+              title={t.hideControls}
+              aria-label={t.hideControls}
+            >
+              ×
+            </button>
+          </div>
+        ) : (
+          <button
+            className="controls-help-open"
+            onClick={() => {
+              setControlsHelpVisible(true);
+              localStorage.removeItem("sim-studio:controls-help-hidden");
+            }}
+            title={t.showControls}
+            aria-label={t.showControls}
+          >
+            ?
+          </button>
+        )}
       </section>
       <div
         className="inspector-resizer"
