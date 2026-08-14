@@ -10,7 +10,7 @@ import {
 } from "react";
 import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
-import { LDrawLoader } from "three/addons/loaders/LDrawLoader.js";
+import { LDrawLoader } from "./vendor/LDrawLoader.js";
 import { LDrawConditionalLineMaterial } from "three/addons/materials/LDrawConditionalLineMaterial.js";
 import {
   ldrawToScenePlacement,
@@ -18,6 +18,7 @@ import {
   parseLDR,
   type LDrawPlacement,
 } from "./ldraw";
+import { flattenLDrawRenderables } from "./ldraw-geometry";
 import { extractStudioLDraw } from "./studio-io";
 import {
   approximateCollisionPrimitives,
@@ -2180,7 +2181,9 @@ export default function Home() {
             modelText({ ...p, color: sourceColor }),
           )}`;
           try {
-            exact = await primaryPool.load(source, `La pieza ${p.part}`);
+            exact = flattenLDrawRenderables(
+              await primaryPool.load(source, `La pieza ${p.part}`),
+            );
             const loadedSource = {
               downloadUrl: `${LDRAW}parts/${resolvedFile}`,
               downloadSource: "primary" as const,
@@ -2189,7 +2192,9 @@ export default function Home() {
             modelSourceCache.set(sourceKey, loadedSource);
           } catch (primaryError) {
             try {
-              exact = await legacyPool.load(source, `La pieza ${p.part}`);
+              exact = flattenLDrawRenderables(
+                await legacyPool.load(source, `La pieza ${p.part}`),
+              );
               const loadedSource = {
                 downloadUrl: `${LEGACY_LDRAW}parts/${resolvedFile}`,
                 downloadSource: "legacy" as const,

@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as THREE from "three";
-import { LDrawLoader } from "three/addons/loaders/LDrawLoader.js";
+import { LDrawLoader } from "../app/vendor/LDrawLoader.js";
 import { LDrawConditionalLineMaterial } from "three/addons/materials/LDrawConditionalLineMaterial.js";
 import {
   approximateCollisionPrimitives,
@@ -22,6 +22,7 @@ import {
   preloadedGearCollisionMaps,
 } from "../app/collision-maps.ts";
 import { paletteParts } from "../app/palette.ts";
+import { flattenLDrawRenderables } from "../app/ldraw-geometry.ts";
 
 globalThis.ProgressEvent ??= class ProgressEvent extends Event {
   constructor(type, init = {}) {
@@ -268,8 +269,10 @@ try {
   for (const part of targetParts) {
     const assetKey = `${part.part}-${part.color}`,
       geometryFile = `catalog/geometry/${assetKey}.json`;
-    let exact = await loader.loadAsync(
-      `data:text/plain;charset=utf-8,${encodeURIComponent(modelText(part))}`,
+    let exact = flattenLDrawRenderables(
+      await loader.loadAsync(
+        `data:text/plain;charset=utf-8,${encodeURIComponent(modelText(part))}`,
+      ),
     );
     await writeFile(
       join(publicRoot, geometryFile),
