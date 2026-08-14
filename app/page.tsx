@@ -2015,7 +2015,7 @@ export default function Home() {
     renderer.setSize(host.clientWidth, host.clientHeight);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    const gl = renderer.getContext(),
+    const gl = renderer.getContext() as WebGL2RenderingContext,
       gpuTimerExtension = gl.getExtension(
         "EXT_disjoint_timer_query_webgl2",
       ) as {
@@ -3219,7 +3219,7 @@ export default function Home() {
         const nonIndexed = source.index ? source.toNonIndexed() : source,
           result = new THREE.BufferGeometry();
         Object.entries(nonIndexed.attributes).forEach(([name, attribute]) => {
-          if (attribute.isInterleavedBufferAttribute) return;
+          if (attribute instanceof THREE.InterleavedBufferAttribute) return;
           const sourceArray = attribute.array as ArrayLike<number> & {
               slice?: (from: number, to: number) => ArrayLike<number>;
             },
@@ -6184,7 +6184,7 @@ export default function Home() {
             : `Pivot selected on ${hitPiece.part} · drag to rotate`,
         );
         refreshDebug();
-        if (connected) scheduleRecoverySave();
+        scheduleRecoverySave();
         return;
       }
       if (!state.running && e.ctrlKey && e.button === 0 && hitPiece) {
@@ -7530,9 +7530,9 @@ export default function Home() {
         };
     if (!packaged)
       try {
-        const d = await fetch(`/api/parts?q=${encodeURIComponent(part)}`).then(
-          (r) => r.json(),
-        );
+        const d = (await fetch(
+          `/api/parts?q=${encodeURIComponent(part)}`,
+        ).then((r) => r.json())) as { items?: CatalogPart[] };
         const exact = d.items?.find(
           (x: { part: string }) => x.part.toLowerCase() === normalizedPart,
         );
@@ -7856,8 +7856,10 @@ export default function Home() {
         desc.setTranslation(origin.x, origin.y, origin.z);
         const rb = world.createRigidBody(desc);
         island.forEach((p) => {
-          p.physicsOffset = p.mesh.position.clone().sub(origin);
-          p.physicsBase = p.mesh.quaternion.clone();
+          const physicsOffset = p.mesh.position.clone().sub(origin),
+            physicsBase = p.mesh.quaternion.clone();
+          p.physicsOffset = physicsOffset;
+          p.physicsBase = physicsBase;
           p.physicsIsland = island;
           p.physicsIslandFixed = islandFixed;
           p.body = rb;
@@ -7885,12 +7887,12 @@ export default function Home() {
                     Math.max(0.01, primitive.halfHeight! - axleClearance / 2),
                     primitive.radius!,
                   );
-            const center = p.physicsOffset
+            const center = physicsOffset
                 .clone()
                 .add(
-                  primitive.center.clone().applyQuaternion(p.physicsBase),
+                  primitive.center.clone().applyQuaternion(physicsBase),
                 ),
-              rotation = p.physicsBase.clone().multiply(primitive.rotation);
+              rotation = physicsBase.clone().multiply(primitive.rotation);
             if (gearLayer)
               collider.setFrictionCombineRule(
                 RAPIER.CoefficientCombineRule.Min,
@@ -8706,7 +8708,8 @@ export default function Home() {
       void performOpenSavedProject(confirmation.project.id);
     else if (confirmation.kind === "delete")
       void performRemoveSavedProject(confirmation.project.id);
-    else void performImportProject(confirmation.document);
+    else if (confirmation.kind === "import")
+      void performImportProject(confirmation.document);
   };
   const beginProjectRename = () => {
     if (!currentProjectSaved || projectBusy || running) return;
