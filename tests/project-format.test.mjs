@@ -63,6 +63,70 @@ test("rejects unrelated and unsupported files", () => {
   assert.throws(() => validateProjectDocument({ ...fixture, version: 99 }));
 });
 
+test("repairs non-finite recovery data before it reaches physics", () => {
+  const damaged = {
+    ...fixture,
+    pieces: [
+      {
+        id: "piece-1",
+        catalog: {},
+        asset: "asset-1",
+        position: [Number.NaN, Number.POSITIVE_INFINITY, 2],
+        rotation: [0, 0, 0, 0],
+        scale: [0, Number.NaN, 1],
+        fixed: false,
+        exactCollider: true,
+        dynamicAxleConnections: true,
+        connectors: [
+          {
+            local: [0, Number.NaN, 0],
+            axis: [0, 0, 0],
+            kind: "round",
+            role: "socket",
+            diameter: Number.NaN,
+          },
+        ],
+        colliders: [
+          {
+            shape: "cylinder",
+            center: [0, 0, Number.NaN],
+            radius: Number.NaN,
+            halfHeight: -4,
+            rotation: [0, 0, 0, 0],
+          },
+        ],
+        gearColliders: [],
+      },
+    ],
+    connections: [
+      {
+        id: "broken",
+        a: "piece-1",
+        b: "missing-piece",
+        socketIndex: 0,
+        shaftIndex: 999,
+      },
+    ],
+    settings: {
+      ...fixture.settings,
+      structuralStiffness: Number.NaN,
+      physics: { pieceFriction: Number.NaN, axleTolerance: 0.02 },
+    },
+  };
+  const repaired = validateProjectDocument(damaged);
+  assert.deepEqual(Array.from(repaired.pieces[0].position), [0, 0, 2]);
+  assert.deepEqual(Array.from(repaired.pieces[0].rotation), [0, 0, 0, 1]);
+  assert.deepEqual(Array.from(repaired.pieces[0].scale), [1, 1, 1]);
+  assert.deepEqual(Array.from(repaired.pieces[0].connectors[0].axis), [0, 1, 0]);
+  assert.equal(repaired.pieces[0].colliders[0].halfHeight, 0.01);
+  assert.equal(repaired.connections.length, 0);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(repaired.settings.physics)),
+    { axleTolerance: 0.02 },
+  );
+  assert.equal(repaired.settings.structuralStiffness, 85);
+});
+
 test("sanitizes the project download name", () => {
   assert.equal(safeProjectFileName('Drive: 8/20 * demo'), "Drive- 8-20 - demo.simstudio");
 });

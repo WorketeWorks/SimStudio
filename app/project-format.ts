@@ -135,6 +135,335 @@ const concatBytes = (left: Uint8Array, right: Uint8Array) => {
   return result;
 };
 
+const finiteNumber = (value: unknown, fallback: number) =>
+  typeof value === "number" && Number.isFinite(value) ? value : fallback;
+
+const finiteTuple3 = (
+  value: unknown,
+  fallback: [number, number, number] = [0, 0, 0],
+): [number, number, number] => {
+  const source = Array.isArray(value) ? value : fallback;
+  return [
+    finiteNumber(source[0], fallback[0]),
+    finiteNumber(source[1], fallback[1]),
+    finiteNumber(source[2], fallback[2]),
+  ];
+};
+
+const unitTuple3 = (
+  value: unknown,
+  fallback: [number, number, number] = [0, 1, 0],
+): [number, number, number] => {
+  const tuple = finiteTuple3(value, fallback),
+    length = Math.hypot(tuple[0], tuple[1], tuple[2]);
+  if (!Number.isFinite(length) || length < 1e-7) return [...fallback];
+  return [tuple[0] / length, tuple[1] / length, tuple[2] / length];
+};
+
+const unitQuaternion = (value: unknown): [number, number, number, number] => {
+  const source = Array.isArray(value) ? value : [0, 0, 0, 1],
+    tuple: [number, number, number, number] = [
+      finiteNumber(source[0], 0),
+      finiteNumber(source[1], 0),
+      finiteNumber(source[2], 0),
+      finiteNumber(source[3], 1),
+    ],
+    length = Math.hypot(tuple[0], tuple[1], tuple[2], tuple[3]);
+  if (!Number.isFinite(length) || length < 1e-7) return [0, 0, 0, 1];
+  return [
+    tuple[0] / length,
+    tuple[1] / length,
+    tuple[2] / length,
+    tuple[3] / length,
+  ];
+};
+
+const positiveNumber = (value: unknown, fallback: number, minimum = 1e-4) =>
+  Math.max(minimum, finiteNumber(value, fallback));
+
+const optionalTuple3 = (value: unknown) =>
+  Array.isArray(value) ? finiteTuple3(value) : undefined;
+
+const validDate = (value: unknown, fallback: string) =>
+  typeof value === "string" && Number.isFinite(Date.parse(value))
+    ? value
+    : fallback;
+
+const sanitizeProjectDocument = (
+  document: Partial<SimStudioProjectDocument>,
+): SimStudioProjectDocument => {
+  const now = new Date().toISOString(),
+    rawPieces = Array.isArray(document.pieces) ? document.pieces : [],
+    pieces: SavedPiece[] = rawPieces.map((rawPiece, pieceIndex) => {
+      const piece = rawPiece as Partial<SavedPiece>,
+        connectors = (Array.isArray(piece.connectors)
+          ? piece.connectors
+          : []
+        ).map((rawConnector) => {
+          const connector = rawConnector as Partial<SavedConnector>;
+          return {
+            local: finiteTuple3(connector.local),
+            axis: unitTuple3(connector.axis),
+            kind:
+              connector.kind === "axle" || connector.kind === "half"
+                ? connector.kind
+                : "round",
+            role: connector.role === "shaft" ? "shaft" : "socket",
+            diameter: positiveNumber(connector.diameter, 0.48, 0.01),
+            length:
+              connector.length === undefined
+                ? undefined
+                : positiveNumber(connector.length, 0.5, 0.01),
+          } satisfies SavedConnector;
+        }),
+        sanitizeCollider = (
+          rawCollider: SavedCollisionPrimitive,
+        ): SavedCollisionPrimitive => {
+          const collider = rawCollider as Partial<SavedCollisionPrimitive>,
+            shape = collider.shape === "cylinder" ? "cylinder" : "box";
+          return {
+            shape,
+            center: finiteTuple3(collider.center),
+            size:
+              shape === "box"
+                ? finiteTuple3(collider.size, [0.5, 0.5, 0.5]).map((size) =>
+                    Math.max(0.01, Math.abs(size)),
+                  ) as [number, number, number]
+                : undefined,
+            radius:
+              shape === "cylinder"
+                ? positiveNumber(collider.radius, 0.25, 0.01)
+                : undefined,
+            halfHeight:
+              shape === "cylinder"
+                ? positiveNumber(collider.halfHeight, 0.25, 0.01)
+                : undefined,
+            rotation: unitQuaternion(collider.rotation),
+          };
+        },
+        scale = finiteTuple3(piece.scale, [1, 1, 1]).map((component) =>
+          Math.abs(component) < 1e-6 ? 1 : component,
+        ) as [number, number, number];
+      return {
+        id:
+          typeof piece.id === "string" && piece.id
+            ? piece.id
+            : `piece-${pieceIndex + 1}`,
+        catalog:
+          piece.catalog && typeof piece.catalog === "object"
+            ? piece.catalog
+            : {},
+        asset: typeof piece.asset === "string" ? piece.asset : "",
+        position: finiteTuple3(piece.position),
+        rotation: unitQuaternion(piece.rotation),
+        scale,
+        fixed: piece.fixed === true,
+        exactCollider: piece.exactCollider === true,
+        dynamicAxleConnections: piece.dynamicAxleConnections === true,
+        rotationPivotLocal: optionalTuple3(piece.rotationPivotLocal),
+        rotationPivotKey:
+          typeof piece.rotationPivotKey === "string"
+            ? piece.rotationPivotKey
+            : undefined,
+        connectors,
+        colliders: (Array.isArray(piece.colliders)
+          ? piece.colliders
+          : []
+        ).map(sanitizeCollider),
+        gearColliders: (Array.isArray(piece.gearColliders)
+          ? piece.gearColliders
+          : []
+        ).map(sanitizeCollider),
+      };
+    }),
+    piecesById = new Map(pieces.map((piece) => [piece.id, piece])),
+    connectionModes: SavedConnection["mode"][] = [
+      "fixed",
+      "rotation",
+      "linear",
+      "rotation-linear",
+      "motor",
+    ],
+    connectionProfiles: SavedConnection["profile"][] = [
+      "pin-round",
+      "axle-cross",
+      "axle-round",
+    ],
+    connections = (Array.isArray(document.connections)
+      ? document.connections
+      : []
+    ).flatMap((rawConnection, connectionIndex) => {
+      const connection = rawConnection as Partial<SavedConnection>,
+        a = typeof connection.a === "string" ? piecesById.get(connection.a) : undefined,
+        b = typeof connection.b === "string" ? piecesById.get(connection.b) : undefined,
+        socketIndex = Math.trunc(finiteNumber(connection.socketIndex, -1)),
+        shaftIndex = Math.trunc(finiteNumber(connection.shaftIndex, -1));
+      if (
+        !a ||
+        !b ||
+        a === b ||
+        socketIndex < 0 ||
+        shaftIndex < 0 ||
+        socketIndex >= a.connectors.length ||
+        shaftIndex >= b.connectors.length ||
+        a.connectors[socketIndex].role !== "socket" ||
+        b.connectors[shaftIndex].role !== "shaft"
+      )
+        return [];
+      const saved: SavedConnection = {
+        id:
+          typeof connection.id === "string" && connection.id
+            ? connection.id
+            : `connection-${connectionIndex + 1}`,
+        a: a.id,
+        b: b.id,
+        socketIndex,
+        shaftIndex,
+        mode: connectionModes.includes(connection.mode as SavedConnection["mode"])
+          ? (connection.mode as SavedConnection["mode"])
+          : "fixed",
+        profile: connectionProfiles.includes(
+          connection.profile as SavedConnection["profile"],
+        )
+          ? (connection.profile as SavedConnection["profile"])
+          : "pin-round",
+        point: finiteTuple3(connection.point),
+        axis: unitTuple3(connection.axis),
+        localAxisA: unitTuple3(connection.localAxisA),
+        travel: positiveNumber(connection.travel, 0.5, 0.01),
+        motorSpeed: finiteNumber(connection.motorSpeed, 0),
+        motorForce: Math.max(0, finiteNumber(connection.motorForce, 30)),
+        userConfigured: connection.userConfigured === true,
+        forced: connection.forced === true,
+        forcedOffset:
+          connection.forcedOffset === undefined
+            ? undefined
+            : Math.max(0, finiteNumber(connection.forcedOffset, 0)),
+        localPointA: optionalTuple3(connection.localPointA),
+        localPointB: optionalTuple3(connection.localPointB),
+      };
+      return [saved];
+    }),
+    gearLinks = (Array.isArray(document.gearLinks)
+      ? document.gearLinks
+      : []
+    ).flatMap((rawLink) => {
+      const link = rawLink as Partial<SavedGearLink>,
+        a = typeof link.a === "string" ? piecesById.get(link.a) : undefined,
+        b = typeof link.b === "string" ? piecesById.get(link.b) : undefined;
+      if (!a || !b || a === b) return [];
+      const sanitizeSpec = (
+        spec: SavedGearLink["specA"] | undefined,
+      ) => ({
+        teeth: Math.max(1, Math.trunc(finiteNumber(spec?.teeth, 1))),
+        kind: typeof spec?.kind === "string" ? spec.kind : "spur",
+        pitchRadius: positiveNumber(spec?.pitchRadius, 0.5, 0.01),
+      });
+      return [
+        {
+          a: a.id,
+          b: b.id,
+          specA: sanitizeSpec(link.specA),
+          specB: sanitizeSpec(link.specB),
+          centerA: finiteTuple3(link.centerA),
+          centerB: finiteTuple3(link.centerB),
+          poseAxisA: unitTuple3(link.poseAxisA),
+          poseAxisB: unitTuple3(link.poseAxisB),
+          axisA: unitTuple3(link.axisA),
+          axisB: unitTuple3(link.axisB),
+          ratio: finiteNumber(link.ratio, -1),
+          centerDistance: Math.max(0, finiteNumber(link.centerDistance, 0)),
+          expectedDistance: Math.max(
+            0,
+            finiteNumber(link.expectedDistance, 0),
+          ),
+          distanceError: Math.max(0, finiteNumber(link.distanceError, 0)),
+          signB: finiteNumber(link.signB, 1) < 0 ? -1 : 1,
+          perpendicular: link.perpendicular === true,
+        } satisfies SavedGearLink,
+      ];
+    }),
+    physics = Object.fromEntries(
+      Object.entries(
+        document.settings?.physics && typeof document.settings.physics === "object"
+          ? document.settings.physics
+          : {},
+      ).flatMap(([key, value]) =>
+        typeof value === "number" && Number.isFinite(value) && value >= 0
+          ? [[key, value]]
+          : [],
+      ),
+    );
+  return {
+    format: PROJECT_FORMAT,
+    version: PROJECT_VERSION,
+    id:
+      typeof document.id === "string" && document.id
+        ? document.id
+        : `project-${Date.now()}`,
+    name:
+      typeof document.name === "string" && document.name.trim()
+        ? document.name.slice(0, 100)
+        : "Untitled mechanism",
+    createdAt: validDate(document.createdAt, now),
+    updatedAt: validDate(document.updatedAt, now),
+    appVersion:
+      typeof document.appVersion === "string" ? document.appVersion : "0.4",
+    revision:
+      document.revision === undefined
+        ? undefined
+        : Math.max(0, Math.trunc(finiteNumber(document.revision, 0))),
+    savedRevision:
+      document.savedRevision === undefined
+        ? undefined
+        : document.savedRevision === null
+        ? null
+        : Math.max(0, Math.trunc(finiteNumber(document.savedRevision, 0))),
+    assets:
+      document.assets && typeof document.assets === "object"
+        ? document.assets
+        : {},
+    pieces,
+    connections,
+    gearLinks,
+    importedCatalog: Array.isArray(document.importedCatalog)
+      ? document.importedCatalog.filter(
+          (catalog): catalog is JsonObject =>
+            !!catalog && typeof catalog === "object" && !Array.isArray(catalog),
+        )
+      : [],
+    camera: {
+      position: finiteTuple3(document.camera?.position, [6, 5, 8]),
+      quaternion: unitQuaternion(document.camera?.quaternion),
+      target: finiteTuple3(document.camera?.target),
+    },
+    settings: {
+      gridStep: [0, 0.25, 0.5, 1].includes(
+        finiteNumber(document.settings?.gridStep, 0.25),
+      )
+        ? finiteNumber(document.settings?.gridStep, 0.25)
+        : 0.25,
+      axleSnapStep: [0, 0.0625, 0.125, 0.25].includes(
+        finiteNumber(document.settings?.axleSnapStep, 0.25),
+      )
+        ? finiteNumber(document.settings?.axleSnapStep, 0.25)
+        : 0.25,
+      rotationSnapStep: [0, 11.25, 22.5, 45].includes(
+        finiteNumber(document.settings?.rotationSnapStep, 45),
+      )
+        ? finiteNumber(document.settings?.rotationSnapStep, 45)
+        : 45,
+      structuralMode:
+        document.settings?.structuralMode === "flexible" ? "flexible" : "rigid",
+      structuralStiffness: Math.min(
+        100,
+        Math.max(1, finiteNumber(document.settings?.structuralStiffness, 85)),
+      ),
+      physics,
+    },
+  };
+};
+
 export function validateProjectDocument(value: unknown): SimStudioProjectDocument {
   if (!value || typeof value !== "object")
     throw new Error("The file does not contain a Sim Studio project.");
@@ -153,7 +482,7 @@ export function validateProjectDocument(value: unknown): SimStudioProjectDocumen
     !document.settings
   )
     throw new Error("The Sim Studio project is incomplete or damaged.");
-  return document as SimStudioProjectDocument;
+  return sanitizeProjectDocument(document);
 }
 
 export function encodeProjectFile(document: SimStudioProjectDocument) {
@@ -240,15 +569,18 @@ export async function listBrowserProjects() {
 }
 
 export async function saveBrowserProject(document: SimStudioProjectDocument) {
-  validateProjectDocument(document);
+  const validated = validateProjectDocument(document);
   const database = await openDatabase();
   try {
     const transaction = database.transaction(
       [META_STORE, DOCUMENT_STORE],
       "readwrite",
     );
-    transaction.objectStore(META_STORE).put(projectSummary(document));
-    transaction.objectStore(DOCUMENT_STORE).put({ id: document.id, document });
+    transaction.objectStore(META_STORE).put(projectSummary(validated));
+    transaction.objectStore(DOCUMENT_STORE).put({
+      id: validated.id,
+      document: validated,
+    });
     await transactionDone(transaction);
   } finally {
     database.close();
@@ -287,14 +619,14 @@ export async function deleteBrowserProject(id: string) {
 }
 
 export async function saveRecoveryProject(document: SimStudioProjectDocument) {
-  validateProjectDocument(document);
+  const validated = validateProjectDocument(document);
   const database = await openDatabase();
   try {
     const transaction = database.transaction(RECOVERY_STORE, "readwrite");
     transaction.objectStore(RECOVERY_STORE).put({
       key: "latest",
-      updatedAt: document.updatedAt,
-      document,
+      updatedAt: validated.updatedAt,
+      document: validated,
     });
     await transactionDone(transaction);
   } finally {
