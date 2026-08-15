@@ -30,6 +30,16 @@ test("recognises palette gears and pitch radius", () => {
     kind: "bevel",
     pitchRadius: 1.25,
   });
+  assert.deepEqual({ ...gearSpecFor("6573") }, {
+    teeth: 24,
+    kind: "bevel",
+    pitchRadius: 1.5,
+  });
+  assert.deepEqual({ ...gearSpecFor("62821") }, {
+    teeth: 28,
+    kind: "double-bevel",
+    pitchRadius: 1.75,
+  });
 });
 
 test("links compatible bevel gears on perpendicular intersecting axles", () => {

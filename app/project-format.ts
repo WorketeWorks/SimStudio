@@ -40,6 +40,8 @@ export type SavedPiece = {
   rotation: [number, number, number, number];
   scale: [number, number, number];
   fixed: boolean;
+  /** Use the rendered triangle surface instead of the compound proxy map. */
+  exactCollider?: boolean;
   dynamicAxleConnections: boolean;
   rotationPivotLocal?: [number, number, number];
   rotationPivotKey?: string;

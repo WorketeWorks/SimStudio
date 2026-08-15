@@ -103,6 +103,8 @@ type Piece = CatalogPart & {
   colliders: CollisionPrimitive[];
   gearColliders: CollisionPrimitive[];
   gear: boolean;
+  /** Use the rendered triangle surface as the normal physics collider. */
+  exactCollider: boolean;
   fixed: boolean;
   pin: boolean;
   frictionPin: boolean;
@@ -124,6 +126,7 @@ type EditorPieceSnapshot = {
   scale: THREE.Vector3;
   color: number;
   fixed: boolean;
+  exactCollider: boolean;
   dynamicAxleConnections: boolean;
   rotationPivotLocal?: THREE.Vector3;
   rotationPivotKey?: string;
@@ -200,6 +203,14 @@ type RuntimeGearLink = GearPair<Piece> & {
   axisB: THREE.Vector3;
   signB: number;
   perpendicular: boolean;
+};
+type RuntimeDifferentialLink = {
+  carrier: Piece;
+  left: Piece;
+  right: Piece;
+  axisCarrier: THREE.Vector3;
+  axisLeft: THREE.Vector3;
+  axisRight: THREE.Vector3;
 };
 type ManualConnectDraft = {
   piece: Piece;
@@ -300,9 +311,11 @@ type AppState = {
   contactFilterStats?: { tested: number; rejected: number };
   connections: Connection[];
   gearLinks: RuntimeGearLink[];
+  differentialLinks: RuntimeDifferentialLink[];
   gearAngles: Map<string, number>;
   gearBodyRotations: Map<number, THREE.Quaternion>;
   gearPhases: Map<string, number>;
+  sleepingBodyHandles: Set<number>;
   physicsJoints: Map<string, RAPIER.ImpulseJoint>;
   dynamicNoContactPairs: Set<string>;
   contactExclusions: Set<string>;
@@ -1035,6 +1048,65 @@ const belongsToDefaultPalette = (part: CatalogPart) =>
     .some((value) => paletteReferenceSet.has(value!.toLowerCase()));
 const isGearPart = (p: CatalogPart) =>
   p.gear === true || p.family === "gears" || /\bgear\b/i.test(p.name);
+const differentialRefs = new Set(["6573", "62821"]);
+const isDifferentialPart = (p: CatalogPart) =>
+  [p.part, p.modelPart, p.resolvedPart]
+    .filter(Boolean)
+    .some((reference) => differentialRefs.has(reference!.toLowerCase()));
+const exactTriangleMeshForPiece = (
+  piece: Piece,
+  physicsOffset: THREE.Vector3,
+  physicsBase: THREE.Quaternion,
+) => {
+  piece.mesh.updateMatrixWorld(true);
+  const rootInverse = piece.mesh.matrixWorld.clone().invert(),
+    bodyFromPiece = new THREE.Matrix4().compose(
+      physicsOffset,
+      physicsBase,
+      piece.mesh.scale,
+    ),
+    vertices: number[] = [],
+    indices: number[] = [];
+  piece.mesh.traverse((object) => {
+    if (!(object instanceof THREE.Mesh) || object instanceof THREE.InstancedMesh)
+      return;
+    const position = object.geometry.getAttribute("position");
+    if (!position || position.itemSize < 3 || position.count < 3) return;
+    const transform = bodyFromPiece
+        .clone()
+        .multiply(rootInverse.clone().multiply(object.matrixWorld)),
+      vertexOffset = vertices.length / 3,
+      point = new THREE.Vector3();
+    for (let index = 0; index < position.count; index++) {
+      point
+        .fromBufferAttribute(position as THREE.BufferAttribute, index)
+        .applyMatrix4(transform);
+      if (!Number.isFinite(point.x + point.y + point.z)) return;
+      vertices.push(point.x, point.y, point.z);
+    }
+    const sourceIndices = object.geometry.index;
+    if (sourceIndices)
+      for (let index = 0; index + 2 < sourceIndices.count; index += 3)
+        indices.push(
+          vertexOffset + sourceIndices.getX(index),
+          vertexOffset + sourceIndices.getX(index + 1),
+          vertexOffset + sourceIndices.getX(index + 2),
+        );
+    else
+      for (let index = 0; index + 2 < position.count; index += 3)
+        indices.push(
+          vertexOffset + index,
+          vertexOffset + index + 1,
+          vertexOffset + index + 2,
+        );
+  });
+  return indices.length >= 3
+    ? {
+        vertices: new Float32Array(vertices),
+        indices: new Uint32Array(indices),
+      }
+    : undefined;
+};
 const gearPoseForPiece = (piece: Piece): GearPose<Piece> | undefined => {
   const spec = gearSpecFor(piece.modelPart ?? piece.part, piece.name);
   if (!piece.gear || !spec) return undefined;
@@ -1125,6 +1197,7 @@ const gearVolumesOverlap = (a: WorldGearVolume, b: WorldGearVolume) => {
 const detectGearLinks = (
   pieces: Piece[],
   rigidIslandByPiece?: Map<Piece, Piece[]>,
+  excludedPairs = new Set<string>(),
 ): RuntimeGearLink[] => {
   const poses = pieces.flatMap((piece) => {
       const pose = gearPoseForPiece(piece);
@@ -1137,7 +1210,9 @@ const detectGearLinks = (
   for (let left = 0; left < poses.length; left++)
     for (let right = left + 1; right < poses.length; right++) {
       const a = poses[left],
-        b = poses[right],
+        b = poses[right];
+      if (excludedPairs.has(contactPairKey(a.value, b.value))) continue;
+      const
         overlaps = (volumes.get(a.value) ?? []).some((volumeA) =>
           (volumes.get(b.value) ?? []).some((volumeB) =>
             gearVolumesOverlap(volumeA, volumeB),
@@ -1199,6 +1274,104 @@ const detectGearLinks = (
       },
     ];
   });
+};
+const differentialPairKeys = (links: RuntimeDifferentialLink[]) =>
+  new Set(
+    links.flatMap((link) => [
+      contactPairKey(link.carrier, link.left),
+      contactPairKey(link.carrier, link.right),
+      contactPairKey(link.left, link.right),
+    ]),
+  );
+const detectDifferentialLinks = (
+  pieces: Piece[],
+  rigidIslandByPiece?: Map<Piece, Piece[]>,
+): RuntimeDifferentialLink[] => {
+  const poses = pieces.flatMap((piece) => {
+      const pose = gearPoseForPiece(piece);
+      return pose ? [pose] : [];
+    }),
+    usedOutputs = new Set<Piece>(),
+    links: RuntimeDifferentialLink[] = [];
+  for (const carrierPose of poses.filter((pose) =>
+    isDifferentialPart(pose.value),
+  )) {
+    const carrier = carrierPose.value,
+      center = new THREE.Vector3(...carrierPose.center),
+      carrierAxis = new THREE.Vector3(...carrierPose.axis).normalize(),
+      candidates = poses
+        .filter((pose) => {
+          if (
+            pose.value === carrier ||
+            isDifferentialPart(pose.value) ||
+            usedOutputs.has(pose.value) ||
+            pose.spec.kind === "spur" ||
+            pose.spec.teeth > 20 ||
+            (rigidIslandByPiece &&
+              rigidIslandByPiece.get(pose.value) ===
+                rigidIslandByPiece.get(carrier))
+          )
+            return false;
+          const axis = new THREE.Vector3(...pose.axis).normalize(),
+            delta = new THREE.Vector3(...pose.center).sub(center),
+            axial = delta.dot(carrierAxis),
+            radial = delta
+              .clone()
+              .addScaledVector(carrierAxis, -axial)
+              .length();
+          return (
+            Math.abs(axis.dot(carrierAxis)) >= 0.96 &&
+            radial <= 0.48 &&
+            Math.abs(axial) <= 1.35
+          );
+        })
+        .map((pose) => {
+          const delta = new THREE.Vector3(...pose.center).sub(center),
+            axial = delta.dot(carrierAxis),
+            radial = delta
+              .clone()
+              .addScaledVector(carrierAxis, -axial)
+              .length();
+          return { pose, axial, radial };
+        });
+    let best:
+      | { left: (typeof candidates)[number]; right: (typeof candidates)[number]; score: number }
+      | undefined;
+    for (let leftIndex = 0; leftIndex < candidates.length; leftIndex++)
+      for (
+        let rightIndex = leftIndex + 1;
+        rightIndex < candidates.length;
+        rightIndex++
+      ) {
+        const left = candidates[leftIndex],
+          right = candidates[rightIndex],
+          separation = Math.abs(left.axial - right.axial);
+        if (separation < 0.22 || left.axial * right.axial > 0.08) continue;
+        const score =
+          left.radial +
+          right.radial +
+          Math.abs(left.axial + right.axial) -
+          separation * 0.15;
+        if (!best || score < best.score) best = { left, right, score };
+      }
+    if (!best) continue;
+    const orientAxis = (pose: GearPose<Piece>) => {
+      const axis = new THREE.Vector3(...pose.axis).normalize();
+      if (axis.dot(carrierAxis) < 0) axis.negate();
+      return axis;
+    };
+    links.push({
+      carrier,
+      left: best.left.pose.value,
+      right: best.right.pose.value,
+      axisCarrier: carrierAxis,
+      axisLeft: orientAxis(best.left.pose),
+      axisRight: orientAxis(best.right.pose),
+    });
+    usedOutputs.add(best.left.pose.value);
+    usedOutputs.add(best.right.pose.value);
+  }
+  return links;
 };
 const gearLinkKey = (link: RuntimeGearLink) =>
   [link.a.value.id, link.b.value.id].sort().join(":");
@@ -3184,7 +3357,9 @@ export default function Home() {
         batch.pieces.forEach((piece, index) => {
           if (
             state.running &&
-            (!piece.body || piece.physicsIslandFixed || piece.body.isSleeping())
+            (!piece.body ||
+              piece.physicsIslandFixed ||
+              state.sleepingBodyHandles.has(piece.body.handle))
           )
             return;
           matrix.multiplyMatrices(
@@ -3412,6 +3587,7 @@ export default function Home() {
             colliders,
             gearColliders,
             gear: isGearPart(p),
+            exactCollider: isDifferentialPart(p),
             fixed: false,
             pin: isPinPart(p),
             frictionPin: hasPinFriction(p),
@@ -3453,9 +3629,11 @@ export default function Home() {
       pieces: [],
       connections: [],
       gearLinks: [],
+      differentialLinks: [],
       gearAngles: new Map(),
       gearBodyRotations: new Map(),
       gearPhases: new Map(),
+      sleepingBodyHandles: new Set(),
       physicsJoints: new Map(),
       dynamicNoContactPairs: new Set(),
       contactExclusions: new Set(),
@@ -4085,11 +4263,45 @@ export default function Home() {
     };
     const updateDynamicMechanisms = () => {
       const dynamicScanStarted = performance.now();
-      const previousGearLinks = state.gearLinks.length,
+      state.differentialLinks = detectDifferentialLinks(
+        state.pieces,
+        state.rigidIslandByPiece,
+      );
+      // Dynamic detection observes the meshes in their current world pose.
+      // Store the axes in the body's reference frame, matching gear links,
+      // otherwise the body's rotation would be applied twice on the next step.
+      state.differentialLinks.forEach((link) => {
+        for (const [piece, axis] of [
+          [link.carrier, link.axisCarrier],
+          [link.left, link.axisLeft],
+          [link.right, link.axisRight],
+        ] as [Piece, THREE.Vector3][]) {
+          const rotation = piece.body?.rotation();
+          if (!rotation) continue;
+          axis
+            .applyQuaternion(
+              new THREE.Quaternion(
+                rotation.x,
+                rotation.y,
+                rotation.z,
+                rotation.w,
+              ).invert(),
+            )
+            .normalize();
+        }
+      });
+      const differentialExclusions = differentialPairKeys(
+          state.differentialLinks,
+        ),
+        previousGearLinks = state.gearLinks.length,
         previousLinksByKey = new Map(
           state.gearLinks.map((link) => [gearLinkKey(link), link]),
         ),
-        detectedGearLinks = detectGearLinks(state.pieces);
+        detectedGearLinks = detectGearLinks(
+          state.pieces,
+          state.rigidIslandByPiece,
+          differentialExclusions,
+        );
       // Dynamic overlap scans must not redefine the reference axes or the
       // transmission direction of a pair that is already engaged. On bevel
       // gears a numerically ambiguous tangent can otherwise flip sign between
@@ -4327,6 +4539,9 @@ export default function Home() {
         );
         state.contactExclusions.clear();
         refreshed.forEach((key) => state.contactExclusions.add(key));
+        differentialExclusions.forEach((key) =>
+          state.contactExclusions.add(key),
+        );
       }
       if (changed) {
         setConnectionRevision((value) => value + 1);
@@ -5108,7 +5323,8 @@ export default function Home() {
           { piece: Piece; localAxis: THREE.Vector3 }
         >(),
         bodyRotations = new Map<number, THREE.Quaternion>(),
-        bodyRotationVectors = new Map<number, THREE.Vector3>();
+        bodyRotationVectors = new Map<number, THREE.Vector3>(),
+        stepGearDeltas = new Map<number, number>();
       for (const link of state.gearLinks)
         for (const [pose, localAxis] of [
           [link.a, link.axisA],
@@ -5149,11 +5365,12 @@ export default function Home() {
         const body = piece.body,
           rotation = bodyRotations.get(body!.handle);
         if (!body || !rotation) continue;
-        const worldAxis = localAxis.clone().applyQuaternion(rotation).normalize(),
-          deltaAngle =
-            bodyRotationVectors.get(body.handle)?.dot(worldAxis) ?? 0,
-          angleKey = `piece:${piece.id}`;
-        state.gearAngles.set(
+          const worldAxis = localAxis.clone().applyQuaternion(rotation).normalize(),
+            deltaAngle =
+              bodyRotationVectors.get(body.handle)?.dot(worldAxis) ?? 0,
+            angleKey = `piece:${piece.id}`;
+          stepGearDeltas.set(piece.id, deltaAngle);
+          state.gearAngles.set(
           angleKey,
           (state.gearAngles.get(angleKey) ?? 0) + deltaAngle,
         );
@@ -5245,43 +5462,19 @@ export default function Home() {
           const fixedA = !!pieceA.physicsIslandFixed,
             fixedB = !!pieceB.physicsIslandFixed;
           if (fixedA && fixedB) return;
-          const rotationA = bodyA.rotation(),
-            rotationB = bodyB.rotation(),
-            axisA = link.axisA.clone().applyQuaternion(
-              new THREE.Quaternion(
-                rotationA.x,
-                rotationA.y,
-                rotationA.z,
-                rotationA.w,
-              ),
+          const phaseMotionA = Math.abs(
+              teethA * (stepGearDeltas.get(pieceA.id) ?? 0),
             ),
-            axisB = link.axisB.clone().applyQuaternion(
-              new THREE.Quaternion(
-                rotationB.x,
-                rotationB.y,
-                rotationB.z,
-                rotationB.w,
-              ),
-            ),
-            angularA = bodyA.angvel(),
-            angularB = bodyB.angvel(),
-            speedA = Math.abs(
-              angularA.x * axisA.x +
-                angularA.y * axisA.y +
-                angularA.z * axisA.z,
-            ),
-            speedB = Math.abs(
-              angularB.x * axisB.x +
-                angularB.y * axisB.y +
-                angularB.z * axisB.z,
+            phaseMotionB = Math.abs(
+              signedTeethB * (stepGearDeltas.get(pieceB.id) ?? 0),
             );
           let correctionA = 0,
             correctionB = 0;
           if (fixedA) correctionB = -error / signedTeethB;
           else if (fixedB) correctionA = -error / teethA;
-          else if (speedA > speedB * 1.15 + 0.01)
+          else if (phaseMotionA > phaseMotionB * 1.1 + 1e-7)
             correctionA = -error / teethA;
-          else if (speedB > speedA * 1.15 + 0.01)
+          else if (phaseMotionB > phaseMotionA * 1.1 + 1e-7)
             correctionB = -error / signedTeethB;
           else {
             const denominator =
@@ -5470,13 +5663,86 @@ export default function Home() {
             },
             true,
           );
-      };
+      },
+        solveDifferential = (link: RuntimeDifferentialLink) => {
+          const entries = [
+            {
+              piece: link.carrier,
+              axis: link.axisCarrier,
+              gradient: -2,
+            },
+            { piece: link.left, axis: link.axisLeft, gradient: 1 },
+            { piece: link.right, axis: link.axisRight, gradient: 1 },
+          ];
+          const bodies = entries.map(({ piece }) => piece.body);
+          if (
+            bodies.some((body) => !body) ||
+            new Set(bodies.map((body) => body!.handle)).size !== 3
+          )
+            return;
+          const samples = entries.map(({ piece, axis, gradient }) => {
+              const body = piece.body!,
+                rotation = body.rotation(),
+                worldAxis = axis
+                  .clone()
+                  .applyQuaternion(
+                    new THREE.Quaternion(
+                      rotation.x,
+                      rotation.y,
+                      rotation.z,
+                      rotation.w,
+                    ),
+                  )
+                  .normalize(),
+                angular = body.angvel(),
+                speed =
+                  angular.x * worldAxis.x +
+                  angular.y * worldAxis.y +
+                  angular.z * worldAxis.z;
+              return {
+                piece,
+                body,
+                worldAxis,
+                angular,
+                speed,
+                gradient,
+              };
+            }),
+            // Ideal open differential: outputLeft + outputRight = 2*carrier.
+            error = samples.reduce(
+              (sum, sample) => sum + sample.gradient * sample.speed,
+              0,
+            ),
+            denominator = samples.reduce(
+              (sum, sample) =>
+                sum +
+                (sample.piece.physicsIslandFixed
+                  ? 0
+                  : sample.gradient * sample.gradient),
+              0,
+            );
+          if (Math.abs(error) < 1e-6 || denominator < 1e-9) return;
+          samples.forEach((sample) => {
+            if (sample.piece.physicsIslandFixed) return;
+            const correction =
+              (-error * sample.gradient) / denominator;
+            sample.body.setAngvel(
+              {
+                x: sample.angular.x + sample.worldAxis.x * correction,
+                y: sample.angular.y + sample.worldAxis.y * correction,
+                z: sample.angular.z + sample.worldAxis.z * correction,
+              },
+              true,
+            );
+          });
+        };
       // More sweeps than the former position solver are cheap for the usual
       // small gear trains and make long chains direction-independent.
       for (let iteration = 0; iteration < 16; iteration++) {
         state.gearLinks.forEach(solve);
         for (let index = state.gearLinks.length - 1; index >= 0; index--)
           solve(state.gearLinks[index]);
+        state.differentialLinks.forEach(solveDifferential);
       }
     };
     const makeLock = () => {
@@ -5563,6 +5829,7 @@ export default function Home() {
         scale: piece.mesh.scale.clone(),
         color: piece.color,
         fixed: piece.fixed,
+        exactCollider: piece.exactCollider,
         dynamicAxleConnections: piece.dynamicAxleConnections,
         rotationPivotLocal: piece.rotationPivotLocal?.clone(),
         rotationPivotKey: piece.rotationPivotKey,
@@ -5590,6 +5857,7 @@ export default function Home() {
             colliders: CollisionPrimitive[];
             gearColliders: CollisionPrimitive[];
             fixed: boolean;
+            exactCollider: boolean;
             dynamicAxleConnections: boolean;
             rotationPivotLocal?: THREE.Vector3;
             rotationPivotKey?: string;
@@ -5625,6 +5893,7 @@ export default function Home() {
           piece.mesh.visible = true;
           piece.mesh.updateMatrixWorld(true);
           piece.fixed = item.fixed;
+          piece.exactCollider = item.exactCollider;
           piece.dynamicAxleConnections = item.dynamicAxleConnections;
           piece.rotationPivotLocal = item.rotationPivotLocal?.clone();
           piece.rotationPivotKey = item.rotationPivotKey;
@@ -5640,7 +5909,12 @@ export default function Home() {
         state.connectionModes = new Map(
           [...snapshot.connectionModes].map(([id, mode]) => [id, { ...mode }]),
         );
-        state.gearLinks = detectGearLinks(state.pieces);
+        state.differentialLinks = detectDifferentialLinks(state.pieces);
+        state.gearLinks = detectGearLinks(
+          state.pieces,
+          undefined,
+          differentialPairKeys(state.differentialLinks),
+        );
         state.selected =
           snapshot.selected && restoredPieces.has(snapshot.selected)
             ? snapshot.selected
@@ -5776,6 +6050,7 @@ export default function Home() {
             asset, position: tuple3(piece.mesh.position),
             rotation: tuple4(piece.mesh.quaternion), scale: tuple3(piece.mesh.scale),
             fixed: piece.fixed,
+            exactCollider: piece.exactCollider,
             dynamicAxleConnections: piece.dynamicAxleConnections,
             rotationPivotLocal: piece.rotationPivotLocal
               ? tuple3(piece.rotationPivotLocal) : undefined,
@@ -5860,7 +6135,7 @@ export default function Home() {
       state.disposeRenderBatches();
       state.pieces.forEach((piece) => { scene.remove(piece.mesh); disposeLock(piece); });
       state.pieces = []; state.connections = []; state.connectionModes.clear();
-      state.gearLinks = []; state.selected = undefined;
+      state.gearLinks = []; state.differentialLinks = []; state.selected = undefined;
       const piecesById = new Map<string, Piece>();
       try {
         for (const saved of document.pieces) {
@@ -5878,6 +6153,8 @@ export default function Home() {
           piece.colliders = saved.colliders.map(loadCollider);
           piece.gearColliders = saved.gearColliders.map(loadCollider);
           piece.fixed = saved.fixed;
+          piece.exactCollider =
+            saved.exactCollider ?? isDifferentialPart(piece);
           piece.dynamicAxleConnections = saved.dynamicAxleConnections;
           piece.rotationPivotLocal = saved.rotationPivotLocal
             ? new THREE.Vector3().fromArray(saved.rotationPivotLocal) : undefined;
@@ -5963,6 +6240,7 @@ export default function Home() {
         colliders: piece.colliders.map(cloneCollider),
         gearColliders: piece.gearColliders.map(cloneCollider),
         fixed: piece.fixed,
+        exactCollider: piece.exactCollider,
         dynamicAxleConnections: piece.dynamicAxleConnections,
         rotationPivotLocal: piece.rotationPivotLocal?.clone(),
         rotationPivotKey: piece.rotationPivotKey,
@@ -5995,6 +6273,7 @@ export default function Home() {
       piece.colliders = clipboard.colliders.map(cloneCollider);
       piece.gearColliders = clipboard.gearColliders.map(cloneCollider);
       piece.fixed = clipboard.fixed;
+      piece.exactCollider = clipboard.exactCollider;
       piece.dynamicAxleConnections = clipboard.dynamicAxleConnections;
       piece.rotationPivotLocal = clipboard.rotationPivotLocal?.clone();
       piece.rotationPivotKey = clipboard.rotationPivotKey;
@@ -7067,14 +7346,22 @@ export default function Home() {
         sleepingBodies = 0;
       if (state.running && state.world) {
         let phaseStarted = performance.now();
-        const steppedBodies = new Set<RAPIER.RigidBody>();
+        // Do not call RigidBody.isSleeping() here. Rapier's WASM bindings can
+        // still have the rigid-body set borrowed after a world rebuild (most
+        // visibly after placing a freshly downloaded catalog part). Querying
+        // isSleeping in that state triggers wasm-bindgen's "recursive use of
+        // an object" guard and the render loop then reports the same error on
+        // every frame. Handles are plain numbers, so they are also a safer way
+        // to deduplicate all pieces that share one rigid-island body.
+        const steppedBodyHandles = new Set<number>();
+        state.sleepingBodyHandles.clear();
         state.pieces.forEach((p) => {
-          if (!p.body || steppedBodies.has(p.body)) return;
-          steppedBodies.add(p.body);
-          const sleeping = p.body.isSleeping();
-          if (sleeping) sleepingBodies++;
-          else activeBodies++;
-          if (!p.physicsIslandFixed && !sleeping) {
+          if (!p.body || steppedBodyHandles.has(p.body.handle)) return;
+          steppedBodyHandles.add(p.body.handle);
+          if (p.physicsIslandFixed) {
+            sleepingBodies++;
+          } else {
+            activeBodies++;
             p.body.resetForces(false);
             p.body.resetTorques(false);
           }
@@ -7253,6 +7540,11 @@ export default function Home() {
           state.world.step(state.physicsEventQueue, state.physicsHooks);
           projectGearVelocities();
         }
+        // Mutating a rigid body's pose between two world.step calls can keep
+        // Rapier's internal body set borrowed and trigger wasm-bindgen's unsafe
+        // aliasing guard. Apply the hard tooth-phase projection only after all
+        // physics substeps have completed.
+        enforceGearLinks();
         worldStepMs = performance.now() - phaseStarted;
         phaseStarted = performance.now();
         const startup = performance.now() - (state.simStartedMs ?? 0) < 350;
@@ -7265,7 +7557,7 @@ export default function Home() {
         state.pieces.forEach((p) => {
           if (
             p.body &&
-            !p.body.isSleeping() &&
+            !state.sleepingBodyHandles.has(p.body.handle) &&
             !clampedBodies.has(p.body)
           ) {
             clampedBodies.add(p.body);
@@ -7279,7 +7571,9 @@ export default function Home() {
         state.pieces.forEach((p) => {
           if (
             p.body &&
-            (!state.largeSimulation || startup || !p.body.isSleeping())
+            (!state.largeSimulation ||
+              startup ||
+              !state.sleepingBodyHandles.has(p.body.handle))
           ) {
             const t = p.body.translation(),
               q = p.body.rotation(),
@@ -7641,6 +7935,7 @@ export default function Home() {
     s.pieces = [];
     s.connections = [];
     s.gearLinks = [];
+    s.differentialLinks = [];
     s.gearAngles.clear();
     s.gearBodyRotations.clear();
     s.gearPhases.clear();
@@ -7740,7 +8035,18 @@ export default function Home() {
       s.gearAngles.clear();
       s.gearBodyRotations.clear();
       s.gearPhases.clear();
-      s.gearLinks = detectGearLinks(s.pieces, rigidIslandByPiece);
+      s.differentialLinks = detectDifferentialLinks(
+        s.pieces,
+        rigidIslandByPiece,
+      );
+      const differentialExclusions = differentialPairKeys(
+        s.differentialLinks,
+      );
+      s.gearLinks = detectGearLinks(
+        s.pieces,
+        rigidIslandByPiece,
+        differentialExclusions,
+      );
       const fixedConnectionCount = s.connections.filter(
           (connection) => connection.mode === "fixed",
         ).length,
@@ -7769,19 +8075,21 @@ export default function Home() {
         `Modo estructural ${structuralMode}; rigidez ${structuralStiffness}%`,
         `Fricción: piezas ${s.physicsSettings.pieceFriction}, goma ${s.physicsSettings.rubberFriction}, pines libres ${s.physicsSettings.frictionlessPinRotation}, ejes lineal ${s.physicsSettings.axleSlidingFriction}, ejes rotación ${s.physicsSettings.axleRotationFriction}; holgura ${s.physicsSettings.axleTolerance} studs`,
         `Solver: ${solverIterations} iteraciones × ${internalPgsIterations} PGS interno + ${additionalSolverIterations} adicionales`,
-        `Engranajes: relación rígida de velocidad en 4 subpasos; sin sobrescritura de ángulo`,
+        `Engranajes: relación rígida de velocidad y bloqueo de fase dental en 4 subpasos`,
         structuralMode === "rigid"
           ? `${fixedConnectionCount} conexiones fijas fusionadas en islas rígidas compuestas`
           : `${fixedConnectionCount} conexiones fijas conservadas como joints entre piezas`,
         `${s.gearLinks.length} pares de engranajes enlazados por solapamiento de malla verde y relación de dientes`,
+        `${s.differentialLinks.length} diferenciales activos (salida izquierda + salida derecha = 2 × carcasa)`,
       );
       const colliderOwners = new Map<number, Piece>(),
         traversedConnectorPairs = detectShaftTraversals(s.pieces),
-        noContactPiecePairs = buildConnectorContactExclusions(
+      noContactPiecePairs = buildConnectorContactExclusions(
           s.connections,
           rigidIslandByPiece,
           traversedConnectorPairs,
         );
+      differentialExclusions.forEach((key) => noContactPiecePairs.add(key));
       s.rigidIslandByPiece = rigidIslandByPiece;
       s.contactExclusions.clear();
       noContactPiecePairs.forEach((key) => s.contactExclusions.add(key));
@@ -7863,6 +8171,46 @@ export default function Home() {
           p.physicsIsland = island;
           p.physicsIslandFixed = islandFixed;
           p.body = rb;
+          const finishPieceCollider = (
+            collider: RAPIER.ColliderDesc,
+            gearLayer: boolean,
+            density: number,
+          ) => {
+            if (gearLayer)
+              collider.setFrictionCombineRule(
+                RAPIER.CoefficientCombineRule.Min,
+              );
+            collider
+              .setFriction(
+                gearLayer
+                  ? CONTACT_FRICTION.gearMesh
+                  : p.kind === "wheel" && !p.gear
+                    ? s.physicsSettings.rubberFriction
+                    : s.physicsSettings.pieceFriction,
+              )
+              .setRestitution(0)
+              .setActiveHooks(RAPIER.ActiveHooks.FILTER_CONTACT_PAIRS)
+              .setCollisionGroups(
+                gearLayer
+                  ? interactionGroups(
+                      COLLISION_GROUP_GEAR_MESH,
+                      COLLISION_GROUP_GEAR_MESH,
+                    )
+                  : p.gear
+                    ? interactionGroups(
+                        COLLISION_GROUP_GEAR_NORMAL,
+                        COLLISION_GROUP_NON_GEAR,
+                      )
+                    : interactionGroups(
+                        COLLISION_GROUP_NON_GEAR,
+                        COLLISION_GROUP_NON_GEAR |
+                          COLLISION_GROUP_GEAR_NORMAL,
+                      ),
+              )
+              .setDensity(density);
+            const createdCollider = world.createCollider(collider, rb);
+            colliderOwners.set(createdCollider.handle, p);
+          };
           const createPieceCollider = (
             primitive: CollisionPrimitive,
             gearLayer: boolean,
@@ -7893,55 +8241,65 @@ export default function Home() {
                   primitive.center.clone().applyQuaternion(physicsBase),
                 ),
               rotation = physicsBase.clone().multiply(primitive.rotation);
-            if (gearLayer)
-              collider.setFrictionCombineRule(
-                RAPIER.CoefficientCombineRule.Min,
-              );
             collider
               .setTranslation(center.x, center.y, center.z)
-              .setRotation(rotation)
-              .setFriction(
-                gearLayer
-                  ? CONTACT_FRICTION.gearMesh
-                  : p.kind === "wheel" && !p.gear
-                    ? s.physicsSettings.rubberFriction
-                    : s.physicsSettings.pieceFriction,
-              )
-              .setRestitution(0)
-              .setActiveHooks(RAPIER.ActiveHooks.FILTER_CONTACT_PAIRS)
-              .setCollisionGroups(
-                gearLayer
-                  ? interactionGroups(
-                      COLLISION_GROUP_GEAR_MESH,
-                      COLLISION_GROUP_GEAR_MESH,
-                    )
-                  : p.gear
-                    ? interactionGroups(
-                        COLLISION_GROUP_GEAR_NORMAL,
-                        COLLISION_GROUP_NON_GEAR,
-                      )
-                    : interactionGroups(
-                        COLLISION_GROUP_NON_GEAR,
-                        COLLISION_GROUP_NON_GEAR |
-                          COLLISION_GROUP_GEAR_NORMAL,
-                      ),
-              )
-              .setDensity(
-                gearLayer
-                  ? 0
-                  : (p.kind === "motor" ? 1.7 : 1) /
-                      Math.max(1, p.colliders.length),
-              );
-            const createdCollider = world.createCollider(collider, rb);
-            colliderOwners.set(createdCollider.handle, p);
+              .setRotation(rotation);
+            finishPieceCollider(
+              collider,
+              gearLayer,
+              gearLayer
+                ? 0
+                : (p.kind === "motor" ? 1.7 : 1) /
+                    Math.max(1, p.colliders.length),
+            );
           };
-          p.colliders.forEach((primitive) =>
-            createPieceCollider(primitive, false),
-          );
+          const exactMesh = p.exactCollider
+            ? exactTriangleMeshForPiece(p, physicsOffset, physicsBase)
+            : undefined;
+          if (exactMesh)
+            finishPieceCollider(
+              RAPIER.ColliderDesc.trimesh(
+                exactMesh.vertices,
+                exactMesh.indices,
+                RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES |
+                  RAPIER.TriMeshFlags.MERGE_DUPLICATE_VERTICES |
+                  RAPIER.TriMeshFlags.DELETE_DEGENERATE_TRIANGLES |
+                  RAPIER.TriMeshFlags.DELETE_DUPLICATE_TRIANGLES,
+              ),
+              false,
+              // The rigid body already receives an explicit LEGO-like mass.
+              // LDraw surfaces are not always watertight, so deriving mass
+              // from their enclosed volume would be unstable.
+              0,
+            );
+          else
+            p.colliders.forEach((primitive) =>
+              createPieceCollider(primitive, false),
+            );
           p.gearColliders.forEach((primitive) =>
             createPieceCollider(primitive, true),
           );
         });
+      });
+      // Establish the reference orientation before the first physics step.
+      // Otherwise the first movement becomes the target phase and is never
+      // corrected, which creates a small slip every time simulation starts.
+      s.gearLinks.forEach((link) => {
+        s.gearPhases.set(gearLinkKey(link), 0);
+        for (const piece of [link.a.value, link.b.value]) {
+          const body = piece.body;
+          if (!body || s.gearBodyRotations.has(body.handle)) continue;
+          const rotation = body.rotation();
+          s.gearBodyRotations.set(
+            body.handle,
+            new THREE.Quaternion(
+              rotation.x,
+              rotation.y,
+              rotation.z,
+              rotation.w,
+            ).normalize(),
+          );
+        }
       });
       let movingJointCount = 0,
         redundantMovingJoints = 0;
@@ -8105,6 +8463,7 @@ export default function Home() {
     } else {
       s.running = false;
       s.gearLinks = [];
+      s.differentialLinks = [];
       s.gearAngles.clear();
       s.gearBodyRotations.clear();
       s.gearPhases.clear();
@@ -10412,6 +10771,40 @@ export default function Home() {
                 ))}
               </select>
             </div>
+            <label className="property-check exact-collider-check">
+              <input
+                type="checkbox"
+                checked={selected.exactCollider}
+                disabled={running}
+                onChange={(event) => {
+                  const state = appRef.current;
+                  if (!state) return;
+                  state.recordHistory();
+                  selected.exactCollider = event.target.checked;
+                  setConnectorRevision((value) => value + 1);
+                  state.scheduleRecoverySave();
+                  setMessage(
+                    event.target.checked
+                      ? language === "es"
+                        ? "Colisión exacta activada para esta pieza (mayor coste físico)"
+                        : "Exact collision enabled for this part (higher physics cost)"
+                      : language === "es"
+                        ? "La pieza vuelve a usar su colisión compuesta simplificada"
+                        : "The part now uses its simplified compound collision",
+                  );
+                }}
+              />
+              <span>
+                {language === "es"
+                  ? "Usar la malla del modelo como colisión"
+                  : "Use the model mesh as collision"}
+                <small>
+                  {language === "es"
+                    ? "Más precisa, pero consume más recursos"
+                    : "More accurate, but more expensive"}
+                </small>
+              </span>
+            </label>
             <label>{t.move}</label>
             <div className="control-grid">
               <button onClick={() => nudge("x", -(gridStep || 0.25))}>X−</button>

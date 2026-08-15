@@ -34,6 +34,10 @@ const exactSpecs: Record<string, Omit<GearSpec, "pitchRadius">> = {
   "32198": { teeth: 20, kind: "bevel" },
   "46372": { teeth: 28, kind: "double-bevel" },
   "32498": { teeth: 36, kind: "double-bevel" },
+  // Differential carriers expose these outer gear rings. Their internal
+  // left/right output relation is handled separately by the physics runtime.
+  "6573": { teeth: 24, kind: "bevel" },
+  "62821": { teeth: 28, kind: "double-bevel" },
 };
 
 export function gearSpecFor(part: string, name = ""): GearSpec | undefined {

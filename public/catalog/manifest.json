@@ -1426,6 +1426,108 @@
         ]
       }
     },
+    "6573": {
+      "name": "Technic Differential with Gear 16 Tooth and 24 Tooth",
+      "family": "gears",
+      "modelPart": "6573",
+      "modelFile": "parts/6573.dat",
+      "connectors": [
+        {
+          "local": [
+            0,
+            -0.8,
+            8.326672684688674e-17
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.4
+        },
+        {
+          "local": [
+            0,
+            -1.6653345369377348e-16,
+            -1.5
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6000000000000001
+        },
+        {
+          "local": [
+            0,
+            1.6653345369377348e-16,
+            1.5
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6000000000000001
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "cylinder",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "radius": 1.9,
+          "halfHeight": 1.5385249710083007,
+          "rotation": [
+            0,
+            0,
+            -0.7071067811865475,
+            0.7071067811865475
+          ]
+        }
+      ],
+      "gear": true,
+      "gearColliders": [
+        {
+          "shape": "cylinder",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "radius": 1.672,
+          "halfHeight": 1.4769839721679685,
+          "rotation": [
+            0,
+            0,
+            -0.7071067811865475,
+            0.7071067811865475
+          ]
+        }
+      ],
+      "bounds": {
+        "min": [
+          -1.619499969482422,
+          -1.6194999694824221,
+          -2
+        ],
+        "max": [
+          1.619499969482422,
+          1.6194999694824221,
+          2
+        ]
+      }
+    },
     "6589": {
       "name": "Technic Gear 12 Tooth Bevel",
       "family": "gears",
@@ -9980,6 +10082,93 @@
         ]
       }
     },
+    "62821": {
+      "name": "Technic Differential with One Gear 28 Tooth Bevel",
+      "family": "gears",
+      "modelPart": "62821",
+      "modelFile": "parts/62821.dat",
+      "connectors": [
+        {
+          "local": [
+            0,
+            -1.3877787807814457e-16,
+            -1.25
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6000000000000001
+        },
+        {
+          "local": [
+            0,
+            1.3877787807814457e-16,
+            1.25
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6000000000000001
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "cylinder",
+          "center": [
+            -0.00013694257633678486,
+            -3.3306690738754696e-16,
+            0
+          ],
+          "radius": 1.7283846812186445,
+          "halfHeight": 1.425,
+          "rotation": [
+            0.7071067811865475,
+            0,
+            0,
+            0.7071067811865475
+          ]
+        }
+      ],
+      "gear": true,
+      "gearColliders": [
+        {
+          "shape": "cylinder",
+          "center": [
+            -0.00013694257633678486,
+            -3.3306690738754696e-16,
+            0
+          ],
+          "radius": 1.5209785194724073,
+          "halfHeight": 1.3679999999999999,
+          "rotation": [
+            0.7071067811865475,
+            0,
+            0,
+            0.7071067811865475
+          ]
+        }
+      ],
+      "bounds": {
+        "min": [
+          -1.8194892385959627,
+          -1.8192153534432893,
+          -1.5000000000000002
+        ],
+        "max": [
+          1.819215353443289,
+          1.8192153534432887,
+          1.5000000000000002
+        ]
+      }
+    },
     "63869": {
       "name": "Technic Cross Block 3 x 2",
       "family": "connectors",
@@ -13252,6 +13441,16 @@
     "3649-72": {
       "geometry": "catalog/geometry/3649-72.json",
       "render": "catalog/renders/3649.png",
+      "color": 72
+    },
+    "6573-72": {
+      "geometry": "catalog/geometry/6573-72.json",
+      "render": "catalog/renders/6573.png",
+      "color": 72
+    },
+    "62821-72": {
+      "geometry": "catalog/geometry/62821-72.json",
+      "render": "catalog/renders/62821.png",
       "color": 72
     }
   }
