@@ -1925,8 +1925,10 @@ export default function Home() {
     projectRevisionRef = useRef(0),
     savedProjectRevisionRef = useRef<number | null>(null),
     projectRestoringRef = useRef(false),
+    physicsTransitionRef = useRef(false),
     saveShortcutRef = useRef<() => void>(() => undefined);
   const [running, setRunning] = useState(false),
+    [physicsBusy, setPhysicsBusy] = useState(false),
     [count, setCount] = useState(0),
     [selectedId, setSelectedId] = useState<number | null>(null);
   const [category, setCategory] = useState("beams"),
@@ -4505,8 +4507,6 @@ export default function Home() {
               -14,
               14,
             );
-          axleBody.resetForces(true);
-          axleBody.resetTorques(true);
           axleBody.setLinvel(
             {
               x: hostVelocity.x + axis.x * relativeAxial,
@@ -7009,8 +7009,6 @@ export default function Home() {
             !releasedBodies.has(p.body)
           ) {
             releasedBodies.add(p.body);
-            p.body.resetForces(true);
-            p.body.resetTorques(true);
             clampMotion(p, 3.5, 4.5);
             p.body.setLinearDamping(0.35);
             p.body.setAngularDamping(0.65);
@@ -7345,7 +7343,12 @@ export default function Home() {
         activeBodies = 0,
         sleepingBodies = 0;
       if (state.running && state.world) {
+        try {
         let phaseStarted = performance.now();
+        const forceStepSeconds = Math.min(
+          1 / 60,
+          Math.max(1 / 240, frameIntervalMs / 1000),
+        );
         // Do not call RigidBody.isSleeping() here. Rapier's WASM bindings can
         // still have the rigid-body set borrowed after a world rebuild (most
         // visibly after placing a freshly downloaded catalog part). Querying
@@ -7362,8 +7365,6 @@ export default function Home() {
             sleepingBodies++;
           } else {
             activeBodies++;
-            p.body.resetForces(false);
-            p.body.resetTorques(false);
           }
         });
         forceResetMs = performance.now() - phaseStarted;
@@ -7386,8 +7387,12 @@ export default function Home() {
           if (acceleration.length() > 90) acceleration.setLength(90);
           const force = acceleration.multiplyScalar(Math.max(0.25, movingMass)),
             totalForce = force.length();
-          spring.piece.body.addForceAtPoint(
-            { x: force.x, y: force.y, z: force.z },
+          spring.piece.body.applyImpulseAtPoint(
+            {
+              x: force.x * forceStepSeconds,
+              y: force.y * forceStepSeconds,
+              z: force.z * forceStepSeconds,
+            },
             { x: anchor.x, y: anchor.y, z: anchor.z },
             true,
           );
@@ -7482,20 +7487,20 @@ export default function Home() {
             }
           }
           if (!connection.b.physicsIslandFixed)
-            connection.b.body.addForce(
+            connection.b.body.applyImpulse(
               {
-                x: -frictionForce.x,
-                y: -frictionForce.y,
-                z: -frictionForce.z,
+                x: -frictionForce.x * forceStepSeconds,
+                y: -frictionForce.y * forceStepSeconds,
+                z: -frictionForce.z * forceStepSeconds,
               },
               true,
             );
           if (!connection.a.physicsIslandFixed)
-            connection.a.body.addForce(
+            connection.a.body.applyImpulse(
               {
-                x: frictionForce.x,
-                y: frictionForce.y,
-                z: frictionForce.z,
+                x: frictionForce.x * forceStepSeconds,
+                y: frictionForce.y * forceStepSeconds,
+                z: frictionForce.z * forceStepSeconds,
               },
               true,
             );
@@ -7519,13 +7524,21 @@ export default function Home() {
               ),
               torque = axis.clone().multiplyScalar(torqueMagnitude);
             if (!connection.b.physicsIslandFixed)
-              connection.b.body.addTorque(
-                { x: -torque.x, y: -torque.y, z: -torque.z },
+              connection.b.body.applyTorqueImpulse(
+                {
+                  x: -torque.x * forceStepSeconds,
+                  y: -torque.y * forceStepSeconds,
+                  z: -torque.z * forceStepSeconds,
+                },
                 true,
               );
             if (!connection.a.physicsIslandFixed)
-              connection.a.body.addTorque(
-                { x: torque.x, y: torque.y, z: torque.z },
+              connection.a.body.applyTorqueImpulse(
+                {
+                  x: torque.x * forceStepSeconds,
+                  y: torque.y * forceStepSeconds,
+                  z: torque.z * forceStepSeconds,
+                },
                 true,
               );
           }
@@ -7629,6 +7642,37 @@ export default function Home() {
           }
         }
         physicsLogMs = performance.now() - phaseStarted;
+        } catch (error) {
+          const detail =
+            error instanceof Error ? error.message : String(error);
+          console.error("Sim Studio physics frame stopped safely:", error);
+          state.simLog?.events.push(`Error físico recuperado: ${detail}`);
+          state.running = false;
+          state.world = undefined;
+          state.physicsHooks = undefined;
+          state.physicsEventQueue = undefined;
+          state.physicsJoints.clear();
+          state.snapshot?.forEach((snapshot) => {
+            snapshot.piece.mesh.position.copy(snapshot.position);
+            snapshot.piece.mesh.quaternion.copy(snapshot.rotation);
+          });
+          state.pieces.forEach((piece) => {
+            piece.body = undefined;
+            piece.physicsOffset = undefined;
+            piece.physicsBase = undefined;
+            piece.physicsIsland = undefined;
+            piece.physicsIslandFixed = undefined;
+          });
+          state.snapshot = undefined;
+          state.snapshotConnections = undefined;
+          state.renderBatchesDirty = true;
+          setRunning(false);
+          setMessage(
+            language === "es"
+              ? `Simulación detenida de forma segura: ${detail}`
+              : `Simulation stopped safely: ${detail}`,
+          );
+        }
       } else clock.getDelta();
       let phaseStarted = performance.now();
       if (state.running || state.renderBatchesDirty)
@@ -7738,7 +7782,6 @@ export default function Home() {
       window.removeEventListener("blur", clearModifiers);
       renderer.dispose();
       document.removeEventListener("visibilitychange", flushRecovery);
-      state.physicsEventQueue?.free();
       state.physicsEventQueue = undefined;
       host.removeChild(canvas);
       appRef.current = null;
@@ -7922,7 +7965,7 @@ export default function Home() {
   };
   const reset = () => {
     const s = appRef.current;
-    if (!s) return;
+    if (!s || physicsTransitionRef.current) return;
     if (!s.running) s.recordHistory();
     s.running = false;
     s.connectionScanVersion++;
@@ -7949,7 +7992,6 @@ export default function Home() {
     s.pendingPlacement = undefined;
     s.snapshot = undefined;
     s.snapshotConnections = undefined;
-    s.physicsEventQueue?.free();
     s.physicsEventQueue = undefined;
     s.world = undefined;
     s.physicsHooks = undefined;
@@ -7963,9 +8005,21 @@ export default function Home() {
   };
   const physics = async () => {
     const s = appRef.current;
-    if (!s) return;
-    if (!s.running) {
-      await RAPIER.init();
+    if (!s || physicsTransitionRef.current) return;
+    if (projectRestoringRef.current || s.bulkLoading) {
+      setMessage(
+        language === "es"
+          ? "Espera a que termine la carga antes de simular"
+          : "Wait for loading to finish before starting the simulation",
+      );
+      return;
+    }
+    physicsTransitionRef.current = true;
+    setPhysicsBusy(true);
+    try {
+      if (!s.running) {
+        await RAPIER.init();
+        if (appRef.current !== s) return;
       s.snapshot = s.pieces.map((piece) => ({
         piece,
         position: piece.mesh.position.clone(),
@@ -8097,7 +8151,6 @@ export default function Home() {
         `${traversedConnectorPairs.length} pares eje/pin ↔ pieza atravesada detectados geométricamente`,
         `${noContactPiecePairs.size} pares pin/eje ↔ grupo excluidos de colisión`,
       );
-      s.physicsEventQueue?.free();
       s.physicsEventQueue = new RAPIER.EventQueue(true);
       s.contactFilterStats = { tested: 0, rejected: 0 };
       s.physicsHooks = {
@@ -8460,7 +8513,7 @@ export default function Home() {
           largeSimulation ? "modo de rendimiento para ensamblaje grande" : "precisión completa"
         }`,
       );
-    } else {
+      } else {
       s.running = false;
       s.gearLinks = [];
       s.differentialLinks = [];
@@ -8522,7 +8575,6 @@ export default function Home() {
       s.renderBatchesDirty = true;
       s.snapshot = undefined;
       s.snapshotConnections = undefined;
-      s.physicsEventQueue?.free();
       s.physicsEventQueue = undefined;
       s.world = undefined;
       s.physicsHooks = undefined;
@@ -8531,12 +8583,16 @@ export default function Home() {
       s.simStartedMs = undefined;
       s.refreshDebug();
       setRunning(false);
-      setMessage("Simulación detenida · estado restaurado · log actualizado");
+        setMessage("Simulación detenida · estado restaurado · log actualizado");
+      }
+    } finally {
+      physicsTransitionRef.current = false;
+      setPhysicsBusy(false);
     }
   };
   const importModel = async (file: File) => {
     const s = appRef.current;
-    if (!s || running) return;
+    if (!s || s.running || physicsTransitionRef.current) return;
     const empty: ImportDraft = {
       fileName: file.name,
       status: "reading",
@@ -10134,8 +10190,12 @@ export default function Home() {
           <button className="ghost" onClick={exportModel}>
             {t.export}
           </button>
-          <button className={running ? "stop" : "play"} onClick={physics}>
-            {running ? t.stop : t.simulate}
+          <button
+            className={running ? "stop" : "play"}
+            onClick={physics}
+            disabled={physicsBusy}
+          >
+            {physicsBusy ? "…" : running ? t.stop : t.simulate}
           </button>
         </div>
       </header>
