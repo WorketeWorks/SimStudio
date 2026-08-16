@@ -9,8 +9,11 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "build:pages": "vite build --config vite.pages.config.ts",
+    "physics:build": "node scripts/build-physics-wasm.mjs",
+    "physics:check": "cargo check --manifest-path physics-core/Cargo.toml",
     "start": "vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs && npm run test:import && npm run test:connectors && npm run test:geometry",
+    "test": "npm run build && node --test tests/rendered-html.test.mjs && npm run test:physics && npm run test:import && npm run test:connectors && npm run test:geometry",
+    "test:physics": "node --test tests/physics-core.test.mjs",
     "test:import": "node --experimental-strip-types --test tests/ldraw-import.test.mjs",
     "test:connectors": "node --experimental-strip-types --test tests/connectors.test.mjs",
     "test:geometry": "node --experimental-strip-types --test tests/ldraw-geometry.test.mjs",
@@ -20,7 +23,6 @@
     "catalog:precache": "node scripts/precache-default-palette.mjs"
   },
   "dependencies": {
-    "@dimforge/rapier3d-compat": "^0.19.3",
     "fflate": "^0.7.4",
     "react": "19.2.6",
     "react-dom": "19.2.6",

@@ -11,6 +11,9 @@ const eslintConfig = defineConfig([
   globalIgnores([
     ".next/**",
     "dist/**",
+    "pages-dist/**",
+    "app/physics/wasm/**",
+    "physics-core/target/**",
     "out/**",
     "build/**",
     "next-env.d.ts",

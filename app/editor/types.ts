@@ -2,13 +2,17 @@
  * Shared runtime types for the editor.
  *
  * Keep behavior out of this file: it describes the data exchanged between
- * the Three.js renderer, Rapier simulation, connection system and project IO.
+ * the Three.js renderer, Rust physics core, connection system and project IO.
  */
-import type RAPIER from "@dimforge/rapier3d-compat";
 import type * as THREE from "three";
 import type { CollisionPrimitive, MeshConnector } from "../connectors";
 import type { GearPair } from "../gears";
 import type { LDrawPlacement } from "../ldraw";
+import type {
+  RustBodyProxy,
+  RustJointProxy,
+  RustPhysicsRuntime,
+} from "../physics/rust-runtime";
 import type { JsonObject, SimStudioProjectDocument } from "../project-format";
 
 export type PieceKind = "beam" | "wheel" | "motor";
@@ -59,7 +63,10 @@ export type Piece = CatalogPart & {
   rotationPivotLocal?: THREE.Vector3;
   rotationPivotKey?: string;
   lockSprite?: THREE.Sprite;
-  body?: RAPIER.RigidBody;
+  /** Numeric body identifier owned by the Rust/WASM physics core. */
+  physicsBodyId?: number;
+  /** Cached facade; the real Rapier body never crosses the WASM boundary. */
+  body?: RustBodyProxy;
   physicsOffset?: THREE.Vector3;
   physicsBase?: THREE.Quaternion;
   physicsIsland?: Piece[];
@@ -274,9 +281,7 @@ export type AppState = {
   selected?: Piece;
   running: boolean;
   physicsSettings: PhysicsSettings;
-  world?: RAPIER.World;
-  physicsHooks?: RAPIER.PhysicsHooks;
-  physicsEventQueue?: RAPIER.EventQueue;
+  world?: RustPhysicsRuntime;
   contactFilterStats?: { tested: number; rejected: number };
   connections: Connection[];
   gearLinks: RuntimeGearLink[];
@@ -285,12 +290,12 @@ export type AppState = {
   gearBodyRotations: Map<number, THREE.Quaternion>;
   gearPhases: Map<string, number>;
   sleepingBodyHandles: Set<number>;
-  physicsJoints: Map<string, RAPIER.ImpulseJoint>;
+  physicsJoints: Map<string, RustJointProxy>;
   dynamicNoContactPairs: Set<string>;
   contactExclusions: Set<string>;
   contactCandidates: Map<string, { a: Piece; b: Piece }>;
   rigidIslandByPiece?: Map<Piece, Piece[]>;
-  createPhysicsJoint?: (connection: Connection) => RAPIER.ImpulseJoint | undefined;
+  createPhysicsJoint?: (connection: Connection) => RustJointProxy | undefined;
   dynamicConnectionFrame: number;
   manualConnect?: ManualConnectDraft;
   snapshot?: {
