@@ -133,13 +133,7 @@ impl PhysicsEngine {
                     .soft_ccd_prediction(if config.settings.large_simulation {
                         0.0
                     } else {
-                        // Adjacent Technic layers intentionally retain only a
-                        // very small clearance (typically about 0.04 stud).
-                        // A 0.1 prediction distance created speculative contacts
-                        // across that gap, causing hinges to stick and then
-                        // release their accumulated impulse as sudden spins.
-                        // Hard CCD remains enabled for actual fast impacts.
-                        0.01
+                        0.1
                     })
                     .additional_solver_iterations(body.additional_solver_iterations)
                     .additional_mass(body.mass.max(0.01))

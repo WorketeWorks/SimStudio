@@ -157,13 +157,6 @@ export const translations = {
     downloadPerformance: "Descargar perfil de fotogramas JSON",
     performanceHelp:
       "Reproduce el lag y descarga el registro: conserva los últimos 600 fotogramas.",
-    fogDistance: "DISTANCIA DE NIEBLA",
-    fogStart: "Inicio",
-    fogEnd: "Final",
-    fogDisabled: "Niebla desactivada",
-    enabled: "Activada",
-    disabled: "Desactivada",
-    resetFog: "Restablecer niebla",
     physicsEngine: "MOTOR DE FÍSICA",
     physicsHelp:
       "Cada unión de pin o eje puede configurarse según sus grados de libertad compatibles.",
@@ -353,13 +346,6 @@ export const translations = {
     downloadPerformance: "Download frame profile JSON",
     performanceHelp:
       "Reproduce the lag, then download the log: it keeps the latest 600 frames.",
-    fogDistance: "FOG DISTANCE",
-    fogStart: "Start",
-    fogEnd: "End",
-    fogDisabled: "Fog disabled",
-    enabled: "Enabled",
-    disabled: "Disabled",
-    resetFog: "Reset fog",
     physicsEngine: "PHYSICS ENGINE",
     physicsHelp:
       "Each pin or axle joint can be configured using its compatible degrees of freedom.",
