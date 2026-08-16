@@ -102,12 +102,39 @@ export function buildRustJointConfig(
   const bodyB = bodyIdByPiece.get(connection.b);
   if (!bodyA || !bodyB || bodyA === bodyB) return undefined;
 
-  const worldAxis = connection.axis.clone().normalize();
+  const dynamicAxle =
+    (connection.profile === "axle-cross" ||
+      connection.profile === "axle-round") &&
+    connection.b.dynamicAxleConnections;
+  const worldAxisA = dynamicAxle
+    ? connection.socket.axis
+        .clone()
+        .transformDirection(connection.a.mesh.matrixWorld)
+        .normalize()
+    : connection.axis.clone().normalize();
+  const worldAxisB = dynamicAxle
+    ? connection.shaft.axis
+        .clone()
+        .transformDirection(connection.b.mesh.matrixWorld)
+        .normalize()
+    : worldAxisA.clone();
+  // Connector maps may describe the same axle line in opposite directions.
+  // Rapier needs matching frame directions so it corrects only the real tilt.
+  if (worldAxisA.dot(worldAxisB) < 0) worldAxisB.negate();
   const forcedPivot =
     connection.forced && connection.localPointB
       ? connection.b.mesh.localToWorld(connection.localPointB.clone())
       : undefined;
   const anchor = forcedPivot ?? connection.point;
+  // A dynamically captured axle must use the actual socket and shaft frames.
+  // Using one already-coincident artificial frame records the current radial
+  // and angular error as valid, leaving a visibly crooked axle forever.
+  const anchorA = dynamicAxle
+    ? connection.a.mesh.localToWorld(connection.socket.local.clone())
+    : anchor;
+  const anchorB = dynamicAxle
+    ? connection.b.mesh.localToWorld(connection.shaft.local.clone())
+    : anchor;
   const passiveMotorForce =
     connection.mode === "rotation" && connection.b.frictionPin
       ? 3.5
@@ -121,17 +148,15 @@ export function buildRustJointConfig(
     bodyA,
     bodyB,
     mode: connection.mode,
-    worldAnchorA: vec3(anchor),
-    worldAnchorB: vec3(anchor),
-    worldAxis: vec3(worldAxis),
+    worldAnchorA: vec3(anchorA),
+    worldAnchorB: vec3(anchorB),
+    worldAxisA: vec3(worldAxisA),
+    worldAxisB: vec3(worldAxisB),
     travel: connection.travel,
     motorSpeed: connection.motorSpeed,
     motorForce: connection.motorForce,
     passiveMotorForce,
-    dynamicAxle:
-      (connection.profile === "axle-cross" ||
-        connection.profile === "axle-round") &&
-      connection.b.dynamicAxleConnections,
+    dynamicAxle,
   };
 }
 
