@@ -54,6 +54,7 @@ import {
   type SimStudioProjectDocument,
 } from "./project-format";
 import { createStudioGrid, GRID_RECENTER_STEP, GRID_SIZE } from "./renderer/studio-grid";
+import { configureDistanceScaledOutlineMaterial } from "./renderer/outline-material";
 import { RustPhysicsRuntime } from "./physics/rust-runtime";
 import {
   buildRustGearConfigs,
@@ -97,6 +98,18 @@ import type {
   RotationSnapStep,
   StructuralMode,
 } from "./editor/types";
+
+type FogSettings = {
+  enabled: boolean;
+  near: number;
+  far: number;
+};
+
+const DEFAULT_FOG_SETTINGS: FogSettings = {
+  enabled: true,
+  near: 18,
+  far: 60,
+};
 
 // --- Catalog sources and packaged metadata ---------------------------------
 // The older pybricks mirror does not contain newer official parts such as
@@ -603,6 +616,7 @@ export default function Home() {
   const projectRestoringRef = useRef(false);
   const physicsTransitionRef = useRef(false);
   const saveShortcutRef = useRef<() => void>(() => undefined);
+  const initialFogEffectRef = useRef(true);
 
   // Project identity and revision bookkeeping are kept outside React state so
   // recovery saves can read the latest values without recreating callbacks.
@@ -657,6 +671,9 @@ export default function Home() {
   const [language, setLanguage] = useState<Language>("en");
   const [controlsHelpVisible, setControlsHelpVisible] = useState(true);
   const [inspectorWidth, setInspectorWidth] = useState(270);
+  const [fogSettings, setFogSettings] = useState<FogSettings>({
+    ...DEFAULT_FOG_SETTINGS,
+  });
 
   // Global physics controls.
   const [structuralMode, setStructuralMode] = useState<StructuralMode>("rigid");
@@ -767,6 +784,18 @@ export default function Home() {
         });
         setPhysicsSettings(restored);
       }
+      const savedFog = JSON.parse(
+        localStorage.getItem("sim-studio:fog-settings") ?? "null",
+      ) as Partial<FogSettings> | null;
+      if (savedFog) {
+        const near = THREE.MathUtils.clamp(Number(savedFog.near) || 18, 1, 149),
+          far = THREE.MathUtils.clamp(Number(savedFog.far) || 60, near + 1, 160);
+        setFogSettings({
+          enabled: savedFog.enabled !== false,
+          near,
+          far,
+        });
+      }
     } catch {}
   }, []);
 
@@ -832,6 +861,27 @@ export default function Home() {
   }, [physicsSettings]);
 
   useEffect(() => {
+    // The scene already starts with the defaults. Skipping this initial pass
+    // prevents a stored preference from being overwritten before it is read.
+    if (initialFogEffectRef.current) {
+      initialFogEffectRef.current = false;
+      return;
+    }
+    try {
+      localStorage.setItem("sim-studio:fog-settings", JSON.stringify(fogSettings));
+    } catch {}
+    const state = appRef.current;
+    if (!state) return;
+    const color =
+      state.scene.background instanceof THREE.Color
+        ? state.scene.background.clone()
+        : new THREE.Color(theme === "dark" ? 0x202328 : 0xdfe7ed);
+    state.scene.fog = fogSettings.enabled
+      ? new THREE.Fog(color, fogSettings.near, fogSettings.far)
+      : null;
+  }, [fogSettings, theme]);
+
+  useEffect(() => {
     projectNameRef.current = projectName.trim() || "Untitled mechanism";
     const markDirty = !suppressProjectNameDirtyRef.current;
     suppressProjectNameDirtyRef.current = false;
@@ -863,7 +913,11 @@ export default function Home() {
       sceneColor = darkTheme ? 0x202328 : 0xdfe7ed;
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(sceneColor);
-    scene.fog = new THREE.Fog(sceneColor, 30, 75);
+    scene.fog = new THREE.Fog(
+      sceneColor,
+      DEFAULT_FOG_SETTINGS.near,
+      DEFAULT_FOG_SETTINGS.far,
+    );
     const camera = new THREE.PerspectiveCamera(
         43,
         host.clientWidth / host.clientHeight,
@@ -1145,6 +1199,21 @@ export default function Home() {
             : recolorLine(child.material);
         });
       }
+      // WebGL line width stays at one screen pixel regardless of distance. If
+      // LDraw line materials do not participate in scene fog, distant pieces
+      // shrink while their outlines remain equally strong. This is especially
+      // common for conditional ShaderMaterials restored through ObjectLoader.
+      exact.traverse((child) => {
+        if (!(child instanceof THREE.Line)) return;
+        const enableLineFog = (material: THREE.Material) => {
+          const fogMaterial = material as THREE.Material & { fog: boolean };
+          fogMaterial.fog = true;
+          return configureDistanceScaledOutlineMaterial(fogMaterial);
+        };
+        child.material = Array.isArray(child.material)
+          ? child.material.map(enableLineFog)
+          : enableLineFog(child.material);
+      });
       modelCache.set(key, exact.clone(true));
       return exact;
     };
@@ -2193,6 +2262,19 @@ export default function Home() {
           const material = materials[0];
           if (!material) return;
           const lineMaterial = material as THREE.LineBasicMaterial;
+          // ObjectLoader/preloaded geometry can deserialize LDraw's conditional
+          // line shader as a plain ShaderMaterial. The control attributes are
+          // therefore the reliable identifier, especially after importing a
+          // model triggers render batching for repeated parts.
+          const hasConditionalAttributes =
+            child.geometry.hasAttribute("control0") &&
+            child.geometry.hasAttribute("control1") &&
+            child.geometry.hasAttribute("direction");
+          const conditional = Boolean(
+            (material as THREE.ShaderMaterial & {
+              isLDrawConditionalLineMaterial?: boolean;
+            }).isLDrawConditionalLineMaterial || hasConditionalAttributes,
+          );
           const key = [
             material.type,
             lineMaterial.color?.getHexString() ?? "",
@@ -2200,12 +2282,8 @@ export default function Home() {
             Number(material.transparent),
             Number(material.depthTest),
             Number((lineMaterial as THREE.LineBasicMaterial).vertexColors),
+            conditional ? "conditional" : "hard",
           ].join(":");
-          const conditional = Boolean(
-            (material as THREE.ShaderMaterial & {
-              isLDrawConditionalLineMaterial?: boolean;
-            }).isLDrawConditionalLineMaterial,
-          );
           const group = lineGroups.get(key) ?? {
             material,
             positions: [] as number[],
@@ -2320,6 +2398,10 @@ export default function Home() {
                   opacity: outlineOpacity,
                   blending: sourceMaterial.blending,
                 });
+          // Conditional LDraw shaders contain the fog chunks and uniforms, but
+          // ShaderMaterial does not enable the fog define automatically.
+          batchMaterial.fog = true;
+          configureDistanceScaledOutlineMaterial(batchMaterial);
           if (conditional) {
             geometry.setAttribute(
               "control0",
@@ -9317,6 +9399,80 @@ export default function Home() {
                 {step === 0 ? t.noGridSnap : `${step}°`}
               </button>
             ))}
+          </div>
+          <div className="fog-settings">
+            <label className="fog-title">{t.fogDistance}</label>
+            <div className="structural-mode" role="group" aria-label={t.fogDistance}>
+              <button
+                className={fogSettings.enabled ? "active" : ""}
+                onClick={() =>
+                  setFogSettings((current) => ({ ...current, enabled: true }))
+                }
+              >
+                {t.enabled}
+              </button>
+              <button
+                className={!fogSettings.enabled ? "active" : ""}
+                onClick={() =>
+                  setFogSettings((current) => ({ ...current, enabled: false }))
+                }
+              >
+                {t.disabled}
+              </button>
+            </div>
+            <div className="fog-distance-summary">
+              {fogSettings.enabled
+                ? `${fogSettings.near.toFixed(0)}–${fogSettings.far.toFixed(0)} u`
+                : t.fogDisabled}
+            </div>
+            {fogSettings.enabled && (
+              <>
+                <div className="physics-parameter">
+                  <div>
+                    <span>{t.fogStart}</span>
+                    <output>{fogSettings.near.toFixed(0)} u</output>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="149"
+                    step="1"
+                    value={fogSettings.near}
+                    onChange={(event) =>
+                      setFogSettings((current) => ({
+                        ...current,
+                        near: Math.min(Number(event.target.value), current.far - 1),
+                      }))
+                    }
+                  />
+                </div>
+                <div className="physics-parameter">
+                  <div>
+                    <span>{t.fogEnd}</span>
+                    <output>{fogSettings.far.toFixed(0)} u</output>
+                  </div>
+                  <input
+                    type="range"
+                    min="2"
+                    max="160"
+                    step="1"
+                    value={fogSettings.far}
+                    onChange={(event) =>
+                      setFogSettings((current) => ({
+                        ...current,
+                        far: Math.max(Number(event.target.value), current.near + 1),
+                      }))
+                    }
+                  />
+                </div>
+              </>
+            )}
+            <button
+              className="fog-reset"
+              onClick={() => setFogSettings({ ...DEFAULT_FOG_SETTINGS })}
+            >
+              ↺ {t.resetFog}
+            </button>
           </div>
           <label className="structural-title">{t.structuralBehavior}</label>
           <div className="structural-mode" role="group" aria-label={t.structuralBehavior}>
