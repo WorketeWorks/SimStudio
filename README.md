@@ -100,27 +100,7 @@ Motor mode creates a driven rotational joint with configurable angular speed, di
 
 Compatible gears are linked from their tooth counts, pitch radii, axis alignment and centre distance. Motion is transferred in either direction using the calculated ratio. Gear engagement is updated during simulation when height, alignment or distance changes, and a separate gear-contact collider keeps tooth interaction independent from the normal solid collider.
 
-## Physics architecture and colliders
-
-The simulation core is written in Rust and compiled to WebAssembly. TypeScript
-owns the editor, rendering and interaction layer, but it never receives a
-Rapier body, collider or joint object. It sends plain numeric commands to one
-`physics.step()` boundary and receives a packed transform buffer:
-
-```text
-TypeScript editor
-└── RustPhysicsRuntime.step()
-    └── Rust / WebAssembly
-        ├── forces and mouse spring
-        ├── motors and joint friction
-        ├── gear and differential constraints
-        ├── Rapier 3D step
-        └── packed body transforms → TypeScript / Three.js
-```
-
-Rapier is compiled with its `simd8` feature and the WebAssembly `simd128`
-target feature. Keeping ownership on the Rust side also avoids recursive
-borrow/aliasing failures when a Rapier world is rebuilt.
+## Physics and colliders
 
 The visible LDraw mesh remains detailed, while Rapier uses lighter compound colliders. The generated collider set is stored in the local catalog instead of being recalculated on every browser session.
 
@@ -171,8 +151,7 @@ Saved project names are locked against accidental typing. Use the pencil button 
 
 ## Installation
 
-Node.js `22.13.0` or newer is required. The generated physics WASM is committed,
-so Rust is only required when modifying the native physics core.
+Node.js `22.13.0` or newer is required.
 
 ```bash
 git clone https://github.com/WorketeWorks/SimStudio-LEGO-Technic-Physics-Simulator.git
@@ -189,8 +168,6 @@ Then open the local address printed by the development server. For immediate use
 npm run dev               # Development server
 npm run build             # Production build
 npm run build:pages       # GitHub Pages build
-npm run physics:check     # Check the native Rust core
-npm run physics:build     # Rebuild SIMD WebAssembly (Rust + wasm-bindgen required)
 npm run start             # Run the production build
 npm run catalog:precache  # Regenerate the offline default catalog
 npm run lint              # Static analysis
@@ -201,7 +178,7 @@ npm test                  # Build and automated tests
 
 - React 19 and TypeScript.
 - Three.js and LDrawLoader for 3D rendering and LDraw parsing.
-- Rust, Rapier 3D and WebAssembly SIMD for rigid bodies, constraints and physics.
+- Rapier 3D for rigid bodies, compound colliders and physics joints.
 - Vinext and Vite for development and production builds.
 - GitHub Pages-compatible static build for the default local catalog.
 

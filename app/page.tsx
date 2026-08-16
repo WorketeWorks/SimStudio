@@ -9,6 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import * as THREE from "three";
+import RAPIER from "@dimforge/rapier3d-compat";
 import { LDrawLoader } from "./vendor/LDrawLoader.js";
 import { LDrawConditionalLineMaterial } from "three/addons/materials/LDrawConditionalLineMaterial.js";
 import { ldrawToScenePlacement, makeLDR, parseLDR, type LDrawPlacement } from "./ldraw";
@@ -54,12 +55,7 @@ import {
   type SimStudioProjectDocument,
 } from "./project-format";
 import { createStudioGrid, GRID_RECENTER_STEP, GRID_SIZE } from "./renderer/studio-grid";
-import { RustPhysicsRuntime } from "./physics/rust-runtime";
-import {
-  buildRustGearConfigs,
-  buildRustJointConfig,
-  buildRustPhysicsScene,
-} from "./physics/rust-scene-builder";
+import { exactTriangleMeshForPiece } from "./physics/exact-collider";
 import {
   detectDifferentialLinks,
   detectGearLinks,
@@ -67,7 +63,14 @@ import {
   gearLinkKey,
   isDifferentialPart,
 } from "./physics/gear-topology";
-import { DEFAULT_PHYSICS_SETTINGS } from "./physics/settings";
+import {
+  COLLISION_GROUP_GEAR_MESH,
+  COLLISION_GROUP_GEAR_NORMAL,
+  COLLISION_GROUP_NON_GEAR,
+  CONTACT_FRICTION,
+  DEFAULT_PHYSICS_SETTINGS,
+  interactionGroups,
+} from "./physics/settings";
 import { createProjectId, uniqueProjectName } from "./projects/naming";
 import { DeferredNumberInput } from "./components/DeferredNumberInput";
 import {
@@ -95,6 +98,8 @@ import type {
   PieceKind,
   PreparedImportPlacement,
   RotationSnapStep,
+  RuntimeDifferentialLink,
+  RuntimeGearLink,
   StructuralMode,
 } from "./editor/types";
 
@@ -169,6 +174,8 @@ const modelText = (p: CatalogPart) =>
   `0 FILE ${p.part}.ldr\n1 ${p.color} 0 0 0 1 0 0 0 1 0 0 0 1 ${p.modelPart ?? p.part}.dat\n0`;
 
 const frictionPinRefs = new Set(["2780", "6558", "32054", "43093"]);
+
+const frictionlessPinRefs = new Set(["3749", "3673", "32556"]);
 
 const isPinPart = (p: CatalogPart) =>
   /^Technic (Axle )?Pin/i.test(p.name) || frictionPinRefs.has(p.part);
@@ -2931,14 +2938,6 @@ export default function Home() {
         link.ratio = -link.a.spec.teeth / (link.signB * link.b.spec.teeth);
       });
       state.gearLinks = detectedGearLinks;
-      if (state.world) {
-        const bodyIds = new Map(
-          state.pieces.flatMap((piece) =>
-            piece.physicsBodyId ? ([[piece, piece.physicsBodyId]] as const) : [],
-          ),
-        );
-        state.world.replaceGears(buildRustGearConfigs(state.gearLinks, bodyIds));
-      }
       const activeGearKeys = new Set(state.gearLinks.map(gearLinkKey));
       for (const key of state.gearPhases.keys())
         if (!activeGearKeys.has(key)) state.gearPhases.delete(key);
@@ -2984,7 +2983,7 @@ export default function Home() {
         }
         const joint = state.physicsJoints.get(connection.id);
         if (joint) {
-          state.world.removeJoint(connection.id);
+          state.world.removeImpulseJoint(joint, true);
           state.physicsJoints.delete(connection.id);
         }
         state.connectionModes.set(connection.id, {
@@ -3115,18 +3114,6 @@ export default function Home() {
         state.contactExclusions.clear();
         refreshed.forEach((key) => state.contactExclusions.add(key));
         differentialExclusions.forEach((key) => state.contactExclusions.add(key));
-        const allExclusions = new Set([
-          ...state.contactExclusions,
-          ...state.dynamicNoContactPairs,
-        ]);
-        state.world.setExcludedColliderPairs(
-          [...allExclusions].flatMap((key) => {
-            const [left, right] = key.split(":").map(Number);
-            return Number.isFinite(left) && Number.isFinite(right)
-              ? ([[left, right]] as [number, number][])
-              : [];
-          }),
-        );
       }
       if (changed) {
         setConnectionRevision((value) => value + 1);
@@ -3707,10 +3694,488 @@ export default function Home() {
       }
     };
 
+    const colliderExtentAlongWorldAxis = (
+      piece: Piece,
+      primitive: CollisionPrimitive,
+      axis: THREE.Vector3,
+    ) => {
+      if (primitive.shape === "cylinder") {
+        const cylinderAxis = new THREE.Vector3(0, 1, 0)
+            .applyQuaternion(primitive.rotation)
+            .transformDirection(piece.mesh.matrixWorld)
+            .normalize(),
+          alignment = Math.abs(cylinderAxis.dot(axis));
+        return (
+          alignment * (primitive.halfHeight ?? 0) +
+          Math.sqrt(Math.max(0, 1 - alignment * alignment)) * (primitive.radius ?? 0)
+        );
+      }
+      const rotation = piece.mesh
+          .getWorldQuaternion(new THREE.Quaternion())
+          .multiply(primitive.rotation),
+        size = primitive.size!,
+        x = new THREE.Vector3(1, 0, 0).applyQuaternion(rotation),
+        y = new THREE.Vector3(0, 1, 0).applyQuaternion(rotation),
+        z = new THREE.Vector3(0, 0, 1).applyQuaternion(rotation);
+      return (
+        Math.abs(axis.dot(x)) * size.x * 0.5 +
+        Math.abs(axis.dot(y)) * size.y * 0.5 +
+        Math.abs(axis.dot(z)) * size.z * 0.5
+      );
+    };
 
-    // Gear and differential constraints live in physics-core/src/systems/gears.rs.
-    // The editor only detects topology and sends a numeric graph to Rust.
+    const enforceAxialStops = () => {
+      for (const connection of state.connections) {
+        if (
+          connection.mode !== "rotation-linear" ||
+          !connection.a.body ||
+          !connection.b.body ||
+          connection.a.body === connection.b.body
+        )
+          continue;
+        const socketWorld = worldConnector(connection.a, connection.socket),
+          axis = socketWorld.axis.normalize();
+        if (!connection.axialStops) {
+          const surface = socketSurfaceHalfThickness(connection.a, connection.socket);
+          connection.axialStops = [];
+          for (const piece of connection.b.physicsIsland ?? [connection.b]) {
+            if (!/bush|nut/i.test(piece.name)) continue;
+            piece.mesh.updateMatrixWorld(true);
+            for (const primitive of piece.colliders) {
+              const center = piece.mesh.localToWorld(primitive.center.clone()),
+                delta = center.clone().sub(socketWorld.point),
+                distance = delta.dot(axis),
+                radial = delta.clone().addScaledVector(axis, -distance).length(),
+                radialReach =
+                  primitive.shape === "cylinder"
+                    ? (primitive.radius ?? 0)
+                    : Math.max(
+                        primitive.size?.x ?? 0,
+                        primitive.size?.y ?? 0,
+                        primitive.size?.z ?? 0,
+                      ) * 0.5,
+                extent = colliderExtentAlongWorldAxis(piece, primitive, axis),
+                minimumDistance =
+                  surface +
+                  Math.max(0.01, extent - state.physicsSettings.axleTolerance * 0.5);
+              if (
+                radial <= radialReach + 0.12 &&
+                Math.abs(Math.abs(distance) - minimumDistance) <= 0.2
+              )
+                connection.axialStops.push({
+                  piece,
+                  primitive,
+                  side: distance >= 0 ? 1 : -1,
+                  minimumDistance,
+                });
+            }
+          }
+        }
+        for (const stop of connection.axialStops) {
+          stop.piece.mesh.updateMatrixWorld(true);
+          const center = stop.piece.mesh.localToWorld(stop.primitive.center.clone()),
+            signedDistance = center.clone().sub(socketWorld.point).dot(axis) * stop.side;
+          if (signedDistance >= stop.minimumDistance) continue;
+          const correctionDistance = stop.minimumDistance - signedDistance,
+            correction = axis.clone().multiplyScalar(stop.side * correctionDistance),
+            body = connection.b.body,
+            translation = body.translation();
+          body.setTranslation(
+            {
+              x: translation.x + correction.x,
+              y: translation.y + correction.y,
+              z: translation.z + correction.z,
+            },
+            true,
+          );
+          for (const piece of connection.b.physicsIsland ?? [connection.b])
+            piece.mesh.position.add(correction);
+          const velocityA = connection.a.body.linvel(),
+            velocityB = body.linvel(),
+            relativeAxial =
+              (velocityB.x - velocityA.x) * axis.x +
+              (velocityB.y - velocityA.y) * axis.y +
+              (velocityB.z - velocityA.z) * axis.z;
+          if (relativeAxial * stop.side < 0)
+            body.setLinvel(
+              {
+                x: velocityB.x - axis.x * relativeAxial,
+                y: velocityB.y - axis.y * relativeAxial,
+                z: velocityB.z - axis.z * relativeAxial,
+              },
+              true,
+            );
+          const now = performance.now();
+          if (
+            state.simLog &&
+            correctionDistance > 0.02 &&
+            now - (stop.lastLoggedMs ?? -Infinity) > 250
+          ) {
+            stop.lastLoggedMs = now;
+            state.simLog.events.push(
+              `Tope axial ${stop.piece.part} ↔ ${connection.a.part}: corrección ${correctionDistance.toFixed(3)} studs`,
+            );
+          }
+        }
+      }
+    };
 
+    const enforceGearLinks = () => {
+      const gearNodes = new Map<number, { piece: Piece; localAxis: THREE.Vector3 }>(),
+        bodyRotations = new Map<number, THREE.Quaternion>(),
+        bodyRotationVectors = new Map<number, THREE.Vector3>(),
+        stepGearDeltas = new Map<number, number>();
+      for (const link of state.gearLinks)
+        for (const [pose, localAxis] of [
+          [link.a, link.axisA],
+          [link.b, link.axisB],
+        ] as [GearPose<Piece>, THREE.Vector3][]) {
+          const piece = pose.value,
+            body = piece.body;
+          if (!body) continue;
+          gearNodes.set(piece.id, { piece, localAxis });
+          if (bodyRotations.has(body.handle)) continue;
+          const rotation = body.rotation(),
+            current = new THREE.Quaternion(
+              rotation.x,
+              rotation.y,
+              rotation.z,
+              rotation.w,
+            ).normalize(),
+            previous = state.gearBodyRotations.get(body.handle) ?? current,
+            delta = current.clone().multiply(previous.clone().invert());
+          if (delta.w < 0) delta.set(-delta.x, -delta.y, -delta.z, -delta.w);
+          const vectorLength = Math.hypot(delta.x, delta.y, delta.z),
+            angle = 2 * Math.atan2(vectorLength, Math.max(0, delta.w)),
+            rotationVector =
+              vectorLength > 1e-9
+                ? new THREE.Vector3(delta.x, delta.y, delta.z).multiplyScalar(
+                    angle / vectorLength,
+                  )
+                : new THREE.Vector3();
+          bodyRotations.set(body.handle, current);
+          bodyRotationVectors.set(body.handle, rotationVector);
+          state.gearBodyRotations.set(body.handle, current.clone());
+        }
+      // Accumulate the rotation Rapier actually produced, not the velocity we
+      // requested in the previous frame. This makes physical tooth phase
+      // measurable and prevents invisible drift under load.
+      for (const { piece, localAxis } of gearNodes.values()) {
+        const body = piece.body,
+          rotation = bodyRotations.get(body!.handle);
+        if (!body || !rotation) continue;
+        const worldAxis = localAxis.clone().applyQuaternion(rotation).normalize(),
+          deltaAngle = bodyRotationVectors.get(body.handle)?.dot(worldAxis) ?? 0,
+          angleKey = `piece:${piece.id}`;
+        stepGearDeltas.set(piece.id, deltaAngle);
+        state.gearAngles.set(
+          angleKey,
+          (state.gearAngles.get(angleKey) ?? 0) + deltaAngle,
+        );
+      }
+      const gearCenter = (piece: Piece) => {
+          const body = piece.body!,
+            translation = body.translation(),
+            rotation = body.rotation();
+          return new THREE.Vector3(translation.x, translation.y, translation.z).add(
+            (piece.physicsOffset ?? new THREE.Vector3())
+              .clone()
+              .applyQuaternion(
+                new THREE.Quaternion(rotation.x, rotation.y, rotation.z, rotation.w),
+              ),
+          );
+        },
+        rotateBodyAtGear = (piece: Piece, localAxis: THREE.Vector3, angle: number) => {
+          const body = piece.body;
+          if (!body || piece.physicsIslandFixed || Math.abs(angle) < 1e-8) return;
+          const rotation = body.rotation(),
+            current = new THREE.Quaternion(
+              rotation.x,
+              rotation.y,
+              rotation.z,
+              rotation.w,
+            ).normalize(),
+            worldAxis = localAxis.clone().applyQuaternion(current).normalize(),
+            delta = new THREE.Quaternion().setFromAxisAngle(worldAxis, angle),
+            next = delta.clone().multiply(current).normalize(),
+            pivot = gearCenter(piece),
+            translation = body.translation(),
+            nextPosition = new THREE.Vector3(translation.x, translation.y, translation.z)
+              .sub(pivot)
+              .applyQuaternion(delta)
+              .add(pivot);
+          body.setTranslation(nextPosition, true);
+          body.setRotation(next, true);
+          state.gearBodyRotations.set(body.handle, next.clone());
+          // One rigid island may carry several fixed gears. Apply this exact
+          // body rotation to every phase coordinate on that island.
+          for (const node of gearNodes.values()) {
+            if (node.piece.body !== body) continue;
+            const nodeAxis = node.localAxis.clone().applyQuaternion(current).normalize();
+            const key = `piece:${node.piece.id}`;
+            state.gearAngles.set(
+              key,
+              (state.gearAngles.get(key) ?? 0) + angle * worldAxis.dot(nodeAxis),
+            );
+          }
+        },
+        solvePhase = (link: RuntimeGearLink) => {
+          const pieceA = link.a.value,
+            pieceB = link.b.value,
+            bodyA = pieceA.body,
+            bodyB = pieceB.body;
+          if (!bodyA || !bodyB || bodyA === bodyB) return;
+          const teethA = link.a.spec.teeth,
+            signedTeethB = link.signB * link.b.spec.teeth,
+            angleA = state.gearAngles.get(`piece:${pieceA.id}`) ?? 0,
+            angleB = state.gearAngles.get(`piece:${pieceB.id}`) ?? 0,
+            phase = teethA * angleA + signedTeethB * angleB,
+            key = gearLinkKey(link),
+            target = state.gearPhases.get(key) ?? phase,
+            error = phase - target;
+          if (!state.gearPhases.has(key)) state.gearPhases.set(key, target);
+          if (Math.abs(error) < 1e-6) return;
+          const fixedA = !!pieceA.physicsIslandFixed,
+            fixedB = !!pieceB.physicsIslandFixed;
+          if (fixedA && fixedB) return;
+          const phaseMotionA = Math.abs(teethA * (stepGearDeltas.get(pieceA.id) ?? 0)),
+            phaseMotionB = Math.abs(signedTeethB * (stepGearDeltas.get(pieceB.id) ?? 0));
+          let correctionA = 0,
+            correctionB = 0;
+          if (fixedA) correctionB = -error / signedTeethB;
+          else if (fixedB) correctionA = -error / teethA;
+          else if (phaseMotionA > phaseMotionB * 1.1 + 1e-7)
+            correctionA = -error / teethA;
+          else if (phaseMotionB > phaseMotionA * 1.1 + 1e-7)
+            correctionB = -error / signedTeethB;
+          else {
+            const denominator = teethA * teethA + signedTeethB * signedTeethB;
+            correctionA = (-error * teethA) / denominator;
+            correctionB = (-error * signedTeethB) / denominator;
+          }
+          rotateBodyAtGear(pieceA, link.axisA, correctionA);
+          rotateBodyAtGear(pieceB, link.axisB, correctionB);
+        };
+      // Position projection is deliberately hard: a blocked output rotates the
+      // driving side back instead of allowing even one tooth of phase loss.
+      for (let iteration = 0; iteration < 6; iteration++) {
+        state.gearLinks.forEach(solvePhase);
+        for (let index = state.gearLinks.length - 1; index >= 0; index--)
+          solvePhase(state.gearLinks[index]);
+      }
+      // A symmetric sequential projection transmits in either direction. The
+      // phase correction is intentionally much stronger than a normal motor;
+      // it behaves like engaged teeth instead of a soft friction drive.
+      const solveLink = (link: RuntimeGearLink) => {
+        const pieceA = link.a.value,
+          pieceB = link.b.value,
+          bodyA = pieceA.body,
+          bodyB = pieceB.body;
+        if (!bodyA || !bodyB || bodyA === bodyB) return;
+        const rotationA = bodyA.rotation(),
+          rotationB = bodyB.rotation(),
+          axisA = link.axisA
+            .clone()
+            .applyQuaternion(
+              new THREE.Quaternion(rotationA.x, rotationA.y, rotationA.z, rotationA.w),
+            ),
+          axisB = link.axisB
+            .clone()
+            .applyQuaternion(
+              new THREE.Quaternion(rotationB.x, rotationB.y, rotationB.z, rotationB.w),
+            ),
+          angularA = bodyA.angvel(),
+          angularB = bodyB.angvel(),
+          velocityA = angularA.x * axisA.x + angularA.y * axisA.y + angularA.z * axisA.z,
+          velocityB = angularB.x * axisB.x + angularB.y * axisB.y + angularB.z * axisB.z,
+          teethA = link.a.spec.teeth,
+          teethB = link.b.spec.teeth,
+          signedTeethB = link.signB * teethB;
+        // Tooth position is already projected rigidly above. Mixing its old
+        // phase-velocity correction into this equation deformed the actual
+        // ratio under load (e.g. 20:28 became roughly 20:6). Velocity now has
+        // one exact invariant only: teethA*wA + signedTeethB*wB = 0.
+        const error = teethA * velocityA + signedTeethB * velocityB;
+        if (Math.abs(error) < 1e-5) return;
+        const fixedA = !!pieceA.physicsIslandFixed,
+          fixedB = !!pieceB.physicsIslandFixed;
+        if (fixedA && fixedB) return;
+        let deltaA = 0,
+          deltaB = 0;
+        if (fixedA) deltaB = -error / signedTeethB;
+        else if (fixedB) deltaA = -error / teethA;
+        else {
+          const denominator = teethA * teethA + signedTeethB * signedTeethB;
+          deltaA = (-error * teethA) / denominator;
+          deltaB = (-error * signedTeethB) / denominator;
+        }
+        if (!fixedA)
+          bodyA.setAngvel(
+            {
+              x: angularA.x + axisA.x * deltaA,
+              y: angularA.y + axisA.y * deltaA,
+              z: angularA.z + axisA.z * deltaA,
+            },
+            true,
+          );
+        if (!fixedB)
+          bodyB.setAngvel(
+            {
+              x: angularB.x + axisB.x * deltaB,
+              y: angularB.y + axisB.y * deltaB,
+              z: angularB.z + axisB.z * deltaB,
+            },
+            true,
+          );
+      };
+      // Symmetric Gauss-Seidel sweeps make a train transmit equally well from
+      // either end instead of favouring the pair that happens to be stored first.
+      for (let iteration = 0; iteration < 8; iteration++) {
+        state.gearLinks.forEach(solveLink);
+        for (let index = state.gearLinks.length - 1; index >= 0; index--)
+          solveLink(state.gearLinks[index]);
+      }
+    };
+    // Non-positional gear constraint. It never writes a quaternion or an
+    // absolute angle: only the angular velocities that physically exist are
+    // projected onto the exact tooth ratio. Running this around small Rapier
+    // substeps lets contacts and motor torque participate without teleporting
+    // either gear when the applied force changes direction.
+    const projectGearVelocities = () => {
+      const solve = (link: RuntimeGearLink) => {
+          const pieceA = link.a.value,
+            pieceB = link.b.value,
+            bodyA = pieceA.body,
+            bodyB = pieceB.body;
+          if (!bodyA || !bodyB || bodyA === bodyB) return;
+          const rotationA = bodyA.rotation(),
+            rotationB = bodyB.rotation(),
+            axisA = link.axisA
+              .clone()
+              .applyQuaternion(
+                new THREE.Quaternion(rotationA.x, rotationA.y, rotationA.z, rotationA.w),
+              )
+              .normalize(),
+            axisB = link.axisB
+              .clone()
+              .applyQuaternion(
+                new THREE.Quaternion(rotationB.x, rotationB.y, rotationB.z, rotationB.w),
+              )
+              .normalize(),
+            angularA = bodyA.angvel(),
+            angularB = bodyB.angvel(),
+            velocityA =
+              angularA.x * axisA.x + angularA.y * axisA.y + angularA.z * axisA.z,
+            velocityB =
+              angularB.x * axisB.x + angularB.y * axisB.y + angularB.z * axisB.z,
+            teethA = link.a.spec.teeth,
+            signedTeethB = link.signB * link.b.spec.teeth,
+            error = teethA * velocityA + signedTeethB * velocityB;
+          if (Math.abs(error) < 1e-6) return;
+          const fixedA = !!pieceA.physicsIslandFixed,
+            fixedB = !!pieceB.physicsIslandFixed;
+          if (fixedA && fixedB) return;
+          let deltaA = 0,
+            deltaB = 0;
+          if (fixedA) deltaB = -error / signedTeethB;
+          else if (fixedB) deltaA = -error / teethA;
+          else {
+            const denominator = teethA * teethA + signedTeethB * signedTeethB;
+            deltaA = (-error * teethA) / denominator;
+            deltaB = (-error * signedTeethB) / denominator;
+          }
+          if (!fixedA)
+            bodyA.setAngvel(
+              {
+                x: angularA.x + axisA.x * deltaA,
+                y: angularA.y + axisA.y * deltaA,
+                z: angularA.z + axisA.z * deltaA,
+              },
+              true,
+            );
+          if (!fixedB)
+            bodyB.setAngvel(
+              {
+                x: angularB.x + axisB.x * deltaB,
+                y: angularB.y + axisB.y * deltaB,
+                z: angularB.z + axisB.z * deltaB,
+              },
+              true,
+            );
+        },
+        solveDifferential = (link: RuntimeDifferentialLink) => {
+          const entries = [
+            {
+              piece: link.carrier,
+              axis: link.axisCarrier,
+              gradient: -2,
+            },
+            { piece: link.left, axis: link.axisLeft, gradient: 1 },
+            { piece: link.right, axis: link.axisRight, gradient: 1 },
+          ];
+          const bodies = entries.map(({ piece }) => piece.body);
+          if (
+            bodies.some((body) => !body) ||
+            new Set(bodies.map((body) => body!.handle)).size !== 3
+          )
+            return;
+          const samples = entries.map(({ piece, axis, gradient }) => {
+              const body = piece.body!,
+                rotation = body.rotation(),
+                worldAxis = axis
+                  .clone()
+                  .applyQuaternion(
+                    new THREE.Quaternion(rotation.x, rotation.y, rotation.z, rotation.w),
+                  )
+                  .normalize(),
+                angular = body.angvel(),
+                speed =
+                  angular.x * worldAxis.x +
+                  angular.y * worldAxis.y +
+                  angular.z * worldAxis.z;
+              return {
+                piece,
+                body,
+                worldAxis,
+                angular,
+                speed,
+                gradient,
+              };
+            }),
+            // Ideal open differential: outputLeft + outputRight = 2*carrier.
+            error = samples.reduce(
+              (sum, sample) => sum + sample.gradient * sample.speed,
+              0,
+            ),
+            denominator = samples.reduce(
+              (sum, sample) =>
+                sum +
+                (sample.piece.physicsIslandFixed ? 0 : sample.gradient * sample.gradient),
+              0,
+            );
+          if (Math.abs(error) < 1e-6 || denominator < 1e-9) return;
+          samples.forEach((sample) => {
+            if (sample.piece.physicsIslandFixed) return;
+            const correction = (-error * sample.gradient) / denominator;
+            sample.body.setAngvel(
+              {
+                x: sample.angular.x + sample.worldAxis.x * correction,
+                y: sample.angular.y + sample.worldAxis.y * correction,
+                z: sample.angular.z + sample.worldAxis.z * correction,
+              },
+              true,
+            );
+          });
+        };
+      // More sweeps than the former position solver are cheap for the usual
+      // small gear trains and make long chains direction-independent.
+      for (let iteration = 0; iteration < 16; iteration++) {
+        state.gearLinks.forEach(solve);
+        for (let index = state.gearLinks.length - 1; index >= 0; index--)
+          solve(state.gearLinks[index]);
+        state.differentialLinks.forEach(solveDifferential);
+      }
+    };
 
     const makeLock = () => {
       const c = document.createElement("canvas");
@@ -3758,7 +4223,12 @@ export default function Home() {
           );
         });
       if (piece.body)
-        piece.body.setFixed(Boolean(piece.physicsIslandFixed));
+        piece.body.setBodyType(
+          piece.physicsIslandFixed
+            ? RAPIER.RigidBodyType.Fixed
+            : RAPIER.RigidBodyType.Dynamic,
+          true,
+        );
       setMessage(
         piece.fixed ? `${piece.part} fijada al espacio` : `${piece.part} liberada`,
       );
@@ -5033,7 +5503,7 @@ export default function Home() {
       }
       if (spring) {
         const released = spring;
-        const releasedBodies = new Set<NonNullable<Piece["body"]>>();
+        const releasedBodies = new Set<RAPIER.RigidBody>();
         released.component.forEach((p) => {
           if (p.body && !p.physicsIslandFixed && !releasedBodies.has(p.body)) {
             releasedBodies.add(p.body);
@@ -5372,6 +5842,10 @@ export default function Home() {
       if (state.running && state.world) {
         try {
           let phaseStarted = performance.now();
+          const forceStepSeconds = Math.min(
+            1 / 60,
+            Math.max(1 / 240, frameIntervalMs / 1000),
+          );
           // Do not call RigidBody.isSleeping() here. Rapier's WASM bindings can
           // still have the rigid-body set borrowed after a world rebuild (most
           // visibly after placing a freshly downloaded catalog part). Querying
@@ -5396,57 +5870,210 @@ export default function Home() {
             const anchor = spring.piece.mesh.localToWorld(spring.anchor.clone()),
               delta = spring.target.clone().sub(anchor);
             if (delta.length() > 3.5) delta.setLength(3.5);
-            state.world.applySpring({
-              body: spring.piece.body.handle,
-              worldPoint: anchor,
-              target: spring.target,
-              stiffness: 42,
-              damping: 13,
-              maxForce: 90 * Math.max(0.25, spring.piece.body.mass()),
-            });
-          }
-          springMs = performance.now() - phaseStarted;
-          phaseStarted = performance.now();
-          // Axle guide projection and friction are applied in Rust before the
-          // Rapier step, so no per-connection JS correction pass is needed.
-
-          jointForcesMs = performance.now() - phaseStarted;
-          phaseStarted = performance.now();
-          const frameTimestep = Math.min(clock.getDelta(), 1 / 60);
-          state.world.timestep = frameTimestep;
-          // One boundary crossing advances forces, motors, joints, gear phase,
-          // Rapier and SIMD transform packing. No Rust-owned object is exposed
-          // to JavaScript, eliminating wasm-bindgen aliasing crashes.
-          state.world.step(frameTimestep);
-          const rustStats = state.world.stats();
-          activeBodies = rustStats.activeBodies;
-          sleepingBodies = rustStats.sleepingBodies;
-          const piecesById = new Map(state.pieces.map((piece) => [piece.id, piece]));
-          state.world.takeContactPairs().forEach(([leftId, rightId]) => {
-            const left = piecesById.get(leftId),
-              right = piecesById.get(rightId);
-            if (
-              left &&
-              right &&
-              (left.dynamicAxleConnections || right.dynamicAxleConnections)
-            )
-              state.contactCandidates.set(contactPairKey(left, right), {
-                a: left,
-                b: right,
-              });
-          });
-          if (spring) {
-            spring.force = rustStats.maxSpringForce;
+            const velocity = spring.piece.body.linvel(),
+              acceleration = delta.multiplyScalar(42).addScaledVector(
+                new THREE.Vector3(velocity.x, velocity.y, velocity.z),
+                // Critical damping for k=42 (2 * sqrt(42) ≈ 13).
+                // This prevents the mouse spring from storing energy against
+                // a collider and launching the dragged assembly past it.
+                -13,
+              ),
+              movingMass = Math.max(0.25, spring.piece.body.mass());
+            if (acceleration.length() > 90) acceleration.setLength(90);
+            const force = acceleration.multiplyScalar(Math.max(0.25, movingMass)),
+              totalForce = force.length();
+            spring.piece.body.applyImpulseAtPoint(
+              {
+                x: force.x * forceStepSeconds,
+                y: force.y * forceStepSeconds,
+                z: force.z * forceStepSeconds,
+              },
+              { x: anchor.x, y: anchor.y, z: anchor.z },
+              true,
+            );
+            spring.force = totalForce;
             if (state.simLog)
               state.simLog.maxSpringForce = Math.max(
                 state.simLog.maxSpringForce,
-                rustStats.maxSpringForce,
+                totalForce,
               );
             updateSpring();
           }
+          springMs = performance.now() - phaseStarted;
+          phaseStarted = performance.now();
+          for (const connection of state.connections) {
+            if (
+              (connection.mode !== "linear" && connection.mode !== "rotation-linear") ||
+              !connection.a.body ||
+              !connection.b.body ||
+              connection.a.body === connection.b.body
+            )
+              continue;
+            const axis = connection.localAxisA
+                .clone()
+                .transformDirection(connection.a.mesh.matrixWorld)
+                .normalize(),
+              velocityA = connection.a.body.linvel(),
+              velocityB = connection.b.body.linvel(),
+              relativeVelocity = new THREE.Vector3(
+                velocityB.x - velocityA.x,
+                velocityB.y - velocityA.y,
+                velocityB.z - velocityA.z,
+              ),
+              relativeSpeed = relativeVelocity.dot(axis),
+              // A free connector should only have a slight guide resistance.
+              // Contact friction already accounts for surfaces rubbing together.
+              damping =
+                state.physicsSettings.axleSlidingFriction *
+                (connection.mode === "linear" ? 1 : 0.375),
+              forceMagnitude = THREE.MathUtils.clamp(
+                relativeSpeed * damping,
+                -0.35,
+                0.35,
+              ),
+              frictionForce = axis.clone().multiplyScalar(forceMagnitude);
+            // The generic rotation+linear guide can keep the bodies visually
+            // aligned while a perpendicular velocity from gravity/contact keeps
+            // accumulating. When a bush reaches its physical stop, Rapier may
+            // convert that hidden velocity into a large axial depenetration.
+            // Project only the relative velocity onto the permitted axle axis;
+            // common motion, axial sliding and axial rotation remain untouched.
+            const perpendicularVelocity = relativeVelocity.addScaledVector(
+              axis,
+              -relativeSpeed,
+            );
+            if (perpendicularVelocity.lengthSq() > 1e-10) {
+              if (connection.a.physicsIslandFixed) {
+                connection.b.body.setLinvel(
+                  {
+                    x: velocityB.x - perpendicularVelocity.x,
+                    y: velocityB.y - perpendicularVelocity.y,
+                    z: velocityB.z - perpendicularVelocity.z,
+                  },
+                  true,
+                );
+              } else if (connection.b.physicsIslandFixed) {
+                connection.a.body.setLinvel(
+                  {
+                    x: velocityA.x + perpendicularVelocity.x,
+                    y: velocityA.y + perpendicularVelocity.y,
+                    z: velocityA.z + perpendicularVelocity.z,
+                  },
+                  true,
+                );
+              } else {
+                connection.a.body.setLinvel(
+                  {
+                    x: velocityA.x + perpendicularVelocity.x * 0.5,
+                    y: velocityA.y + perpendicularVelocity.y * 0.5,
+                    z: velocityA.z + perpendicularVelocity.z * 0.5,
+                  },
+                  true,
+                );
+                connection.b.body.setLinvel(
+                  {
+                    x: velocityB.x - perpendicularVelocity.x * 0.5,
+                    y: velocityB.y - perpendicularVelocity.y * 0.5,
+                    z: velocityB.z - perpendicularVelocity.z * 0.5,
+                  },
+                  true,
+                );
+              }
+            }
+            if (!connection.b.physicsIslandFixed)
+              connection.b.body.applyImpulse(
+                {
+                  x: -frictionForce.x * forceStepSeconds,
+                  y: -frictionForce.y * forceStepSeconds,
+                  z: -frictionForce.z * forceStepSeconds,
+                },
+                true,
+              );
+            if (!connection.a.physicsIslandFixed)
+              connection.a.body.applyImpulse(
+                {
+                  x: frictionForce.x * forceStepSeconds,
+                  y: frictionForce.y * forceStepSeconds,
+                  z: frictionForce.z * forceStepSeconds,
+                },
+                true,
+              );
+            if (
+              connection.mode === "rotation-linear" &&
+              (connection.profile === "axle-cross" ||
+                connection.profile === "axle-round") &&
+              state.physicsSettings.axleRotationFriction > 0
+            ) {
+              const angularA = connection.a.body.angvel(),
+                angularB = connection.b.body.angvel(),
+                relativeAngularSpeed =
+                  (angularB.x - angularA.x) * axis.x +
+                  (angularB.y - angularA.y) * axis.y +
+                  (angularB.z - angularA.z) * axis.z,
+                torqueMagnitude = THREE.MathUtils.clamp(
+                  relativeAngularSpeed * state.physicsSettings.axleRotationFriction,
+                  -1,
+                  1,
+                ),
+                torque = axis.clone().multiplyScalar(torqueMagnitude);
+              if (!connection.b.physicsIslandFixed)
+                connection.b.body.applyTorqueImpulse(
+                  {
+                    x: -torque.x * forceStepSeconds,
+                    y: -torque.y * forceStepSeconds,
+                    z: -torque.z * forceStepSeconds,
+                  },
+                  true,
+                );
+              if (!connection.a.physicsIslandFixed)
+                connection.a.body.applyTorqueImpulse(
+                  {
+                    x: torque.x * forceStepSeconds,
+                    y: torque.y * forceStepSeconds,
+                    z: torque.z * forceStepSeconds,
+                  },
+                  true,
+                );
+            }
+          }
+          jointForcesMs = performance.now() - phaseStarted;
+          phaseStarted = performance.now();
+          const frameTimestep = Math.min(clock.getDelta(), 1 / 60),
+            gearSubsteps = state.gearLinks.length ? 4 : 1;
+          state.world.timestep = frameTimestep / gearSubsteps;
+          for (let substep = 0; substep < gearSubsteps; substep++) {
+            projectGearVelocities();
+            state.world.step(state.physicsEventQueue, state.physicsHooks);
+            projectGearVelocities();
+          }
+          // Mutating a rigid body's pose between two world.step calls can keep
+          // Rapier's internal body set borrowed and trigger wasm-bindgen's unsafe
+          // aliasing guard. Apply the hard tooth-phase projection only after all
+          // physics substeps have completed.
+          enforceGearLinks();
           worldStepMs = performance.now() - phaseStarted;
           phaseStarted = performance.now();
           const startup = performance.now() - (state.simStartedMs ?? 0) < 350;
+          const gearedBodies = new Set<RAPIER.RigidBody>();
+          state.gearLinks.forEach((link) => {
+            if (link.a.value.body) gearedBodies.add(link.a.value.body);
+            if (link.b.value.body) gearedBodies.add(link.b.value.body);
+          });
+          const clampedBodies = new Set<RAPIER.RigidBody>();
+          state.pieces.forEach((p) => {
+            if (
+              p.body &&
+              !state.sleepingBodyHandles.has(p.body.handle) &&
+              !clampedBodies.has(p.body)
+            ) {
+              clampedBodies.add(p.body);
+              clampMotion(
+                p,
+                startup ? 2 : 12,
+                gearedBodies.has(p.body) ? (startup ? 20 : 80) : startup ? 3 : 14,
+              );
+            }
+          });
           state.pieces.forEach((p) => {
             if (
               p.body &&
@@ -5466,6 +6093,7 @@ export default function Home() {
               );
             }
           });
+          enforceAxialStops();
           state.dynamicConnectionFrame++;
           if (state.dynamicConnectionFrame % 8 === 0) updateDynamicMechanisms();
           syncMs = performance.now() - phaseStarted;
@@ -5509,8 +6137,9 @@ export default function Home() {
           console.error("Sim Studio physics frame stopped safely:", error);
           state.simLog?.events.push(`Error físico recuperado: ${detail}`);
           state.running = false;
-          state.world.free();
           state.world = undefined;
+          state.physicsHooks = undefined;
+          state.physicsEventQueue = undefined;
           state.physicsJoints.clear();
           if (spring) {
             spring.overlay.remove();
@@ -5641,6 +6270,7 @@ export default function Home() {
       window.removeEventListener("blur", clearModifiers);
       renderer.dispose();
       document.removeEventListener("visibilitychange", flushRecovery);
+      state.physicsEventQueue = undefined;
       host.removeChild(canvas);
       appRef.current = null;
     };
@@ -5847,8 +6477,9 @@ export default function Home() {
     s.pendingPlacement = undefined;
     s.snapshot = undefined;
     s.snapshotConnections = undefined;
-    s.world?.free();
+    s.physicsEventQueue = undefined;
     s.world = undefined;
+    s.physicsHooks = undefined;
     s.contactFilterStats = undefined;
     s.selected = undefined;
     s.refreshDebug();
@@ -5877,6 +6508,8 @@ export default function Home() {
     setPhysicsBusy(true);
     try {
       if (!s.running) {
+        await RAPIER.init();
+        if (appRef.current !== s) return;
         s.snapshot = s.pieces.map((piece) => ({
           piece,
           position: piece.mesh.position.clone(),
@@ -5892,144 +6525,439 @@ export default function Home() {
         }));
         s.simLog = {
           startedAt: new Date().toISOString(),
-          connections: s.connections.map((connection) => ({
-            a: connection.a.part,
-            b: connection.b.part,
-            type: `${connection.profile}:${connection.mode}`,
-            point: connection.point.toArray(),
+          connections: s.connections.map((c) => ({
+            a: c.a.part,
+            b: c.b.part,
+            type: `${c.profile}:${c.mode}`,
+            point: c.point.toArray(),
           })),
           samples: [],
           maxLinearSpeed: 0,
           maxAngularSpeed: 0,
           maxSpringForce: 0,
           events: [
-            `Inicio con ${s.pieces.length} piezas y ${s.connections.length} uniones`,
-            "Núcleo Rust/WASM SIMD activo; estabilización inicial durante 0.35 s",
+            `Inicio con ${s.pieces.length} cuerpos y ${s.connections.length} uniones`,
+            `Estabilización inicial activa durante 0.35 s`,
           ],
         };
         s.nextLogSample = 0;
         s.simStartedMs = performance.now();
-
-        // Build just the editor-side island index first because gear detection
-        // needs to know which parts already share a rigid body.
-        const parents = new Map(s.pieces.map((piece) => [piece, piece]));
+        const parent = new Map<Piece, Piece>();
+        s.pieces.forEach((piece) => parent.set(piece, piece));
         const findRoot = (piece: Piece) => {
-          let root = piece;
-          while (parents.get(root) !== root) root = parents.get(root)!;
-          let current = piece;
-          while (parents.get(current) !== root) {
-            const next = parents.get(current)!;
-            parents.set(current, root);
-            current = next;
-          }
-          return root;
-        };
-        const merge = (left: Piece, right: Piece) => {
-          const leftRoot = findRoot(left);
-          const rightRoot = findRoot(right);
-          if (leftRoot !== rightRoot) parents.set(rightRoot, leftRoot);
-        };
-        if (structuralMode === "rigid")
-          s.connections.forEach((connection) => {
-            if (connection.mode === "fixed") merge(connection.a, connection.b);
-          });
-        const detectionIslandMap = new Map<Piece, Piece[]>();
-        s.pieces.forEach((piece) => {
-          const root = findRoot(piece);
-          const island = detectionIslandMap.get(root) ?? [];
-          island.push(piece);
-          detectionIslandMap.set(root, island);
+            let root = piece;
+            while (parent.get(root) !== root) root = parent.get(root)!;
+            let current = piece;
+            while (parent.get(current) !== root) {
+              const next = parent.get(current)!;
+              parent.set(current, root);
+              current = next;
+            }
+            return root;
+          },
+          mergeRigidPieces = (a: Piece, b: Piece) => {
+            const rootA = findRoot(a),
+              rootB = findRoot(b);
+            if (rootA !== rootB) parent.set(rootB, rootA);
+          };
+        s.connections.forEach((connection) => {
+          if (structuralMode === "rigid" && connection.mode === "fixed")
+            mergeRigidPieces(connection.a, connection.b);
         });
-        const detectionIslandByPiece = new Map<Piece, Piece[]>();
-        detectionIslandMap.forEach((island) =>
-          island.forEach((piece) => detectionIslandByPiece.set(piece, island)),
+        const rigidIslandMap = new Map<Piece, Piece[]>();
+        s.pieces.forEach((piece) => {
+          const root = findRoot(piece),
+            island = rigidIslandMap.get(root) ?? [];
+          island.push(piece);
+          rigidIslandMap.set(root, island);
+        });
+        const rigidIslands = [...rigidIslandMap.values()],
+          rigidIslandByPiece = new Map<Piece, Piece[]>();
+        rigidIslands.forEach((island) =>
+          island.forEach((piece) => rigidIslandByPiece.set(piece, island)),
         );
-
         s.gearAngles.clear();
         s.gearBodyRotations.clear();
         s.gearPhases.clear();
-        s.differentialLinks = detectDifferentialLinks(
-          s.pieces,
-          detectionIslandByPiece,
-        );
+        s.differentialLinks = detectDifferentialLinks(s.pieces, rigidIslandByPiece);
         const differentialExclusions = differentialPairKeys(s.differentialLinks);
         s.gearLinks = detectGearLinks(
           s.pieces,
-          detectionIslandByPiece,
+          rigidIslandByPiece,
           differentialExclusions,
         );
-
-        const traversedConnectorPairs = detectShaftTraversals(s.pieces);
-        const excludedPairs = buildConnectorContactExclusions(
-          s.connections,
-          detectionIslandByPiece,
-          traversedConnectorPairs,
-        );
-        differentialExclusions.forEach((key) => excludedPairs.add(key));
-        s.contactExclusions.clear();
-        excludedPairs.forEach((key) => s.contactExclusions.add(key));
-
-        const built = buildRustPhysicsScene({
-          pieces: s.pieces,
-          connections: s.connections,
-          gearLinks: s.gearLinks,
-          differentialLinks: s.differentialLinks,
-          structuralMode,
-          structuralStiffness,
-          physicsSettings: s.physicsSettings,
-          excludedPairs,
-        });
-        const runtime = await RustPhysicsRuntime.create(built.scene);
-        if (appRef.current !== s) {
-          runtime.free();
-          return;
-        }
-
-        s.world = runtime;
-        s.largeSimulation = built.largeSimulation;
-        s.rigidIslandByPiece = built.rigidIslandByPiece;
-        s.physicsJoints.clear();
-        runtime.joints.forEach((joint, id) => s.physicsJoints.set(id, joint));
-        s.dynamicNoContactPairs.clear();
-        s.contactCandidates.clear();
-        s.contactFilterStats = { tested: 0, rejected: 0 };
-        s.pieces.forEach((piece) => {
-          const bodyId = built.bodyIdByPiece.get(piece);
-          piece.body = bodyId ? runtime.bodies.get(bodyId) : undefined;
-        });
-        s.createPhysicsJoint = (connection) => {
-          const joint = buildRustJointConfig(
-            connection,
-            built.bodyIdByPiece,
-            s.physicsSettings,
-          );
-          if (!joint || !runtime.addJoint(joint)) return undefined;
-          const proxy = runtime.joints.get(joint.id);
-          if (proxy) s.physicsJoints.set(joint.id, proxy);
-          return proxy;
-        };
-
         const fixedConnectionCount = s.connections.filter(
-          (connection) => connection.mode === "fixed",
-        ).length;
-        s.simLog.events[0] =
-          `Inicio con ${s.pieces.length} piezas agrupadas en ${built.rigidIslands.length} cuerpos rígidos y ${s.connections.length} uniones`;
+            (connection) => connection.mode === "fixed",
+          ).length,
+          stiffnessRatio = structuralStiffness / 100,
+          largeSimulation = rigidIslands.length > 250 || s.pieces.length > 800,
+          solverIterations = largeSimulation
+            ? 5 + Math.round(stiffnessRatio * 5)
+            : 4 + Math.round(stiffnessRatio * 12),
+          internalPgsIterations = 1 + Math.round(stiffnessRatio * 3),
+          additionalSolverIterations = largeSimulation
+            ? Math.round(stiffnessRatio * 2)
+            : Math.round(stiffnessRatio * 4),
+          world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+        s.largeSimulation = largeSimulation;
+        world.integrationParameters.numSolverIterations = solverIterations;
+        world.integrationParameters.numInternalPgsIterations = internalPgsIterations;
+        world.integrationParameters.maxCcdSubsteps = largeSimulation ? 1 : 2;
+        world.integrationParameters.contact_natural_frequency = 18;
+        world.integrationParameters.normalizedAllowedLinearError = THREE.MathUtils.lerp(
+          0.025,
+          0.002,
+          stiffnessRatio,
+        );
+        s.simLog.events[0] = `Inicio con ${s.pieces.length} piezas agrupadas en ${rigidIslands.length} cuerpos rígidos y ${s.connections.length} uniones`;
         s.simLog.events.push(
           `Modo estructural ${structuralMode}; rigidez ${structuralStiffness}%`,
-          `Rust Rapier SIMD: ${built.scene.settings.solverIterations} iteraciones × ${built.scene.settings.internalPgsIterations} PGS interno`,
-          `${fixedConnectionCount} conexiones fijas; ${built.movingJointCount} articulaciones móviles`,
-          `${s.gearLinks.length} pares de engranajes y ${s.differentialLinks.length} diferenciales nativos`,
-          `${traversedConnectorPairs.length} cruces eje/pin detectados; ${excludedPairs.size} pares sin colisión`,
+          `Fricción: piezas ${s.physicsSettings.pieceFriction}, goma ${s.physicsSettings.rubberFriction}, pines libres ${s.physicsSettings.frictionlessPinRotation}, ejes lineal ${s.physicsSettings.axleSlidingFriction}, ejes rotación ${s.physicsSettings.axleRotationFriction}; holgura ${s.physicsSettings.axleTolerance} studs`,
+          `Solver: ${solverIterations} iteraciones × ${internalPgsIterations} PGS interno + ${additionalSolverIterations} adicionales`,
+          `Engranajes: relación rígida de velocidad y bloqueo de fase dental en 4 subpasos`,
+          structuralMode === "rigid"
+            ? `${fixedConnectionCount} conexiones fijas fusionadas en islas rígidas compuestas`
+            : `${fixedConnectionCount} conexiones fijas conservadas como joints entre piezas`,
+          `${s.gearLinks.length} pares de engranajes enlazados por solapamiento de malla verde y relación de dientes`,
+          `${s.differentialLinks.length} diferenciales activos (salida izquierda + salida derecha = 2 × carcasa)`,
         );
-        if (built.redundantMovingJoints)
-          s.simLog.events.push(
-            `${built.redundantMovingJoints} uniones internas redundantes omitidas`,
+        const colliderOwners = new Map<number, Piece>(),
+          traversedConnectorPairs = detectShaftTraversals(s.pieces),
+          noContactPiecePairs = buildConnectorContactExclusions(
+            s.connections,
+            rigidIslandByPiece,
+            traversedConnectorPairs,
           );
+        differentialExclusions.forEach((key) => noContactPiecePairs.add(key));
+        s.rigidIslandByPiece = rigidIslandByPiece;
+        s.contactExclusions.clear();
+        noContactPiecePairs.forEach((key) => s.contactExclusions.add(key));
+        s.simLog.events.push(
+          `${traversedConnectorPairs.length} pares eje/pin ↔ pieza atravesada detectados geométricamente`,
+          `${noContactPiecePairs.size} pares pin/eje ↔ grupo excluidos de colisión`,
+        );
+        s.physicsEventQueue = new RAPIER.EventQueue(true);
+        s.contactFilterStats = { tested: 0, rejected: 0 };
+        s.physicsHooks = {
+          filterContactPair(colliderA, colliderB) {
+            const pieceA = colliderOwners.get(colliderA),
+              pieceB = colliderOwners.get(colliderB);
+            if (s.contactFilterStats) s.contactFilterStats.tested++;
+            const pairKey = pieceA && pieceB ? contactPairKey(pieceA, pieceB) : undefined;
+            if (
+              pieceA &&
+              pieceB &&
+              pairKey &&
+              (s.contactExclusions.has(pairKey) || s.dynamicNoContactPairs.has(pairKey))
+            ) {
+              if (s.contactFilterStats) s.contactFilterStats.rejected++;
+              return null;
+            }
+            if (
+              pieceA &&
+              pieceB &&
+              pairKey &&
+              (pieceA.dynamicAxleConnections || pieceB.dynamicAxleConnections)
+            )
+              s.contactCandidates.set(pairKey, { a: pieceA, b: pieceB });
+            return RAPIER.SolverFlags.COMPUTE_IMPULSE;
+          },
+          filterIntersectionPair() {
+            return true;
+          },
+        };
+        world.createCollider(
+          RAPIER.ColliderDesc.cuboid(5000, 0.15, 5000)
+            .setTranslation(0, -0.2, 0)
+            .setFriction(CONTACT_FRICTION.floor)
+            .setCollisionGroups(
+              interactionGroups(
+                COLLISION_GROUP_NON_GEAR,
+                COLLISION_GROUP_NON_GEAR | COLLISION_GROUP_GEAR_NORMAL,
+              ),
+            ),
+        );
+        rigidIslands.forEach((island) => {
+          const origin = island
+              .reduce((sum, piece) => sum.add(piece.mesh.position), new THREE.Vector3())
+              .multiplyScalar(1 / island.length),
+            islandFixed = island.some((piece) => piece.fixed),
+            additionalMass = island.reduce(
+              (sum, piece) => sum + (piece.kind === "motor" ? 2 : 0.65),
+              0,
+            ),
+            desc = islandFixed
+              ? RAPIER.RigidBodyDesc.fixed()
+              : RAPIER.RigidBodyDesc.dynamic()
+                  .setLinearDamping(0.55)
+                  .setAngularDamping(0.95)
+                  .setCcdEnabled(!largeSimulation)
+                  .setSoftCcdPrediction(largeSimulation ? 0 : 0.1)
+                  .setAdditionalSolverIterations(additionalSolverIterations)
+                  .setAdditionalMass(additionalMass);
+          desc.setTranslation(origin.x, origin.y, origin.z);
+          const rb = world.createRigidBody(desc);
+          island.forEach((p) => {
+            const physicsOffset = p.mesh.position.clone().sub(origin),
+              physicsBase = p.mesh.quaternion.clone();
+            p.physicsOffset = physicsOffset;
+            p.physicsBase = physicsBase;
+            p.physicsIsland = island;
+            p.physicsIslandFixed = islandFixed;
+            p.body = rb;
+            const finishPieceCollider = (
+              collider: RAPIER.ColliderDesc,
+              gearLayer: boolean,
+              density: number,
+            ) => {
+              if (gearLayer)
+                collider.setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min);
+              collider
+                .setFriction(
+                  gearLayer
+                    ? CONTACT_FRICTION.gearMesh
+                    : p.kind === "wheel" && !p.gear
+                      ? s.physicsSettings.rubberFriction
+                      : s.physicsSettings.pieceFriction,
+                )
+                .setRestitution(0)
+                .setActiveHooks(RAPIER.ActiveHooks.FILTER_CONTACT_PAIRS)
+                .setCollisionGroups(
+                  gearLayer
+                    ? interactionGroups(
+                        COLLISION_GROUP_GEAR_MESH,
+                        COLLISION_GROUP_GEAR_MESH,
+                      )
+                    : p.gear
+                      ? interactionGroups(
+                          COLLISION_GROUP_GEAR_NORMAL,
+                          COLLISION_GROUP_NON_GEAR,
+                        )
+                      : interactionGroups(
+                          COLLISION_GROUP_NON_GEAR,
+                          COLLISION_GROUP_NON_GEAR | COLLISION_GROUP_GEAR_NORMAL,
+                        ),
+                )
+                .setDensity(density);
+              const createdCollider = world.createCollider(collider, rb);
+              colliderOwners.set(createdCollider.handle, p);
+            };
+            const createPieceCollider = (
+              primitive: CollisionPrimitive,
+              gearLayer: boolean,
+            ) => {
+              // Bushes, axle joiners and gears often sit in an exactly sized
+              // axial gap. Keep the authored/debug maps unchanged, but apply the
+              // configured clearance only to the normal collider. The magenta
+              // layer is exclusively gear-to-gear contact and keeps its authored
+              // thickness unchanged.
+              const axleClearance =
+                !gearLayer && (p.gear || /bush|axle joiner/i.test(p.name))
+                  ? s.physicsSettings.axleTolerance
+                  : 0;
+              const collider =
+                primitive.shape === "box"
+                  ? RAPIER.ColliderDesc.cuboid(
+                      primitive.size!.x / 2,
+                      primitive.size!.y / 2,
+                      primitive.size!.z / 2,
+                    )
+                  : RAPIER.ColliderDesc.cylinder(
+                      Math.max(0.01, primitive.halfHeight! - axleClearance / 2),
+                      primitive.radius!,
+                    );
+              const center = physicsOffset
+                  .clone()
+                  .add(primitive.center.clone().applyQuaternion(physicsBase)),
+                rotation = physicsBase.clone().multiply(primitive.rotation);
+              collider.setTranslation(center.x, center.y, center.z).setRotation(rotation);
+              finishPieceCollider(
+                collider,
+                gearLayer,
+                gearLayer
+                  ? 0
+                  : (p.kind === "motor" ? 1.7 : 1) / Math.max(1, p.colliders.length),
+              );
+            };
+            const exactMesh = p.exactCollider
+              ? exactTriangleMeshForPiece(p, physicsOffset, physicsBase)
+              : undefined;
+            if (exactMesh)
+              finishPieceCollider(
+                RAPIER.ColliderDesc.trimesh(
+                  exactMesh.vertices,
+                  exactMesh.indices,
+                  RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES |
+                    RAPIER.TriMeshFlags.MERGE_DUPLICATE_VERTICES |
+                    RAPIER.TriMeshFlags.DELETE_DEGENERATE_TRIANGLES |
+                    RAPIER.TriMeshFlags.DELETE_DUPLICATE_TRIANGLES,
+                ),
+                false,
+                // The rigid body already receives an explicit LEGO-like mass.
+                // LDraw surfaces are not always watertight, so deriving mass
+                // from their enclosed volume would be unstable.
+                0,
+              );
+            else
+              p.colliders.forEach((primitive) => createPieceCollider(primitive, false));
+            p.gearColliders.forEach((primitive) => createPieceCollider(primitive, true));
+          });
+        });
+        // Establish the reference orientation before the first physics step.
+        // Otherwise the first movement becomes the target phase and is never
+        // corrected, which creates a small slip every time simulation starts.
+        s.gearLinks.forEach((link) => {
+          s.gearPhases.set(gearLinkKey(link), 0);
+          for (const piece of [link.a.value, link.b.value]) {
+            const body = piece.body;
+            if (!body || s.gearBodyRotations.has(body.handle)) continue;
+            const rotation = body.rotation();
+            s.gearBodyRotations.set(
+              body.handle,
+              new THREE.Quaternion(
+                rotation.x,
+                rotation.y,
+                rotation.z,
+                rotation.w,
+              ).normalize(),
+            );
+          }
+        });
+        let movingJointCount = 0,
+          redundantMovingJoints = 0;
+        const movingGuideJoints = new Map<string, string>();
+        s.physicsJoints.clear();
+        s.dynamicNoContactPairs.clear();
+        s.contactCandidates.clear();
+        const createPhysicsJoint = (c: Connection) => {
+          if (!c.a.body || !c.b.body) return;
+          if (structuralMode === "rigid" && c.mode === "fixed" && c.a.body === c.b.body)
+            return;
+          if (c.a.body === c.b.body) {
+            redundantMovingJoints++;
+            return;
+          }
+          const positionA = c.a.body.translation(),
+            positionB = c.b.body.translation(),
+            rotationA = c.a.body.rotation(),
+            rotationB = c.b.body.rotation(),
+            inverseRotationA = new THREE.Quaternion(
+              rotationA.x,
+              rotationA.y,
+              rotationA.z,
+              rotationA.w,
+            ).invert(),
+            inverseRotationB = new THREE.Quaternion(
+              rotationB.x,
+              rotationB.y,
+              rotationB.z,
+              rotationB.w,
+            ).invert(),
+            forcedPivot =
+              c.forced && c.localPointB
+                ? c.b.mesh.localToWorld(c.localPointB.clone())
+                : undefined,
+            // A forced joint represents a virtual extension between the two red
+            // points. Rapier still needs one common pivot; using the shaft point
+            // for both local anchors preserves the current visual offset instead
+            // of pulling or teleporting the pieces together at simulation start.
+            worldAnchorA = forcedPivot ?? c.point,
+            worldAnchorB = forcedPivot ?? c.point,
+            a = worldAnchorA
+              .clone()
+              .sub(new THREE.Vector3(positionA.x, positionA.y, positionA.z))
+              .applyQuaternion(inverseRotationA),
+            b = worldAnchorB
+              .clone()
+              .sub(new THREE.Vector3(positionB.x, positionB.y, positionB.z))
+              .applyQuaternion(inverseRotationB),
+            worldAxis = c.axis.clone().normalize(),
+            axis = worldAxis.clone().applyQuaternion(inverseRotationA),
+            worldFrame = new THREE.Quaternion().setFromUnitVectors(
+              new THREE.Vector3(1, 0, 0),
+              worldAxis,
+            ),
+            frameA = inverseRotationA.clone().multiply(worldFrame),
+            frameB = inverseRotationB.clone().multiply(worldFrame),
+            dynamicAxle =
+              (c.profile === "axle-cross" || c.profile === "axle-round") &&
+              c.b.dynamicAxleConnections;
+          if (c.mode === "linear" || c.mode === "rotation-linear") {
+            const axisKey = worldAxis.clone();
+            if (
+              axisKey.x < -1e-6 ||
+              (Math.abs(axisKey.x) <= 1e-6 && axisKey.y < -1e-6) ||
+              (Math.abs(axisKey.x) <= 1e-6 &&
+                Math.abs(axisKey.y) <= 1e-6 &&
+                axisKey.z < 0)
+            )
+              axisKey.multiplyScalar(-1);
+            const handles = [c.a.body.handle, c.b.body.handle].sort(
+                (left, right) => left - right,
+              ),
+              guideKey = `${handles[0]}:${handles[1]}:${c.mode}:${axisKey.x.toFixed(3)}:${axisKey.y.toFixed(3)}:${axisKey.z.toFixed(3)}`,
+              existingConnectionId = movingGuideJoints.get(guideKey);
+            if (existingConnectionId && s.physicsJoints.has(existingConnectionId)) {
+              redundantMovingJoints++;
+              return;
+            }
+            movingGuideJoints.set(guideKey, c.id);
+          }
+          let joint: RAPIER.JointData;
+          if (c.mode === "rotation" || c.mode === "motor")
+            joint = RAPIER.JointData.revolute(a, b, axis);
+          else if (c.mode === "linear") joint = RAPIER.JointData.prismatic(a, b, axis);
+          else if (c.mode === "rotation-linear")
+            joint = RAPIER.JointData.generic(
+              a,
+              b,
+              axis,
+              RAPIER.JointAxesMask.LinY |
+                RAPIER.JointAxesMask.LinZ |
+                RAPIER.JointAxesMask.AngY |
+                RAPIER.JointAxesMask.AngZ,
+            );
+          else joint = RAPIER.JointData.fixed(a, frameA, b, frameB);
+          joint.frame1 = frameA;
+          joint.frame2 = frameB;
+          const created = world.createImpulseJoint(joint, c.a.body, c.b.body, true);
+          movingJointCount++;
+          created.setContactsEnabled(true);
+          if (c.mode === "motor")
+            (created as RAPIER.RevoluteImpulseJoint).configureMotorVelocity(
+              c.motorSpeed,
+              c.motorForce,
+            );
+          else if (c.mode === "rotation" && c.b.frictionPin)
+            (created as RAPIER.RevoluteImpulseJoint).configureMotorVelocity(0, 3.5);
+          else if (
+            c.mode === "rotation" &&
+            frictionlessPinRefs.has(c.b.part) &&
+            s.physicsSettings.frictionlessPinRotation > 0
+          )
+            (created as RAPIER.RevoluteImpulseJoint).configureMotorVelocity(
+              0,
+              s.physicsSettings.frictionlessPinRotation,
+            );
+          if (c.mode === "linear" && !dynamicAxle) {
+            const limit = Math.max(0.15, c.travel / 2);
+            (created as RAPIER.PrismaticImpulseJoint).setLimits(-limit, limit);
+          }
+          s.physicsJoints.set(c.id, created);
+          return created;
+        };
+        s.createPhysicsJoint = createPhysicsJoint;
+        s.connections.forEach(createPhysicsJoint);
+        if (redundantMovingJoints)
+          s.simLog.events.push(
+            `${redundantMovingJoints} uniones móviles internas redundantes omitidas`,
+          );
+        s.world = world;
         s.running = true;
         setRunning(true);
         setMessage(
-          `${built.rigidIslands.length} cuerpos rígidos · ${built.movingJointCount} articulaciones móviles · ${
-            built.largeSimulation
+          `${rigidIslands.length} cuerpos rígidos · ${movingJointCount} articulaciones móviles · ${
+            largeSimulation
               ? "modo de rendimiento para ensamblaje grande"
               : "precisión completa"
           }`,
@@ -6072,7 +7000,6 @@ export default function Home() {
           x.piece.physicsBase = undefined;
           x.piece.physicsIsland = undefined;
           x.piece.physicsIslandFixed = undefined;
-          x.piece.physicsBodyId = undefined;
         });
         if (s.snapshotConnections) {
           s.connections = s.snapshotConnections.map((connection) => {
@@ -6095,8 +7022,9 @@ export default function Home() {
         s.renderBatchesDirty = true;
         s.snapshot = undefined;
         s.snapshotConnections = undefined;
-        s.world?.free();
+        s.physicsEventQueue = undefined;
         s.world = undefined;
+        s.physicsHooks = undefined;
         s.contactFilterStats = undefined;
         s.largeSimulation = undefined;
         s.simStartedMs = undefined;
@@ -6892,7 +7820,10 @@ export default function Home() {
     });
     const activeJoint = state.physicsJoints.get(id);
     if (running && activeJoint)
-      activeJoint.configureMotorVelocity(motorSpeed, connection.motorForce);
+      (activeJoint as RAPIER.RevoluteImpulseJoint).configureMotorVelocity(
+        motorSpeed,
+        connection.motorForce,
+      );
     setConnectionRevision((value) => value + 1);
     setMessage(`Motor ${motorSpeed.toFixed(1)} rad/s`);
   };
@@ -6911,7 +7842,10 @@ export default function Home() {
     });
     const activeJoint = state.physicsJoints.get(id);
     if (running && activeJoint)
-      activeJoint.configureMotorVelocity(connection.motorSpeed, motorForce);
+      (activeJoint as RAPIER.RevoluteImpulseJoint).configureMotorVelocity(
+        connection.motorSpeed,
+        motorForce,
+      );
     setConnectionRevision((value) => value + 1);
     setMessage(`Fuerza del motor ${motorForce.toFixed(0)}`);
   };
@@ -9187,7 +10121,7 @@ export default function Home() {
           </button>
           <b>{t.physicsEngine}</b>
           <span>
-            <i /> Rust + Rapier SIMD
+            <i /> Rapier + LDraw Connect
           </span>
           <p>{t.physicsHelp}</p>
         </div>

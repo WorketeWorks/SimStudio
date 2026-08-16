@@ -1,3 +1,0 @@
-[target.wasm32-unknown-unknown]
-# simd128 lets Rapier's simd8 feature map its packed math to browser SIMD.
-rustflags = ["-C", "target-feature=+simd128"]

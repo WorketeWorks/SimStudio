@@ -38,6 +38,3 @@ yarn-error.log*
 /pages-dist/
 /outputs/
 /work/
-
-# Rust build cache. The generated browser WASM in app/physics/wasm is committed.
-/physics-core/target/
