@@ -1969,8 +1969,6 @@ export default function Home() {
         state.renderBatchRoot.traverse((object) => {
           if (object.userData.ownedBatchGeometry && object instanceof THREE.Line)
             object.geometry.dispose();
-          if (object.userData.ownedBatchMaterial && object instanceof THREE.Line)
-            (object.material as THREE.Material).dispose();
         });
         scene.remove(state.renderBatchRoot);
         state.renderBatchRoot.clear();
@@ -1978,7 +1976,6 @@ export default function Home() {
         state.renderLineBatchRoot = undefined;
       }
       state.renderBatchItems = [];
-      state.renderLineBatchItems = [];
       state.renderBatchStats = {
         lineBatches: 0,
         meshBatches: 0,
@@ -2022,23 +2019,6 @@ export default function Home() {
         });
         if (changed) batch.mesh.instanceMatrix.needsUpdate = true;
       }
-      for (const batch of state.renderLineBatchItems ?? []) {
-        const output = batch.matrixAttribute.array as Float32Array;
-        let changed = false;
-        batch.pieces.forEach((piece, pieceIndex) => {
-          if (
-            state.running &&
-            (!piece.body ||
-              piece.physicsIslandFixed ||
-              state.sleepingBodyHandles.has(piece.body.handle))
-          )
-            return;
-          const pieceMatrix = pieceMatrices.get(piece) ?? piece.mesh.matrix;
-          pieceMatrix.toArray(output, pieceIndex * 16);
-          changed = true;
-        });
-        if (changed) batch.matrixAttribute.needsUpdate = true;
-      }
       state.renderBatchesDirty = false;
     };
 
@@ -2049,12 +2029,11 @@ export default function Home() {
       root.name = "Sim Studio instanced LDraw batches";
       state.renderBatchRoot = root;
       state.renderBatchItems = [];
-      state.renderLineBatchItems = [];
       state.renderBatchesDirty = true;
       scene.add(root);
-      let hiddenOriginalLines = 0,
-        outlineBatchCount = 0,
-        hiddenOriginalMeshes = 0;
+      const hiddenOriginalLines = 0,
+        outlineBatchCount = 0;
+      let hiddenOriginalMeshes = 0;
       state.renderLineBatchRoot = undefined;
       const cloneGeometryRange = (
         source: THREE.BufferGeometry,
@@ -2166,204 +2145,12 @@ export default function Home() {
             createdBatches++;
           });
         });
-        // LDraw represents outlines as many individual LineSegments objects.
-        // Keeping those originals produced 6-8k draw calls on large imports.
-        // Merge equal-material outlines by repeated part. Per-piece transforms
-        // are instanced on the GPU, so moving a mechanism updates only a small
-        // matrix buffer instead of rebuilding hundreds of thousands of lines.
-        const linePoint = new THREE.Vector3();
-        const lineEnd = new THREE.Vector3();
-        let createdLineBatches = 0;
-        const lineGroups = new Map<
-          string,
-          {
-            material: THREE.Material;
-            positions: number[];
-            control0: number[];
-            control1: number[];
-            directions: number[];
-            conditional: boolean;
-          }
-        >();
-        template.mesh.traverse((child) => {
-          if (!(child instanceof THREE.LineSegments)) return;
-          const materials = Array.isArray(child.material)
-            ? child.material
-            : [child.material];
-          const material = materials[0];
-          if (!material) return;
-          const lineMaterial = material as THREE.LineBasicMaterial;
-          const key = [
-            material.type,
-            lineMaterial.color?.getHexString() ?? "",
-            material.opacity,
-            Number(material.transparent),
-            Number(material.depthTest),
-            Number((lineMaterial as THREE.LineBasicMaterial).vertexColors),
-          ].join(":");
-          const conditional = Boolean(
-            (material as THREE.ShaderMaterial & {
-              isLDrawConditionalLineMaterial?: boolean;
-            }).isLDrawConditionalLineMaterial,
-          );
-          const group = lineGroups.get(key) ?? {
-            material,
-            positions: [] as number[],
-            control0: [] as number[],
-            control1: [] as number[],
-            directions: [] as number[],
-            conditional,
-          };
-          const sourcePosition = child.geometry.getAttribute("position");
-          if (!sourcePosition) return;
-          const childLocal = inverseWrapper.clone().multiply(child.matrixWorld);
-          const control0 = child.geometry.getAttribute("control0"),
-            control1 = child.geometry.getAttribute("control1"),
-            direction = child.geometry.getAttribute("direction");
-          const index = child.geometry.index;
-          const appendVertex = (vertexIndex: number) => {
-            linePoint
-              .fromBufferAttribute(sourcePosition, vertexIndex)
-              .applyMatrix4(childLocal);
-            group.positions.push(linePoint.x, linePoint.y, linePoint.z);
-            if (!conditional || !control0 || !control1 || !direction) return;
-            linePoint
-              .fromBufferAttribute(control0, vertexIndex)
-              .applyMatrix4(childLocal);
-            group.control0.push(linePoint.x, linePoint.y, linePoint.z);
-            linePoint
-              .fromBufferAttribute(control1, vertexIndex)
-              .applyMatrix4(childLocal);
-            group.control1.push(linePoint.x, linePoint.y, linePoint.z);
-            linePoint
-              .fromBufferAttribute(sourcePosition, vertexIndex)
-              .applyMatrix4(childLocal);
-            lineEnd
-              .fromBufferAttribute(sourcePosition, vertexIndex)
-              .add(new THREE.Vector3().fromBufferAttribute(direction, vertexIndex))
-              .applyMatrix4(childLocal)
-              .sub(linePoint);
-            group.directions.push(lineEnd.x, lineEnd.y, lineEnd.z);
-          };
-          if (index) {
-            for (let offset = 0; offset < index.count; offset++)
-              appendVertex(index.getX(offset));
-          } else {
-            for (let offset = 0; offset < sourcePosition.count; offset++)
-              appendVertex(offset);
-          }
-          lineGroups.set(key, group);
-        });
-        lineGroups.forEach(
-          ({ material, positions, control0, control1, directions, conditional }) => {
-          if (!positions.length) return;
-          const geometry = new THREE.InstancedBufferGeometry(),
-            positionAttribute = new THREE.BufferAttribute(
-              new Float32Array(positions),
-              3,
-            ),
-            matrixAttribute = new THREE.InstancedBufferAttribute(
-              new Float32Array(pieces.length * 16),
-              16,
-            ),
-            sourceMaterial = material as THREE.LineBasicMaterial & {
-              uniforms?: {
-                diffuse?: { value?: unknown };
-                opacity?: { value?: unknown };
-              };
-            },
-            uniformColor = sourceMaterial.uniforms?.diffuse?.value,
-            outlineColor =
-              sourceMaterial.color instanceof THREE.Color
-                ? sourceMaterial.color.clone()
-                : uniformColor instanceof THREE.Color
-                  ? uniformColor.clone()
-                  : new THREE.Color(darkTheme ? 0x9aa4ad : 0x20262b),
-            uniformOpacity = sourceMaterial.uniforms?.opacity?.value,
-            outlineOpacity = Number.isFinite(sourceMaterial.opacity)
-              ? sourceMaterial.opacity
-              : typeof uniformOpacity === "number" && Number.isFinite(uniformOpacity)
-                ? uniformOpacity
-                : 1,
-            batchMaterial = conditional
-              ? (material.clone() as THREE.ShaderMaterial)
-              : new THREE.ShaderMaterial({
-                  uniforms: THREE.UniformsUtils.merge([
-                    THREE.UniformsLib.fog,
-                    {
-                      diffuse: { value: outlineColor },
-                      opacity: { value: outlineOpacity },
-                    },
-                  ]),
-                  vertexShader: `
-                    attribute mat4 instanceMatrix;
-                    #include <fog_pars_vertex>
-                    void main() {
-                      vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4(position, 1.0);
-                      gl_Position = projectionMatrix * mvPosition;
-                      #include <fog_vertex>
-                    }
-                  `,
-                  fragmentShader: `
-                    uniform vec3 diffuse;
-                    uniform float opacity;
-                    #include <fog_pars_fragment>
-                    void main() {
-                      gl_FragColor = vec4(diffuse, opacity);
-                      #include <fog_fragment>
-                    }
-                  `,
-                  fog: true,
-                  transparent: sourceMaterial.transparent,
-                  depthTest: sourceMaterial.depthTest,
-                  depthWrite: sourceMaterial.depthWrite,
-                  opacity: outlineOpacity,
-                  blending: sourceMaterial.blending,
-                });
-          if (conditional) {
-            geometry.setAttribute(
-              "control0",
-              new THREE.BufferAttribute(new Float32Array(control0), 3),
-            );
-            geometry.setAttribute(
-              "control1",
-              new THREE.BufferAttribute(new Float32Array(control1), 3),
-            );
-            geometry.setAttribute(
-              "direction",
-              new THREE.BufferAttribute(new Float32Array(directions), 3),
-            );
-            batchMaterial.vertexShader = `attribute mat4 instanceMatrix;\n${batchMaterial.vertexShader.replaceAll(
-              "modelViewMatrix * vec4(",
-              "modelViewMatrix * instanceMatrix * vec4(",
-            )}`;
-          }
-          matrixAttribute.setUsage(THREE.DynamicDrawUsage);
-          geometry.setAttribute("position", positionAttribute);
-          geometry.setAttribute("instanceMatrix", matrixAttribute);
-          geometry.instanceCount = pieces.length;
-          const line = new THREE.LineSegments(geometry, batchMaterial);
-          line.name = `${template.part} outlines × ${pieces.length}`;
-          line.frustumCulled = false;
-          line.raycast = () => undefined;
-          line.userData.ownedBatchGeometry = true;
-          line.userData.ownedBatchMaterial = true;
-          root.add(line);
-          state.renderLineBatchItems.push({ line, pieces, matrixAttribute });
-          outlineBatchCount++;
-          createdLineBatches++;
-          },
-        );
         if (!createdBatches) return;
         pieces.forEach((piece) => {
           piece.mesh.traverse((child) => {
             if (child instanceof THREE.Mesh) {
               child.visible = false;
               hiddenOriginalMeshes++;
-            }
-            if (child instanceof THREE.LineSegments && createdLineBatches > 0) {
-              child.visible = false;
-              hiddenOriginalLines++;
             }
           });
           piece.renderBatched = true;
@@ -2527,7 +2314,6 @@ export default function Home() {
       gpuRenderer,
       gpuVendor,
       renderBatchItems: [],
-      renderLineBatchItems: [],
       renderBatchStats: {
         lineBatches: 0,
         meshBatches: 0,
