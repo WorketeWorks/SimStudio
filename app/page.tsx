@@ -12,12 +12,7 @@ import * as THREE from "three";
 import RAPIER from "@dimforge/rapier3d-compat";
 import { LDrawLoader } from "./vendor/LDrawLoader.js";
 import { LDrawConditionalLineMaterial } from "three/addons/materials/LDrawConditionalLineMaterial.js";
-import {
-  ldrawToScenePlacement,
-  makeLDR,
-  parseLDR,
-  type LDrawPlacement,
-} from "./ldraw";
+import { ldrawToScenePlacement, makeLDR, parseLDR, type LDrawPlacement } from "./ldraw";
 import { flattenLDrawRenderables } from "./ldraw-geometry";
 import { extractStudioLDraw } from "./studio-io";
 import {
@@ -26,7 +21,6 @@ import {
   detectConnectorHoles,
   fallbackBeamConnectors,
   hybridAxlePinConnectors,
-  objectLocalBounds,
   rodConnectors,
   straightAxleCollisionPrimitives,
   straightAxleConnectors,
@@ -35,19 +29,12 @@ import {
 } from "./connectors";
 import { paletteParts, paletteRequestAliases } from "./palette";
 import { preloadedConnectionMaps } from "./connection-maps";
-import {
-  preloadedCollisionMaps,
-  preloadedGearCollisionMaps,
-} from "./collision-maps";
+import { preloadedCollisionMaps, preloadedGearCollisionMaps } from "./collision-maps";
 import {
   buildConnectorContactExclusions,
   contactPairKey,
 } from "./physics-contact-filter";
-import {
-  gearSpecFor,
-  type GearPair,
-  type GearPose,
-} from "./gears";
+import { gearSpecFor, type GearPose } from "./gears";
 import preloadedCatalog from "./preloaded-catalog.json";
 import {
   PROJECT_EXTENSION,
@@ -58,7 +45,6 @@ import {
   listBrowserProjects,
   loadBrowserProject,
   loadRecoveryProject,
-  projectSummary,
   safeProjectFileName,
   saveBrowserProject,
   saveRecoveryProject,
@@ -68,339 +54,71 @@ import {
   type SavedConnector,
   type SimStudioProjectDocument,
 } from "./project-format";
-type PieceKind = "beam" | "wheel" | "motor";
-type PartOrigin = "default-palette" | "catalog-search" | "model-import";
-type PartSource = "packaged-cache" | "external-catalog" | "ldraw-network";
-type CatalogPart = {
-  part: string;
-  name: string;
-  thumb?: string;
-  kind: PieceKind;
-  color: number;
-  family?: string;
-  modelPart?: string;
-  rawThumb?: boolean;
-  geometry?: string;
-  sourceColor?: number;
-  gear?: boolean;
-  origin?: PartOrigin;
-  sourceKind?: PartSource;
-  requestedPart?: string;
-  catalogReturnedPart?: string;
-  resolvedPart?: string;
-  catalogQuery?: string;
-  importFile?: string;
-  downloadUrl?: string;
-  downloadSource?: "local" | "primary" | "legacy";
-  /** Runtime-only geometry restored from a self-contained .simstudio file. */
-  embeddedGeometry?: JsonObject;
-  projectAssetKey?: string;
-};
-type Piece = CatalogPart & {
-  id: number;
-  mesh: THREE.Object3D;
-  connectors: MeshConnector[];
-  colliders: CollisionPrimitive[];
-  gearColliders: CollisionPrimitive[];
-  gear: boolean;
-  /** Use the rendered triangle surface as the normal physics collider. */
-  exactCollider: boolean;
-  fixed: boolean;
-  pin: boolean;
-  frictionPin: boolean;
-  dynamicAxleConnections: boolean;
-  rotationPivotLocal?: THREE.Vector3;
-  rotationPivotKey?: string;
-  lockSprite?: THREE.Sprite;
-  body?: RAPIER.RigidBody;
-  physicsOffset?: THREE.Vector3;
-  physicsBase?: THREE.Quaternion;
-  physicsIsland?: Piece[];
-  physicsIslandFixed?: boolean;
-  renderBatched?: boolean;
-};
-type EditorPieceSnapshot = {
-  piece: Piece;
-  position: THREE.Vector3;
-  rotation: THREE.Quaternion;
-  scale: THREE.Vector3;
-  color: number;
-  fixed: boolean;
-  exactCollider: boolean;
-  dynamicAxleConnections: boolean;
-  rotationPivotLocal?: THREE.Vector3;
-  rotationPivotKey?: string;
-  connectors: MeshConnector[];
-  colliders: CollisionPrimitive[];
-  gearColliders: CollisionPrimitive[];
-};
-type EditorSnapshot = {
-  pieces: EditorPieceSnapshot[];
-  connections: Connection[];
-  connectionModes: AppState["connectionModes"];
-  selected?: Piece;
-};
-type RenderBatchItem = {
-  mesh: THREE.InstancedMesh;
-  pieces: Piece[];
-  localMatrix: THREE.Matrix4;
-};
-type RenderBatchStats = {
-  lineBatches: number;
-  meshBatches: number;
-  hiddenOriginalLines: number;
-  hiddenOriginalMeshes: number;
-};
-type PreparedImportPlacement = {
-  catalog: CatalogPart;
-  source: LDrawPlacement;
-  position: THREE.Vector3;
-  rotation: THREE.Quaternion;
-};
-type ImportDraft = {
-  fileName: string;
-  status: "reading" | "palette" | "external" | "preview" | "ready" | "error";
-  progress: number;
-  total: number;
-  paletteCount: number;
-  externalCount: number;
-  placements: PreparedImportPlacement[];
-  preview?: string;
-  error?: string;
-};
-type JointMode = "fixed" | "rotation" | "linear" | "rotation-linear" | "motor";
-type StructuralMode = "rigid" | "flexible";
-type ConnectionProfile = "pin-round" | "axle-cross" | "axle-round";
-type Connection = {
-  id: string;
-  a: Piece;
-  b: Piece;
-  socket: MeshConnector;
-  shaft: MeshConnector;
-  mode: JointMode;
-  profile: ConnectionProfile;
-  point: THREE.Vector3;
-  axis: THREE.Vector3;
-  localAxisA: THREE.Vector3;
-  travel: number;
-  motorSpeed: number;
-  motorForce: number;
-  userConfigured: boolean;
-  forced?: boolean;
-  forcedOffset?: number;
-  localPointA?: THREE.Vector3;
-  localPointB?: THREE.Vector3;
-  axialStops?: {
-    piece: Piece;
-    primitive: CollisionPrimitive;
-    side: 1 | -1;
-    minimumDistance: number;
-    lastLoggedMs?: number;
-  }[];
-};
-type RuntimeGearLink = GearPair<Piece> & {
-  axisA: THREE.Vector3;
-  axisB: THREE.Vector3;
-  signB: number;
-  perpendicular: boolean;
-};
-type RuntimeDifferentialLink = {
-  carrier: Piece;
-  left: Piece;
-  right: Piece;
-  axisCarrier: THREE.Vector3;
-  axisLeft: THREE.Vector3;
-  axisRight: THREE.Vector3;
-};
-type ManualConnectDraft = {
-  piece: Piece;
-  connector: MeshConnector;
-  anchorLocal: THREE.Vector3;
-  cursor: THREE.Vector3;
-  plane: THREE.Plane;
-  line: THREE.Line;
-  label: HTMLDivElement;
-  forced: boolean;
-  connectorsWereVisible: boolean;
-};
-type DebugFlags = { colliders: boolean; connectors: boolean; physics: boolean };
-type SimulationLog = {
-  startedAt: string;
-  endedAt?: string;
-  duration?: number;
-  connections: { a: string; b: string; type: string; point: number[] }[];
-  samples: {
-    time: number;
-    bodies: {
-      id: number;
-      part: string;
-      fixed: boolean;
-      position: number[];
-      rotation: number[];
-      linearVelocity: number[];
-      angularVelocity: number[];
-    }[];
-  }[];
-  maxLinearSpeed: number;
-  maxAngularSpeed: number;
-  maxSpringForce: number;
-  events: string[];
-};
-type FramePerformanceSample = {
-  elapsedMs: number;
-  frameIntervalMs: number;
-  betweenFramesMs: number;
-  totalMs: number;
-  inputMs: number;
-  forceResetMs: number;
-  springMs: number;
-  jointForcesMs: number;
-  worldStepMs: number;
-  syncMs: number;
-  physicsLogMs: number;
-  connectionScanMs: number;
-  batchMs: number;
-  debugMs: number;
-  locksMs: number;
-  renderMs: number;
-  gpuMs: number | null;
-  pieces: number;
-  connections: number;
-  activeBodies: number;
-  sleepingBodies: number;
-  drawCalls: number;
-  triangles: number;
-  lines: number;
-  resolutionScale: number;
-};
-type PerformanceTrace = {
-  startedAt: string;
-  startedAtMs: number;
-  samples: FramePerformanceSample[];
-  cursor: number;
-  totalFrames: number;
-};
-type PhysicsSettings = {
-  pieceFriction: number;
-  rubberFriction: number;
-  frictionlessPinRotation: number;
-  axleSlidingFriction: number;
-  axleRotationFriction: number;
-  axleTolerance: number;
-};
-type GridStep = 0 | 0.25 | 0.5 | 1;
-type AxleSnapStep = 0 | 0.0625 | 0.125 | 0.25;
-type RotationSnapStep = 0 | 11.25 | 22.5 | 45;
-type AppState = {
-  scene: THREE.Scene;
-  renderer: THREE.WebGLRenderer;
-  camera: THREE.PerspectiveCamera;
-  cameraTarget: THREE.Vector3;
-  floor: THREE.Mesh;
-  grid: THREE.Group;
-  gridStep: GridStep;
-  axleSnapStep: AxleSnapStep;
-  rotationSnapStep: RotationSnapStep;
-  pieces: Piece[];
-  selected?: Piece;
-  running: boolean;
-  physicsSettings: PhysicsSettings;
-  world?: RAPIER.World;
-  physicsHooks?: RAPIER.PhysicsHooks;
-  physicsEventQueue?: RAPIER.EventQueue;
-  contactFilterStats?: { tested: number; rejected: number };
-  connections: Connection[];
-  gearLinks: RuntimeGearLink[];
-  differentialLinks: RuntimeDifferentialLink[];
-  gearAngles: Map<string, number>;
-  gearBodyRotations: Map<number, THREE.Quaternion>;
-  gearPhases: Map<string, number>;
-  sleepingBodyHandles: Set<number>;
-  physicsJoints: Map<string, RAPIER.ImpulseJoint>;
-  dynamicNoContactPairs: Set<string>;
-  contactExclusions: Set<string>;
-  contactCandidates: Map<string, { a: Piece; b: Piece }>;
-  rigidIslandByPiece?: Map<Piece, Piece[]>;
-  createPhysicsJoint?: (connection: Connection) => RAPIER.ImpulseJoint | undefined;
-  dynamicConnectionFrame: number;
-  manualConnect?: ManualConnectDraft;
-  snapshot?: {
-    piece: Piece;
-    position: THREE.Vector3;
-    rotation: THREE.Quaternion;
-  }[];
-  snapshotConnections?: Connection[];
-  connectionModes: Map<
-    string,
-    {
-      mode: JointMode;
-      motorSpeed: number;
-      motorForce: number;
-      userConfigured: boolean;
-    }
-  >;
-  recordHistory: () => void;
-  undo: () => Promise<boolean>;
-  redo: () => Promise<boolean>;
-  createProjectDocument: (identity?: {
-    id?: string;
-    name?: string;
-    createdAt?: string;
-  }) => SimStudioProjectDocument;
-  restoreProjectDocument: (document: SimStudioProjectDocument) => Promise<void>;
-  scheduleRecoverySave: (immediate?: boolean, markDirty?: boolean) => void;
-  copySelected: () => boolean;
-  pasteClipboard: () => Promise<Piece | null>;
-  addPart: (
-    part: CatalogPart,
-    position: THREE.Vector3,
-    rotation?: THREE.Quaternion,
-  ) => Promise<Piece | null>;
-  preloadPart: (part: CatalogPart) => Promise<void>;
-  recolorPart: (piece: Piece, color: number) => Promise<boolean>;
-  renderImportPreview: (parts: PreparedImportPlacement[]) => Promise<string>;
-  verifyConnections: () => number;
-  verifyConnectionsAsync: () => Promise<number>;
-  rebuildRenderBatches: (pieces?: Piece[]) => void;
-  updateRenderBatches: () => void;
-  disposeRenderBatches: () => void;
-  renderBatchRoot?: THREE.Group;
-  renderLineBatchRoot?: THREE.Group;
-  renderBatchItems: RenderBatchItem[];
-  renderBatchStats: RenderBatchStats;
-  renderBatchesDirty: boolean;
-  bulkLoading?: boolean;
-  bulkConnecting?: boolean;
-  largeSimulation?: boolean;
-  performanceTrace: PerformanceTrace;
-  pendingInputMs: number;
-  pendingConnectionMs: number;
-  connectionScanVersion: number;
-  renderScale: number;
-  gpuTimerSupported: boolean;
-  gpuRenderer: string;
-  gpuVendor: string;
-  pendingPlacement?: {
-    pieces: Piece[];
-    offsets: THREE.Vector3[];
-  };
-  debug: DebugFlags;
-  refreshDebug: () => void;
-  updateDebug: () => void;
-  simLog?: SimulationLog;
-  nextLogSample?: number;
-  simStartedMs?: number;
-};
+import { createStudioGrid, GRID_RECENTER_STEP, GRID_SIZE } from "./renderer/studio-grid";
+import { exactTriangleMeshForPiece } from "./physics/exact-collider";
+import {
+  detectDifferentialLinks,
+  detectGearLinks,
+  differentialPairKeys,
+  gearLinkKey,
+  isDifferentialPart,
+} from "./physics/gear-topology";
+import {
+  COLLISION_GROUP_GEAR_MESH,
+  COLLISION_GROUP_GEAR_NORMAL,
+  COLLISION_GROUP_NON_GEAR,
+  CONTACT_FRICTION,
+  DEFAULT_PHYSICS_SETTINGS,
+  interactionGroups,
+} from "./physics/settings";
+import { createProjectId, uniqueProjectName } from "./projects/naming";
+import { DeferredNumberInput } from "./components/DeferredNumberInput";
+import {
+  colorHex,
+  ldrawColorNames,
+  ldrawColorOptions,
+  palettePreviewFilter,
+  previewFilter,
+} from "./catalog/colors";
+import { translations, type Language } from "./i18n";
+import type {
+  AppState,
+  AxleSnapStep,
+  CatalogPart,
+  Connection,
+  ConnectionProfile,
+  DebugFlags,
+  EditorSnapshot,
+  FramePerformanceSample,
+  GridStep,
+  ImportDraft,
+  JointMode,
+  PhysicsSettings,
+  Piece,
+  PieceKind,
+  PreparedImportPlacement,
+  RotationSnapStep,
+  RuntimeDifferentialLink,
+  RuntimeGearLink,
+  StructuralMode,
+} from "./editor/types";
 
+// --- Catalog sources and packaged metadata ---------------------------------
 // The older pybricks mirror does not contain newer official parts such as
 // 71708. Keep it as a fallback, but use the actively updated mirror first.
-const LDRAW =
-    "https://cdn.jsdelivr.net/gh/remig/ldraw_parts@master/",
-  LEGACY_LDRAW = "https://cdn.jsdelivr.net/gh/pybricks/ldraw@master/",
-  MODEL_LOAD_TIMEOUT = 20_000,
-  AUTO_CONNECTIONS_ENABLED = true,
-  CORRECTION_MAP_REVISION = "2026-08-10-corrections-1";
+
+const LDRAW = "https://cdn.jsdelivr.net/gh/remig/ldraw_parts@master/";
+
+const LEGACY_LDRAW = "https://cdn.jsdelivr.net/gh/pybricks/ldraw@master/";
+
+const MODEL_LOAD_TIMEOUT = 20_000;
+
+const AUTO_CONNECTIONS_ENABLED = true;
+
+const CORRECTION_MAP_REVISION = "2026-08-10-corrections-1";
+
 const invalidPackagedGeometry = new Set<string>();
+
 const packagedParts = preloadedCatalog.parts as Record<
   string,
   {
@@ -430,176 +148,9 @@ const packagedParts = preloadedCatalog.parts as Record<
     }[];
   }
 >;
-const colorHex: Record<number, string> = {
-  0: "#05131d",
-  1: "#0055bf",
-  2: "#257a3e",
-  3: "#00838f",
-  4: "#c91a09",
-  5: "#c870a0",
-  6: "#583927",
-  7: "#9ba19d",
-  8: "#6d6e5c",
-  9: "#b4d2e3",
-  10: "#4b9f4a",
-  11: "#55a5af",
-  12: "#f2705e",
-  13: "#fc97ac",
-  14: "#f2cd37",
-  15: "#ffffff",
-  17: "#c2dab8",
-  18: "#fbe696",
-  19: "#e4cd9e",
-  20: "#c9cae2",
-  22: "#81007b",
-  23: "#2032b0",
-  25: "#fe8a18",
-  26: "#923978",
-  27: "#bbe90b",
-  28: "#958a73",
-  29: "#e4adc8",
-  68: "#f3cf9b",
-  70: "#582a12",
-  71: "#a0a5a9",
-  72: "#6c6e68",
-  73: "#5a93db",
-  74: "#73dca1",
-  77: "#fecccf",
-  78: "#f6d7b3",
-  84: "#cc702a",
-  85: "#3f3691",
-  86: "#7c503a",
-  89: "#4c61db",
-  92: "#d09168",
-  110: "#4354a3",
-  118: "#b3d7d1",
-  191: "#f8bb3d",
-  212: "#86c1e1",
-  216: "#b31004",
-  226: "#fff03a",
-  272: "#0a3463",
-  288: "#184632",
-  308: "#352100",
-  320: "#720e0f",
-  321: "#1498d7",
-  322: "#3ec2dd",
-  323: "#bddcd8",
-  326: "#d9e4a7",
-  330: "#9b9a5a",
-  353: "#ff6d77",
-  379: "#6074a1",
-};
-const ldrawColorNames: Record<number, { es: string; en: string }> = {
-  0: { es: "Negro", en: "Black" },
-  1: { es: "Azul", en: "Blue" },
-  2: { es: "Verde", en: "Green" },
-  3: { es: "Turquesa oscuro", en: "Dark turquoise" },
-  4: { es: "Rojo", en: "Red" },
-  5: { es: "Rosa oscuro", en: "Dark pink" },
-  6: { es: "Marrón", en: "Brown" },
-  7: { es: "Gris claro", en: "Light gray" },
-  8: { es: "Gris oscuro", en: "Dark gray" },
-  9: { es: "Azul claro", en: "Light blue" },
-  10: { es: "Verde brillante", en: "Bright green" },
-  11: { es: "Turquesa claro", en: "Light turquoise" },
-  12: { es: "Salmón", en: "Salmon" },
-  13: { es: "Rosa", en: "Pink" },
-  14: { es: "Amarillo", en: "Yellow" },
-  15: { es: "Blanco", en: "White" },
-  17: { es: "Verde claro", en: "Light green" },
-  18: { es: "Amarillo claro", en: "Light yellow" },
-  19: { es: "Arena", en: "Tan" },
-  20: { es: "Violeta claro", en: "Light violet" },
-  22: { es: "Púrpura", en: "Purple" },
-  23: { es: "Azul violeta", en: "Blue violet" },
-  25: { es: "Naranja", en: "Orange" },
-  26: { es: "Magenta", en: "Magenta" },
-  27: { es: "Lima", en: "Lime" },
-  28: { es: "Arena oscuro", en: "Dark tan" },
-  29: { es: "Rosa brillante", en: "Bright pink" },
-  68: { es: "Naranja muy claro", en: "Very light orange" },
-  70: { es: "Marrón rojizo", en: "Reddish brown" },
-  71: { es: "Gris azulado claro", en: "Light bluish gray" },
-  72: { es: "Gris azulado oscuro", en: "Dark bluish gray" },
-  73: { es: "Azul medio", en: "Medium blue" },
-  74: { es: "Verde medio", en: "Medium green" },
-  77: { es: "Rosa claro", en: "Light pink" },
-  78: { es: "Carne claro", en: "Light flesh" },
-  84: { es: "Carne medio oscuro", en: "Medium dark flesh" },
-  85: { es: "Púrpura oscuro", en: "Dark purple" },
-  86: { es: "Carne oscuro", en: "Dark flesh" },
-  89: { es: "Azul violeta", en: "Blue violet" },
-  92: { es: "Carne", en: "Flesh" },
-  110: { es: "Violeta", en: "Violet" },
-  118: { es: "Aguamarina", en: "Aqua" },
-  191: { es: "Naranja claro brillante", en: "Bright light orange" },
-  212: { es: "Azul claro brillante", en: "Bright light blue" },
-  216: { es: "Óxido", en: "Rust" },
-  226: { es: "Amarillo claro brillante", en: "Bright light yellow" },
-  272: { es: "Azul oscuro", en: "Dark blue" },
-  288: { es: "Verde oscuro", en: "Dark green" },
-  308: { es: "Marrón oscuro", en: "Dark brown" },
-  320: { es: "Rojo oscuro", en: "Dark red" },
-  321: { es: "Azul celeste oscuro", en: "Dark azure" },
-  322: { es: "Azul celeste medio", en: "Medium azure" },
-  323: { es: "Aguamarina claro", en: "Light aqua" },
-  326: { es: "Verde amarillento", en: "Yellowish green" },
-  330: { es: "Verde oliva", en: "Olive green" },
-  353: { es: "Coral", en: "Coral" },
-  379: { es: "Azul arena", en: "Sand blue" },
-};
-const ldrawColorOptions = Object.keys(colorHex)
-  .map(Number)
-  .sort((a, b) => a - b);
-const previewFilter = (color: number) =>
-  color === 0
-    ? "brightness(.24) contrast(1.25)"
-    : color === 1
-      ? "sepia(1) saturate(7) hue-rotate(170deg) brightness(.72)"
-      : color === 4
-        ? "sepia(1) saturate(8) hue-rotate(315deg) brightness(.72)"
-        : color === 14
-          ? "sepia(1) saturate(7) hue-rotate(2deg) brightness(1.08)"
-          : color === 19
-            ? "sepia(.8) saturate(2) hue-rotate(350deg) brightness(1.05)"
-            : color === 72
-              ? "grayscale(1) brightness(.68)"
-              : "grayscale(1)";
-const palettePreviewFilter = (color = 71) => {
-  const shadow = " drop-shadow(0 2px 1px #05060766)";
-  if (color === 0)
-    return "grayscale(1) brightness(.35) contrast(1.35)" + shadow;
-  if (color === 1)
-    return (
-      "sepia(1) saturate(6) hue-rotate(171deg) brightness(.62) contrast(1.2)" +
-      shadow
-    );
-  if (color === 4)
-    return (
-      "sepia(1) saturate(7) hue-rotate(313deg) brightness(.67) contrast(1.2)" +
-      shadow
-    );
-  if (color === 14)
-    return (
-      "sepia(1) saturate(6) hue-rotate(2deg) brightness(1.02) contrast(1.12)" +
-      shadow
-    );
-  if (color === 15)
-    return "grayscale(1) brightness(1.12) contrast(1.06)" + shadow;
-  if (color === 19)
-    return (
-      "sepia(.9) saturate(1.9) hue-rotate(350deg) brightness(.96) contrast(1.12)" +
-      shadow
-    );
-  if (color === 70)
-    return (
-      "sepia(1) saturate(3.2) hue-rotate(334deg) brightness(.45) contrast(1.3)" +
-      shadow
-    );
-  if (color === 72)
-    return "grayscale(1) brightness(.56) contrast(1.28)" + shadow;
-  return "grayscale(1) brightness(.78) contrast(1.2)" + shadow;
-};
+// Palette tabs are deliberately presentation-only; part data lives in
+// palette.ts and imported catalog entries live in the runtime state.
+
 const categories = [
   { id: "beams", icon: "━" },
   { id: "axles", icon: "╂" },
@@ -609,882 +160,55 @@ const categories = [
   { id: "wheels", icon: "◉" },
   { id: "imported", icon: "↓" },
 ] as const;
-type Language = "es" | "en";
-const translations = {
-  es: {
-    subtitle: "LABORATORIO DE FÍSICA",
-    light: "Claro",
-    dark: "Oscuro",
-    switchTheme: "Cambiar tema",
-    project: "Proyecto",
-    mechanism: "Mi mecanismo",
-    projects: "PROYECTOS",
-    manageProjects: "Abrir proyectos",
-    projectsButton: "Proyectos",
-    currentProject: "Proyecto actual",
-    projectName: "Nombre del proyecto",
-    editProjectName: "Renombrar proyecto",
-    confirmProjectName: "Confirmar nombre",
-    duplicateProject: "Duplicar proyecto",
-    duplicateTitle: "Duplicar proyecto",
-    duplicateHelp: "Elige un nombre para la nueva copia guardada.",
-    duplicateName: "Nombre de la copia",
-    createCopy: "Crear copia",
-    newProject: "Nuevo proyecto",
-    saveProject: "Guardar proyecto",
-    saveShortcut: "Atajo: Ctrl+S",
-    openProject: "Abrir",
-    exportProject: "Exportar .simstudio",
-    importProject: "Importar .simstudio",
-    deleteProject: "Eliminar",
-    noProjects: "Todavía no hay proyectos guardados en este navegador.",
-    localProjects: "Guardados en este navegador",
-    previousPage: "Página anterior",
-    nextPage: "Página siguiente",
-    recoverySaved: "Recuperación automática activa",
-    autosaving: "Guardando recuperación automática…",
-    changesPending: "Recuperado, pero falta guardar el proyecto",
-    projectUpToDate: "Proyecto completamente guardado",
-    close: "Cerrar",
-    hideControls: "Ocultar ayuda de controles",
-    showControls: "Mostrar ayuda de controles",
-    unsavedTitle: "Cambios sin guardar",
-    unsavedWarning:
-      "Los cambios que no hayas guardado en el administrador de proyectos se descartarán.",
-    createAnyway: "Crear de todos modos",
-    openAnyway: "Cambiar de todos modos",
-    deleteTitle: "Eliminar proyecto",
-    deleteWarning:
-      "Esta copia se eliminará del navegador. Esta acción no se puede deshacer.",
-    cancel: "Cancelar",
-    nameBeforeSave: "Ponle un nombre para crear y guardar el proyecto.",
-    import: "Importar",
-    export: "Exportar",
-    importTitle: "Importar modelo LDraw / Studio",
-    importReading: "Analizando referencias del archivo…",
-    importPalette: "Cargando piezas de la paleta local…",
-    importExternal: "Consultando y cargando piezas externas…",
-    importPreview: "Preparando previsualización…",
-    importReady: "Modelo preparado para colocar",
-    importParts: "piezas",
-    importUnique: "referencias únicas",
-    importFromPalette: "de la paleta",
-    importExternalParts: "externas",
-    discard: "Descartar",
-    place: "Colocar",
-    stop: "■ Detener",
-    simulate: "▶ Simular",
-    palette: "PALETA STUDIO",
-    search: "Nombre o referencia…",
-    external: "Añadir referencia externa",
-    pieces: "piezas",
-    noResults: "No hay piezas de la paleta que coincidan con la búsqueda.",
-    dragHelp: "Catálogo predeterminado precargado localmente.",
-    ready: "Catálogo local listo",
-    running: "SIMULACIÓN: arrastra una pieza para aplicarle fuerza",
-    cameraHelp:
-      "Arrastrar: mover · R+arrastrar: girar desde una conexión · Rueda central: desplazar cámara · Doble rueda: centrar/restaurar · Alt/botón derecho: orbitar · Rueda: zoom · Ctrl+arrastrar: Connect manual · Ctrl+Z/Y: deshacer/rehacer · Ctrl+C/V: copiar/pegar · Shift: mover Y · WASD/Q/E/flechas: rotar 90° · Alt+clic: fijar",
-    properties: "PROPIEDADES",
-    piece: "PIEZA",
-    color: "COLOR",
-    changingColor: "Cambiando color de la pieza…",
-    colorChanged: "Color de la pieza actualizado",
-    colorError: "No se pudo cargar ese color para la pieza",
-    move: "DESPLAZAR",
-    rotateAny: "ROTAR CUALQUIER ÁNGULO",
-    rotationPivot: "CENTRO DE GIRO",
-    pieceCenter: "Centro de la pieza",
-    connectionPivot: "Conexión",
-    forceConnect: "FORZANDO UNIÓN",
-    forcedJoint: "forzada",
-    pieceJoints: "UNIONES DE ESTA PIEZA",
-    joint: "Unión",
-    speed: "VELOCIDAD",
-    torque: "FUERZA / PAR",
-    noJoints: "Acerca la pieza a un conector compatible para crear una unión.",
-    connectMap: "Mapa Connect",
-    points: "puntos",
-    closeMap: "Cerrar editor de mapa",
-    editMap: "Editar mapa de conexiones",
-    mapHelp:
-      "Las coordenadas son locales a la pieza. Al editar se muestra el mapa y se eliminan las uniones antiguas de esta referencia.",
-    addPoint: "+ Punto",
-    duplicateConnector: "Duplicar conector",
-    deleteConnector: "Eliminar conector",
-    regenerateMap: "Regenerar automáticamente",
-    exportJson: "Exportar JSON",
-    importJson: "Importar JSON",
-    collisionMapEditor: "Mapa de colisiones",
-    editCollisionMap: "Editar mapa de colisiones",
-    closeCollisionMap: "Cerrar editor de colisiones",
-    collisionMapHelp:
-      "Las formas usan coordenadas locales. Los cilindros están orientados sobre Y antes de aplicar su rotación.",
-    normalCollision: "Colisión normal",
-    gearCollision: "Colisión entre engranajes",
-    gearCollisionHelp:
-      "La capa especial solo choca con la capa especial de otros engranajes.",
-    addBox: "+ Caja",
-    addCylinder: "+ Cilindro",
-    box: "Caja",
-    cylinder: "Cilindro",
-    size: "TAMAÑO X / Y / Z",
-    rotation: "ROTACIÓN X / Y / Z (GRADOS)",
-    radius: "RADIO",
-    halfHeight: "SEMIALTURA",
-    hole: "Hueco",
-    shaft: "Saliente",
-    round: "Redondo",
-    axle: "Cruz / eje",
-    halfRound: "Medio",
-    position: "POSICIÓN X / Y / Z",
-    axis: "EJE X / Y / Z",
-    diameter: "DIÁMETRO",
-    length: "LONGITUD",
-    activeJoints: "Uniones activas",
-    physicalTag: "Característica física",
-    gearTag: "Engranaje",
-    model: "Modelo",
-    deletePiece: "Eliminar pieza",
-    nothing: "Nada seleccionado",
-    selectHelp: "Selecciona una pieza colocada para moverla o rotarla.",
-    technical: "VISUALIZACIÓN TÉCNICA",
-    collisionMeshes: "Mallas de colisión",
-    connectionMap: "Mapa de conexiones",
-    blue: "Azul: hueco de pin",
-    orange: "Naranja: pin",
-    green: "Verde: hueco de eje",
-    purple: "Morado: recorrido de eje",
-    cyan: "Cian: hueco medio",
-    pink: "Rosa: saliente medio",
-    bodies: "Cuerpos, uniones y pivotes",
-    physicsLog: "REGISTRO DE FÍSICA",
-    downloadLog: "Descargar último log JSON",
-    stopForLog: "Detén una simulación para generar el log",
-    readLog: "Leer último log",
-    performanceLog: "DIAGNÓSTICO DE RENDIMIENTO",
-    downloadPerformance: "Descargar perfil de fotogramas JSON",
-    performanceHelp:
-      "Reproduce el lag y descarga el registro: conserva los últimos 600 fotogramas.",
-    physicsEngine: "MOTOR DE FÍSICA",
-    physicsHelp:
-      "Cada unión de pin o eje puede configurarse según sus grados de libertad compatibles.",
-    structuralBehavior: "COMPORTAMIENTO ESTRUCTURAL",
-    rigidStructure: "Rígido",
-    flexibleStructure: "Flexible",
-    structuralStiffness: "Rigidez de uniones",
-    globalPhysicsParameters: "PARÁMETROS GLOBALES",
-    pieceFriction: "Fricción entre piezas",
-    rubberFriction: "Fricción de goma",
-    frictionlessPinRotation: "Giro de pines sin fricción",
-    axleSlidingFriction: "Deslizamiento de ejes",
-    axleRotationFriction: "Rotación de ejes",
-    axleTolerance: "Holgura de ejes",
-    globalPhysicsHelp: "Los cambios se aplican al iniciar la simulación.",
-    resetPhysicsParameters: "Restablecer parámetros",
-    rigidStructureHelp:
-      "Las conexiones fijas se fusionan. La rigidez controla las articulaciones móviles.",
-    flexibleStructureHelp:
-      "Cada pieza conserva su cuerpo y las conexiones fijas pueden flexionarse ligeramente.",
-    grid: "Cuadrícula",
-    gridSize: "AJUSTE DE MOVIMIENTO",
-    noGridSnap: "Sin ajuste",
-    axleSnap: "AJUSTE AXIAL CON SHIFT",
-    rotationSnap: "AJUSTE ANGULAR",
-    cache: "caché local activa",
-    ldrawCredit: "Usa The LDraw Parts Library",
-    categories: {
-      beams: "Vigas",
-      axles: "Ejes",
-      pins: "Pines",
-      connectors: "Conectores",
-      gears: "Engranajes",
-      wheels: "Ruedas",
-      imported: "Importadas",
-    },
-  },
-  en: {
-    subtitle: "PHYSICS BUILD LAB",
-    light: "Light",
-    dark: "Dark",
-    switchTheme: "Switch theme",
-    project: "Project",
-    mechanism: "My mechanism",
-    projects: "PROJECTS",
-    manageProjects: "Open projects",
-    projectsButton: "Projects",
-    currentProject: "Current project",
-    projectName: "Project name",
-    editProjectName: "Rename project",
-    confirmProjectName: "Confirm name",
-    duplicateProject: "Duplicate project",
-    duplicateTitle: "Duplicate project",
-    duplicateHelp: "Choose a name for the new saved copy.",
-    duplicateName: "Copy name",
-    createCopy: "Create copy",
-    newProject: "New project",
-    saveProject: "Save project",
-    saveShortcut: "Shortcut: Ctrl+S",
-    openProject: "Open",
-    exportProject: "Export .simstudio",
-    importProject: "Import .simstudio",
-    deleteProject: "Delete",
-    noProjects: "No projects have been saved in this browser yet.",
-    localProjects: "Saved in this browser",
-    previousPage: "Previous page",
-    nextPage: "Next page",
-    recoverySaved: "Automatic recovery active",
-    autosaving: "Saving automatic recovery…",
-    changesPending: "Recovered, but the project still needs saving",
-    projectUpToDate: "Project fully saved",
-    close: "Close",
-    hideControls: "Hide controls help",
-    showControls: "Show controls help",
-    unsavedTitle: "Unsaved changes",
-    unsavedWarning:
-      "Changes not saved in the project manager will be discarded.",
-    createAnyway: "Create anyway",
-    openAnyway: "Switch anyway",
-    deleteTitle: "Delete project",
-    deleteWarning:
-      "This browser copy will be deleted. This action cannot be undone.",
-    cancel: "Cancel",
-    nameBeforeSave: "Give the project a name to create and save it.",
-    import: "Import",
-    export: "Export",
-    importTitle: "Import LDraw / Studio model",
-    importReading: "Analyzing file references…",
-    importPalette: "Loading local palette parts…",
-    importExternal: "Looking up and loading external parts…",
-    importPreview: "Preparing preview…",
-    importReady: "Model ready to place",
-    importParts: "parts",
-    importUnique: "unique part numbers",
-    importFromPalette: "from palette",
-    importExternalParts: "external",
-    discard: "Discard",
-    place: "Place",
-    stop: "■ Stop",
-    simulate: "▶ Simulate",
-    palette: "STUDIO PALETTE",
-    search: "Name or part number…",
-    external: "Add external part number",
-    pieces: "parts",
-    noResults: "No palette parts match the search.",
-    dragHelp: "Default catalog preloaded locally.",
-    ready: "Local catalog ready",
-    running: "SIMULATION: drag a part to apply force",
-    cameraHelp:
-      "Drag: move · R+drag: rotate from a connection · Middle drag: pan camera · Middle double-click: focus/reset · Alt/right button: orbit · Wheel: zoom · Ctrl+drag: manual Connect · Ctrl+Z/Y: undo/redo · Ctrl+C/V: copy/paste · Shift: move Y · WASD/Q/E/arrows: rotate 90° · Alt+click: fix",
-    properties: "PROPERTIES",
-    piece: "PART",
-    color: "COLOR",
-    changingColor: "Changing part color…",
-    colorChanged: "Part color updated",
-    colorError: "That color could not be loaded for this part",
-    move: "MOVE",
-    rotateAny: "ROTATE ANY ANGLE",
-    rotationPivot: "ROTATION PIVOT",
-    pieceCenter: "Part center",
-    connectionPivot: "Connection",
-    forceConnect: "FORCING JOINT",
-    forcedJoint: "forced",
-    pieceJoints: "JOINTS ON THIS PART",
-    joint: "Joint",
-    speed: "SPEED",
-    torque: "FORCE / TORQUE",
-    noJoints: "Move the part near a compatible connector to create a joint.",
-    connectMap: "Connect map",
-    points: "points",
-    closeMap: "Close map editor",
-    editMap: "Edit connection map",
-    mapHelp:
-      "Coordinates are local to the part. Editing displays the map and removes old joints for this part number.",
-    addPoint: "+ Point",
-    duplicateConnector: "Duplicate connector",
-    deleteConnector: "Delete connector",
-    regenerateMap: "Regenerate automatically",
-    exportJson: "Export JSON",
-    importJson: "Import JSON",
-    collisionMapEditor: "Collision map",
-    editCollisionMap: "Edit collision map",
-    closeCollisionMap: "Close collision editor",
-    collisionMapHelp:
-      "Shapes use local coordinates. Cylinders are aligned to Y before their rotation is applied.",
-    normalCollision: "Normal collision",
-    gearCollision: "Gear-to-gear collision",
-    gearCollisionHelp:
-      "The special layer collides only with the special layer of other gears.",
-    addBox: "+ Box",
-    addCylinder: "+ Cylinder",
-    box: "Box",
-    cylinder: "Cylinder",
-    size: "SIZE X / Y / Z",
-    rotation: "ROTATION X / Y / Z (DEGREES)",
-    radius: "RADIUS",
-    halfHeight: "HALF HEIGHT",
-    hole: "Socket",
-    shaft: "Shaft",
-    round: "Round",
-    axle: "Cross / axle",
-    halfRound: "Half",
-    position: "POSITION X / Y / Z",
-    axis: "AXIS X / Y / Z",
-    diameter: "DIAMETER",
-    length: "LENGTH",
-    activeJoints: "Active joints",
-    physicalTag: "Physics tag",
-    gearTag: "Gear",
-    model: "Model",
-    deletePiece: "Delete part",
-    nothing: "Nothing selected",
-    selectHelp: "Select a placed part to move or rotate it.",
-    technical: "TECHNICAL VIEW",
-    collisionMeshes: "Collision meshes",
-    connectionMap: "Connection map",
-    blue: "Blue: pin socket",
-    orange: "Orange: pin shaft",
-    green: "Green: axle socket",
-    purple: "Purple: axle travel",
-    cyan: "Cyan: half socket",
-    pink: "Pink: half shaft",
-    bodies: "Bodies, joints and pivots",
-    physicsLog: "PHYSICS LOG",
-    downloadLog: "Download latest JSON log",
-    stopForLog: "Stop a simulation to generate a log",
-    readLog: "Read latest log",
-    performanceLog: "PERFORMANCE DIAGNOSTICS",
-    downloadPerformance: "Download frame profile JSON",
-    performanceHelp:
-      "Reproduce the lag, then download the log: it keeps the latest 600 frames.",
-    physicsEngine: "PHYSICS ENGINE",
-    physicsHelp:
-      "Each pin or axle joint can be configured using its compatible degrees of freedom.",
-    structuralBehavior: "STRUCTURAL BEHAVIOR",
-    rigidStructure: "Rigid",
-    flexibleStructure: "Flexible",
-    structuralStiffness: "Joint stiffness",
-    globalPhysicsParameters: "GLOBAL PHYSICS PARAMETERS",
-    pieceFriction: "Part-to-part friction",
-    rubberFriction: "Rubber friction",
-    frictionlessPinRotation: "Frictionless pin rotation",
-    axleSlidingFriction: "Axle sliding friction",
-    axleRotationFriction: "Axle rotation friction",
-    axleTolerance: "Axle clearance",
-    globalPhysicsHelp: "Changes are applied when the simulation starts.",
-    resetPhysicsParameters: "Reset parameters",
-    rigidStructureHelp:
-      "Fixed connections are merged. Stiffness controls the moving joints.",
-    flexibleStructureHelp:
-      "Every part keeps its own body and fixed connections may flex slightly.",
-    grid: "Grid",
-    gridSize: "MOVEMENT SNAP",
-    noGridSnap: "No snapping",
-    axleSnap: "SHIFT AXLE SNAP",
-    rotationSnap: "ANGLE SNAP",
-    cache: "local cache active",
-    ldrawCredit: "Uses The LDraw Parts Library",
-    categories: {
-      beams: "Beams",
-      axles: "Axles",
-      pins: "Pins",
-      connectors: "Connectors",
-      gears: "Gears",
-      wheels: "Wheels",
-      imported: "Imported",
-    },
-  },
-} as const;
+
+// --- Catalog classification and physics defaults ---------------------------
 
 const kindFor = (category: string, name = ""): PieceKind =>
   category === "motors" || /motor/i.test(name)
     ? "motor"
-    : category === "gears" ||
-        category === "wheels" ||
-        /gear|wheel|tyre|tire/i.test(name)
+    : category === "gears" || category === "wheels" || /gear|wheel|tyre|tire/i.test(name)
       ? "wheel"
       : "beam";
+
 const modelText = (p: CatalogPart) =>
   `0 FILE ${p.part}.ldr\n1 ${p.color} 0 0 0 1 0 0 0 1 0 0 0 1 ${p.modelPart ?? p.part}.dat\n0`;
+
 const frictionPinRefs = new Set(["2780", "6558", "32054", "43093"]);
+
 const frictionlessPinRefs = new Set(["3749", "3673", "32556"]);
-// Rapier combines the friction coefficients of both colliders. LEGO-like
-// plastic must slide over plastic without behaving as if both surfaces were
-// rubber, while tyres and the floor still need enough grip to drive a model.
-const CONTACT_FRICTION = {
-  // The magenta gear layer is a continuous cylindrical approximation, not an
-  // actual tooth mesh. Tangential friction makes perpendicular cylinders bind
-  // and eventually depenetrate by ejecting an axle island. Tooth torque is
-  // already transmitted by the ratio constraint, so this layer only supplies
-  // a frictionless normal contact.
-  gearMesh: 0,
-  floor: 0.9,
-} as const;
-const DEFAULT_PHYSICS_SETTINGS: PhysicsSettings = {
-  pieceFriction: 0.18,
-  rubberFriction: 1.35,
-  frictionlessPinRotation: 0.05,
-  axleSlidingFriction: 0.08,
-  axleRotationFriction: 0.02,
-  axleTolerance: 0.02,
-};
+
 const isPinPart = (p: CatalogPart) =>
   /^Technic (Axle )?Pin/i.test(p.name) || frictionPinRefs.has(p.part);
+
 const isAxlePart = (p: CatalogPart) => /^Technic Axle(?! Pin)/i.test(p.name);
-const paletteReferenceSet = new Set(
-  [
-    ...paletteParts.flatMap((part) =>
-      [part.part, part.modelPart]
-        .filter(Boolean)
-        .map((value) => value!.toLowerCase()),
-    ),
-    ...Object.keys(paletteRequestAliases),
-  ],
-);
+
+const paletteReferenceSet = new Set([
+  ...paletteParts.flatMap((part) =>
+    [part.part, part.modelPart].filter(Boolean).map((value) => value!.toLowerCase()),
+  ),
+  ...Object.keys(paletteRequestAliases),
+]);
+
 const resolvePaletteRequest = (reference: string) =>
   paletteRequestAliases[reference.toLowerCase()] ?? reference.toLowerCase();
+
 const belongsToDefaultPalette = (part: CatalogPart) =>
   [part.part, part.modelPart, part.resolvedPart]
     .filter(Boolean)
     .some((value) => paletteReferenceSet.has(value!.toLowerCase()));
+
 const isGearPart = (p: CatalogPart) =>
   p.gear === true || p.family === "gears" || /\bgear\b/i.test(p.name);
-const differentialRefs = new Set(["6573", "62821"]);
-const isDifferentialPart = (p: CatalogPart) =>
-  [p.part, p.modelPart, p.resolvedPart]
-    .filter(Boolean)
-    .some((reference) => differentialRefs.has(reference!.toLowerCase()));
-const exactTriangleMeshForPiece = (
-  piece: Piece,
-  physicsOffset: THREE.Vector3,
-  physicsBase: THREE.Quaternion,
-) => {
-  piece.mesh.updateMatrixWorld(true);
-  const rootInverse = piece.mesh.matrixWorld.clone().invert(),
-    bodyFromPiece = new THREE.Matrix4().compose(
-      physicsOffset,
-      physicsBase,
-      piece.mesh.scale,
-    ),
-    vertices: number[] = [],
-    indices: number[] = [],
-    maximumCoordinate = 10000;
-  piece.mesh.traverse((object) => {
-    if (!(object instanceof THREE.Mesh) || object instanceof THREE.InstancedMesh)
-      return;
-    const position = object.geometry.getAttribute("position");
-    if (!position || position.itemSize < 3 || position.count < 3) return;
-    const transform = bodyFromPiece
-        .clone()
-        .multiply(rootInverse.clone().multiply(object.matrixWorld)),
-      localVertices: number[] = [],
-      localIndices: number[] = [],
-      point = new THREE.Vector3(),
-      a = new THREE.Vector3(),
-      b = new THREE.Vector3(),
-      c = new THREE.Vector3(),
-      edgeA = new THREE.Vector3(),
-      edgeB = new THREE.Vector3();
-    for (let index = 0; index < position.count; index++) {
-      point
-        .fromBufferAttribute(position as THREE.BufferAttribute, index)
-        .applyMatrix4(transform);
-      if (
-        !Number.isFinite(point.x) ||
-        !Number.isFinite(point.y) ||
-        !Number.isFinite(point.z) ||
-        Math.abs(point.x) > maximumCoordinate ||
-        Math.abs(point.y) > maximumCoordinate ||
-        Math.abs(point.z) > maximumCoordinate
-      )
-        return;
-      localVertices.push(point.x, point.y, point.z);
-    }
-    const sourceIndices = object.geometry.index;
-    const triangleCount = sourceIndices
-      ? Math.floor(sourceIndices.count / 3)
-      : Math.floor(position.count / 3);
-    for (let triangle = 0; triangle < triangleCount; triangle++) {
-      const indexOffset = triangle * 3,
-        indexA = sourceIndices ? sourceIndices.getX(indexOffset) : indexOffset,
-        indexB = sourceIndices
-          ? sourceIndices.getX(indexOffset + 1)
-          : indexOffset + 1,
-        indexC = sourceIndices
-          ? sourceIndices.getX(indexOffset + 2)
-          : indexOffset + 2;
-      if (
-        !Number.isInteger(indexA) ||
-        !Number.isInteger(indexB) ||
-        !Number.isInteger(indexC) ||
-        indexA < 0 ||
-        indexB < 0 ||
-        indexC < 0 ||
-        indexA >= position.count ||
-        indexB >= position.count ||
-        indexC >= position.count ||
-        indexA === indexB ||
-        indexB === indexC ||
-        indexC === indexA
-      )
-        continue;
-      a.fromArray(localVertices, indexA * 3);
-      b.fromArray(localVertices, indexB * 3);
-      c.fromArray(localVertices, indexC * 3);
-      edgeA.subVectors(b, a);
-      edgeB.subVectors(c, a);
-      if (edgeA.cross(edgeB).lengthSq() <= 1e-12) continue;
-      localIndices.push(indexA, indexB, indexC);
-    }
-    if (localIndices.length < 3) return;
-    const vertexOffset = vertices.length / 3;
-    vertices.push(...localVertices);
-    for (const index of localIndices) indices.push(vertexOffset + index);
-  });
-  return vertices.length >= 9 && indices.length >= 3
-    ? {
-        vertices: new Float32Array(vertices),
-        indices: new Uint32Array(indices),
-      }
-    : undefined;
-};
-const gearPoseForPiece = (piece: Piece): GearPose<Piece> | undefined => {
-  const spec = gearSpecFor(piece.modelPart ?? piece.part, piece.name);
-  if (!piece.gear || !spec) return undefined;
-  piece.mesh.updateMatrixWorld(true);
-  // Some corrected maps contain decorative/off-centre axle holes before the
-  // driving hole (32498 is one example). A gear's LDraw origin is its rotation
-  // centre, so use that origin and only take the nearest axle socket for axis.
-  const axleSocket = piece.connectors
-      .filter(
-        (connector) =>
-          connector.role === "socket" && connector.kind === "axle",
-      )
-      .sort((a, b) => a.local.lengthSq() - b.local.lengthSq())[0],
-    fallbackCylinder = [...piece.gearColliders, ...piece.colliders]
-      .filter((primitive) => primitive.shape === "cylinder")
-      .sort((a, b) => (b.radius ?? 0) - (a.radius ?? 0))[0],
-    center = piece.mesh.localToWorld(new THREE.Vector3()),
-    axis = axleSocket
-      ? axleSocket.axis.clone().transformDirection(piece.mesh.matrixWorld)
-      : new THREE.Vector3(0, 1, 0)
-          .applyQuaternion(
-            fallbackCylinder?.rotation ?? new THREE.Quaternion(),
-          )
-          .transformDirection(piece.mesh.matrixWorld);
-  return {
-    value: piece,
-    spec,
-    center: center.toArray(),
-    axis: axis.normalize().toArray(),
-  };
-};
-type WorldGearVolume = {
-  piece: Piece;
-  center: THREE.Vector3;
-  axis: THREE.Vector3;
-  radius: number;
-  halfHeight: number;
-};
-const worldGearVolumes = (piece: Piece): WorldGearVolume[] => {
-  piece.mesh.updateMatrixWorld(true);
-  const scale = piece.mesh.getWorldScale(new THREE.Vector3()),
-    scaleFactor = Math.max(Math.abs(scale.x), Math.abs(scale.y), Math.abs(scale.z));
-  // The regular green collision envelope determines whether two gears are
-  // close enough to engage. The magenta gear collider remains a real physical
-  // tooth-contact layer and is not used as the link trigger.
-  return piece.colliders.flatMap((primitive) => {
-    if (primitive.shape !== "cylinder") return [];
-    const localAxis = new THREE.Vector3(0, 1, 0)
-      .applyQuaternion(primitive.rotation)
-      .normalize();
-    return [{
-      piece,
-      center: piece.mesh.localToWorld(primitive.center.clone()),
-      axis: localAxis.transformDirection(piece.mesh.matrixWorld).normalize(),
-      radius: (primitive.radius ?? 0) * scaleFactor,
-      halfHeight: (primitive.halfHeight ?? 0) * scaleFactor,
-    }];
-  });
-};
-const gearVolumesOverlap = (a: WorldGearVolume, b: WorldGearVolume) => {
-  const delta = b.center.clone().sub(a.center),
-    alignment = Math.abs(a.axis.dot(b.axis)),
-    tolerance = 0.025;
-  if (alignment >= 0.985) {
-    const axial = Math.abs(delta.dot(a.axis)),
-      radial = delta
-        .clone()
-        .addScaledVector(a.axis, -delta.dot(a.axis))
-        .length();
-    return (
-      axial <= a.halfHeight + b.halfHeight + tolerance &&
-      radial <= a.radius + b.radius + tolerance
-    );
-  }
-  const cross = new THREE.Vector3().crossVectors(a.axis, b.axis),
-    crossLength = cross.length();
-  if (crossLength < 0.1) return false;
-  cross.multiplyScalar(1 / crossLength);
-  const separation = Math.abs(delta.dot(cross)),
-    alongA = Math.abs(delta.dot(a.axis)),
-    alongB = Math.abs(delta.dot(b.axis));
-  return (
-    separation <= a.radius + b.radius + tolerance &&
-    alongA <= a.halfHeight + b.radius + 0.1 &&
-    alongB <= b.halfHeight + a.radius + 0.1
-  );
-};
-const detectGearLinks = (
-  pieces: Piece[],
-  rigidIslandByPiece?: Map<Piece, Piece[]>,
-  excludedPairs = new Set<string>(),
-): RuntimeGearLink[] => {
-  const poses = pieces.flatMap((piece) => {
-      const pose = gearPoseForPiece(piece);
-      return pose ? [pose] : [];
-    }),
-    volumes = new Map(
-      poses.map((pose) => [pose.value, worldGearVolumes(pose.value)]),
-    ),
-    pairs: GearPair<Piece>[] = [];
-  for (let left = 0; left < poses.length; left++)
-    for (let right = left + 1; right < poses.length; right++) {
-      const a = poses[left],
-        b = poses[right];
-      if (excludedPairs.has(contactPairKey(a.value, b.value))) continue;
-      const
-        overlaps = (volumes.get(a.value) ?? []).some((volumeA) =>
-          (volumes.get(b.value) ?? []).some((volumeB) =>
-            gearVolumesOverlap(volumeA, volumeB),
-          ),
-        );
-      if (!overlaps) continue;
-      const centerDistance = new THREE.Vector3(...a.center).distanceTo(
-        new THREE.Vector3(...b.center),
-      );
-      pairs.push({
-        a,
-        b,
-        ratio: -a.spec.teeth / b.spec.teeth,
-        centerDistance,
-        expectedDistance: a.spec.pitchRadius + b.spec.pitchRadius,
-        distanceError: 0,
-      });
-    }
-  return pairs.flatMap((pair) => {
-    if (
-      rigidIslandByPiece &&
-      rigidIslandByPiece.get(pair.a.value) ===
-        rigidIslandByPiece.get(pair.b.value)
-    )
-      return [];
-    if (
-      pair.a.value.body &&
-      pair.a.value.body === pair.b.value.body
-    )
-      return [];
-    const axisA = new THREE.Vector3(...pair.a.axis).normalize(),
-      axisB = new THREE.Vector3(...pair.b.axis).normalize();
-    if (axisA.dot(axisB) < 0) axisB.negate();
-    const centerA = new THREE.Vector3(...pair.a.center),
-      centerB = new THREE.Vector3(...pair.b.center),
-      radialA = centerB
-        .clone()
-        .sub(centerA)
-        .addScaledVector(axisA, -centerB.clone().sub(centerA).dot(axisA))
-        .normalize(),
-      radialB = centerA
-        .clone()
-        .sub(centerB)
-        .addScaledVector(axisB, -centerA.clone().sub(centerB).dot(axisB))
-        .normalize(),
-      tangentA = new THREE.Vector3().crossVectors(axisA, radialA).normalize(),
-      tangentB = new THREE.Vector3().crossVectors(axisB, radialB).normalize(),
-      tangentDot = tangentA.dot(tangentB),
-      signB = -Math.sign(Math.abs(tangentDot) > 0.2 ? tangentDot : -1),
-      perpendicular = Math.abs(axisA.dot(axisB)) < 0.2;
-    return [
-      {
-        ...pair,
-        ratio: -pair.a.spec.teeth / (signB * pair.b.spec.teeth),
-        axisA,
-        axisB,
-        signB,
-        perpendicular,
-      },
-    ];
-  });
-};
-const differentialPairKeys = (links: RuntimeDifferentialLink[]) =>
-  new Set(
-    links.flatMap((link) => [
-      contactPairKey(link.carrier, link.left),
-      contactPairKey(link.carrier, link.right),
-      contactPairKey(link.left, link.right),
-    ]),
-  );
-const detectDifferentialLinks = (
-  pieces: Piece[],
-  rigidIslandByPiece?: Map<Piece, Piece[]>,
-): RuntimeDifferentialLink[] => {
-  const poses = pieces.flatMap((piece) => {
-      const pose = gearPoseForPiece(piece);
-      return pose ? [pose] : [];
-    }),
-    usedOutputs = new Set<Piece>(),
-    links: RuntimeDifferentialLink[] = [];
-  for (const carrierPose of poses.filter((pose) =>
-    isDifferentialPart(pose.value),
-  )) {
-    const carrier = carrierPose.value,
-      center = new THREE.Vector3(...carrierPose.center),
-      carrierAxis = new THREE.Vector3(...carrierPose.axis).normalize(),
-      candidates = poses
-        .filter((pose) => {
-          if (
-            pose.value === carrier ||
-            isDifferentialPart(pose.value) ||
-            usedOutputs.has(pose.value) ||
-            pose.spec.kind === "spur" ||
-            pose.spec.teeth > 20 ||
-            (rigidIslandByPiece &&
-              rigidIslandByPiece.get(pose.value) ===
-                rigidIslandByPiece.get(carrier))
-          )
-            return false;
-          const axis = new THREE.Vector3(...pose.axis).normalize(),
-            delta = new THREE.Vector3(...pose.center).sub(center),
-            axial = delta.dot(carrierAxis),
-            radial = delta
-              .clone()
-              .addScaledVector(carrierAxis, -axial)
-              .length();
-          return (
-            Math.abs(axis.dot(carrierAxis)) >= 0.96 &&
-            radial <= 0.48 &&
-            Math.abs(axial) <= 1.35
-          );
-        })
-        .map((pose) => {
-          const delta = new THREE.Vector3(...pose.center).sub(center),
-            axial = delta.dot(carrierAxis),
-            radial = delta
-              .clone()
-              .addScaledVector(carrierAxis, -axial)
-              .length();
-          return { pose, axial, radial };
-        });
-    let best:
-      | { left: (typeof candidates)[number]; right: (typeof candidates)[number]; score: number }
-      | undefined;
-    for (let leftIndex = 0; leftIndex < candidates.length; leftIndex++)
-      for (
-        let rightIndex = leftIndex + 1;
-        rightIndex < candidates.length;
-        rightIndex++
-      ) {
-        const left = candidates[leftIndex],
-          right = candidates[rightIndex],
-          separation = Math.abs(left.axial - right.axial);
-        if (separation < 0.22 || left.axial * right.axial > 0.08) continue;
-        const score =
-          left.radial +
-          right.radial +
-          Math.abs(left.axial + right.axial) -
-          separation * 0.15;
-        if (!best || score < best.score) best = { left, right, score };
-      }
-    if (!best) continue;
-    const orientAxis = (pose: GearPose<Piece>) => {
-      const axis = new THREE.Vector3(...pose.axis).normalize();
-      if (axis.dot(carrierAxis) < 0) axis.negate();
-      return axis;
-    };
-    links.push({
-      carrier,
-      left: best.left.pose.value,
-      right: best.right.pose.value,
-      axisCarrier: carrierAxis,
-      axisLeft: orientAxis(best.left.pose),
-      axisRight: orientAxis(best.right.pose),
-    });
-    usedOutputs.add(best.left.pose.value);
-    usedOutputs.add(best.right.pose.value);
-  }
-  return links;
-};
-const gearLinkKey = (link: RuntimeGearLink) =>
-  [link.a.value.id, link.b.value.id].sort().join(":");
+
 const isHalfBeamPart = (p: CatalogPart) =>
   /^Technic (Beam|Panel)/i.test(p.name) &&
   /(?:\bx\s*0\.5\b|\b0\.5\b|\bhalf\b)/i.test(p.name);
-const COLLISION_GROUP_NON_GEAR = 0x0001,
-  COLLISION_GROUP_GEAR_NORMAL = 0x0002,
-  COLLISION_GROUP_GEAR_MESH = 0x0004,
-  GRID_SIZE = 240,
-  GRID_DIVISIONS = 240,
-  GRID_RECENTER_STEP = 20,
-  interactionGroups = (membership: number, filter: number) =>
-    (membership << 16) | filter;
-const createStudioGrid = (dark: boolean) => {
-  const group = new THREE.Group(),
-    minor = new THREE.GridHelper(
-      GRID_SIZE,
-      GRID_DIVISIONS,
-      dark ? 0x41484f : 0xb3c1ca,
-      dark ? 0x41484f : 0xb3c1ca,
-    ),
-    major = new THREE.GridHelper(
-      GRID_SIZE,
-      GRID_DIVISIONS / 10,
-      dark ? 0x78838d : 0x8297a5,
-      dark ? 0x78838d : 0x8297a5,
-    ),
-    axisMaterial = new THREE.LineBasicMaterial({
-      color: dark ? 0xd5dbe0 : 0x4e6574,
-      linewidth: 3,
-      depthTest: true,
-      depthWrite: false,
-    }),
-    axisX = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(-GRID_SIZE / 2, 0, 0),
-        new THREE.Vector3(GRID_SIZE / 2, 0, 0),
-      ]),
-      axisMaterial,
-    ),
-    axisZ = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(0, 0, -GRID_SIZE / 2),
-        new THREE.Vector3(0, 0, GRID_SIZE / 2),
-      ]),
-      axisMaterial.clone(),
-    );
-  const configure = (helper: THREE.GridHelper, y: number, order: number) => {
-    helper.position.y = y;
-    helper.renderOrder = order;
-    const materials = Array.isArray(helper.material)
-      ? helper.material
-      : [helper.material];
-    materials.forEach((material) => {
-      material.transparent = true;
-      material.opacity = order === 1 ? 0.72 : 0.95;
-      material.depthWrite = false;
-    });
-  };
-  configure(minor, 0.002, 1);
-  configure(major, 0.007, 2);
-  axisX.name = "grid-axis-x";
-  axisZ.name = "grid-axis-z";
-  axisX.position.y = axisZ.position.y = 0.014;
-  axisX.renderOrder = axisZ.renderOrder = 3;
-  group.add(minor, major, axisX, axisZ);
-  return group;
-};
+
 const hasPinFriction = (p: CatalogPart) =>
   isPinPart(p) &&
   !/without friction|frictionless/i.test(p.name) &&
   (/friction/i.test(p.name) || p.color === 0 || frictionPinRefs.has(p.part));
+
 const connectorProfile = (
   shaft: MeshConnector,
   socket: MeshConnector,
@@ -1498,15 +222,14 @@ const connectorProfile = (
         : shaft.kind === "axle" && socket.kind !== "axle"
           ? "axle-round"
           : undefined;
-const connectorAxialOffsets = (
-  shaft: MeshConnector,
-  socket: MeshConnector,
-) =>
+
+const connectorAxialOffsets = (shaft: MeshConnector, socket: MeshConnector) =>
   shaft.kind !== "axle" &&
   socket.kind !== "axle" &&
   (shaft.kind === "half") !== (socket.kind === "half")
     ? [-0.25, 0.25]
     : [0];
+
 const closestConnectorOffset = (
   shaft: MeshConnector,
   socket: MeshConnector,
@@ -1519,7 +242,9 @@ const closestConnectorOffset = (
     Math.abs(along - candidate) < Math.abs(along - best) ? candidate : best,
   );
 };
+
 type AxleSnapPoint = { local: THREE.Vector3; important: boolean };
+
 const axleSnapPoints = (
   connector: MeshConnector,
   includeSecondary = true,
@@ -1531,9 +256,7 @@ const axleSnapPoints = (
     points: AxleSnapPoint[] = [];
   for (let section = 0; section < sections; section++)
     points.push({
-      local: connector.local
-        .clone()
-        .addScaledVector(axis, -half + section + 0.5),
+      local: connector.local.clone().addScaledVector(axis, -half + section + 0.5),
       important: true,
     });
   if (includeSecondary)
@@ -1544,15 +267,17 @@ const axleSnapPoints = (
       });
   return points;
 };
+
 const connectorMapReach = (connectors: MeshConnector[]) =>
   Math.max(
     1,
     ...connectors.map(
-      (connector) =>
-        connector.local.length() + (connector.length ?? 0.5) / 2,
+      (connector) => connector.local.length() + (connector.length ?? 0.5) / 2,
     ),
   );
+
 const jointPivotKey = (connection: Connection) => `joint:${connection.id}`;
+
 const connectionPivotLocal = (piece: Piece, connection: Connection) => {
   connection.a.mesh.updateMatrixWorld(true);
   piece.mesh.updateMatrixWorld(true);
@@ -1560,10 +285,8 @@ const connectionPivotLocal = (piece: Piece, connection: Connection) => {
     connection.a.mesh.localToWorld(connection.socket.local.clone()),
   );
 };
-const ensurePieceRotationPivot = (
-  piece: Piece,
-  connections: Connection[],
-) => {
+
+const ensurePieceRotationPivot = (piece: Piece, connections: Connection[]) => {
   if (piece.rotationPivotKey === "center") {
     piece.rotationPivotLocal = undefined;
     return;
@@ -1571,9 +294,10 @@ const ensurePieceRotationPivot = (
   const pieceConnections = connections.filter(
       (connection) => connection.a === piece || connection.b === piece,
     ),
-    selectedConnection = pieceConnections.find(
-      (connection) => jointPivotKey(connection) === piece.rotationPivotKey,
-    ) ?? pieceConnections[0];
+    selectedConnection =
+      pieceConnections.find(
+        (connection) => jointPivotKey(connection) === piece.rotationPivotKey,
+      ) ?? pieceConnections[0];
   if (!selectedConnection) {
     piece.rotationPivotKey = undefined;
     piece.rotationPivotLocal = undefined;
@@ -1582,10 +306,8 @@ const ensurePieceRotationPivot = (
   piece.rotationPivotKey = jointPivotKey(selectedConnection);
   piece.rotationPivotLocal = connectionPivotLocal(piece, selectedConnection);
 };
-const absoluteRotationAroundLocalAxis = (
-  piece: Piece,
-  localAxis: THREE.Vector3,
-) => {
+
+const absoluteRotationAroundLocalAxis = (piece: Piece, localAxis: THREE.Vector3) => {
   piece.mesh.updateMatrixWorld(true);
   const normalizedLocalAxis = localAxis.clone().normalize(),
     worldAxis = normalizedLocalAxis
@@ -1620,21 +342,17 @@ const absoluteRotationAroundLocalAxis = (
     globalReference.dot(pieceReference),
   );
 };
+
 const rotatePieceAroundLocalAxis = (
   piece: Piece,
   localAxis: THREE.Vector3,
   radians: number,
 ) => {
   const pivotLocal = piece.rotationPivotLocal,
-    pivotBefore = pivotLocal
-      ? piece.mesh.localToWorld(pivotLocal.clone())
-      : undefined;
+    pivotBefore = pivotLocal ? piece.mesh.localToWorld(pivotLocal.clone()) : undefined;
   piece.mesh.quaternion
     .multiply(
-      new THREE.Quaternion().setFromAxisAngle(
-        localAxis.clone().normalize(),
-        radians,
-      ),
+      new THREE.Quaternion().setFromAxisAngle(localAxis.clone().normalize(), radians),
     )
     .normalize();
   piece.mesh.updateMatrixWorld(true);
@@ -1644,20 +362,7 @@ const rotatePieceAroundLocalAxis = (
     piece.mesh.updateMatrixWorld(true);
   }
 };
-const rotatePieceAroundPivot = (
-  piece: Piece,
-  axis: "x" | "y" | "z",
-  radians: number,
-) =>
-  rotatePieceAroundLocalAxis(
-    piece,
-    axis === "x"
-      ? new THREE.Vector3(1, 0, 0)
-      : axis === "y"
-        ? new THREE.Vector3(0, 1, 0)
-        : new THREE.Vector3(0, 0, 1),
-    radians,
-  );
+
 const rotatePieceAroundPivotWithGlobalSnap = (
   piece: Piece,
   axis: "x" | "y" | "z",
@@ -1677,6 +382,7 @@ const rotatePieceAroundPivotWithGlobalSnap = (
       : radians;
   rotatePieceAroundLocalAxis(piece, localAxis, appliedRadians);
 };
+
 const forcedConnectionAxesAligned = (connection: Connection) => {
   connection.a.mesh.updateMatrixWorld(true);
   connection.b.mesh.updateMatrixWorld(true);
@@ -1690,10 +396,8 @@ const forcedConnectionAxesAligned = (connection: Connection) => {
       .normalize();
   return Math.abs(socketAxis.dot(shaftAxis)) >= 0.985;
 };
-const removeMisalignedForcedConnections = (
-  state: AppState,
-  movedPiece: Piece,
-) => {
+
+const removeMisalignedForcedConnections = (state: AppState, movedPiece: Piece) => {
   const removed = state.connections.filter(
     (connection) =>
       connection.forced &&
@@ -1710,12 +414,11 @@ const removeMisalignedForcedConnections = (
   state.connections = state.connections.filter(
     (connection) => !removedIds.has(connection.id),
   );
-  affected.forEach((piece) =>
-    ensurePieceRotationPivot(piece, state.connections),
-  );
+  affected.forEach((piece) => ensurePieceRotationPivot(piece, state.connections));
   rebalanceAllSmartDefaults(state);
   return removed.length;
 };
+
 const detectShaftTraversals = (pieces: Piece[]) => {
   type SocketEntry = {
     host: Piece;
@@ -1723,16 +426,14 @@ const detectShaftTraversals = (pieces: Piece[]) => {
     point: THREE.Vector3;
     axis: THREE.Vector3;
   };
+
   const cellSize = 0.45,
     cellKey = (point: THREE.Vector3) =>
       `${Math.floor(point.x / cellSize)}:${Math.floor(point.y / cellSize)}:${Math.floor(point.z / cellSize)}`,
     socketGrid = new Map<string, SocketEntry[]>(),
     worldPose = (piece: Piece, connector: MeshConnector) => ({
       point: connector.local.clone().applyMatrix4(piece.mesh.matrixWorld),
-      axis: connector.axis
-        .clone()
-        .transformDirection(piece.mesh.matrixWorld)
-        .normalize(),
+      axis: connector.axis.clone().transformDirection(piece.mesh.matrixWorld).normalize(),
     });
   pieces.forEach((piece) => {
     piece.mesh.updateMatrixWorld(true);
@@ -1755,10 +456,7 @@ const detectShaftTraversals = (pieces: Piece[]) => {
       const shaftPose = worldPose(shaftPiece, shaft),
         halfLength = Math.max(0.08, (shaft.length ?? 0.5) / 2),
         searchHalfLength = halfLength + 0.18,
-        steps = Math.max(
-          1,
-          Math.ceil((searchHalfLength * 2) / (cellSize * 0.5)),
-        ),
+        steps = Math.max(1, Math.ceil((searchHalfLength * 2) / (cellSize * 0.5))),
         candidates = new Set<SocketEntry>();
       for (let step = 0; step <= steps; step++) {
         const sample = shaftPose.point
@@ -1786,19 +484,12 @@ const detectShaftTraversals = (pieces: Piece[]) => {
           return;
         const delta = candidate.point.clone().sub(shaftPose.point),
           along = delta.dot(shaftPose.axis),
-          radial = delta
-            .clone()
-            .addScaledVector(shaftPose.axis, -along)
-            .length(),
+          radial = delta.clone().addScaledVector(shaftPose.axis, -along).length(),
           radialTolerance = Math.max(
             0.18,
             Math.min(shaft.diameter, candidate.connector.diameter) * 0.22,
           );
-        if (
-          radial > radialTolerance ||
-          Math.abs(along) > searchHalfLength
-        )
-          return;
+        if (radial > radialTolerance || Math.abs(along) > searchHalfLength) return;
         const pair = `${shaftPiece.id}:${candidate.host.id}`;
         if (traversedPairs.has(pair)) return;
         traversedPairs.add(pair);
@@ -1808,30 +499,35 @@ const detectShaftTraversals = (pieces: Piece[]) => {
   });
   return traversals;
 };
+
 const pairProfile = (a: MeshConnector, b: MeshConnector) =>
   a.role === "shaft" && b.role === "socket"
     ? connectorProfile(a, b)
     : b.role === "shaft" && a.role === "socket"
       ? connectorProfile(b, a)
       : undefined;
+
 const allowedModes = (profile: ConnectionProfile): JointMode[] =>
   profile === "pin-round"
     ? ["fixed", "rotation", "motor"]
     : profile === "axle-cross"
       ? ["fixed", "linear"]
       : ["rotation", "linear", "rotation-linear", "motor"];
+
 const defaultMode = (profile: ConnectionProfile): JointMode =>
   profile === "pin-round"
     ? "fixed"
     : profile === "axle-cross"
       ? "linear"
       : "rotation-linear";
+
 const freestAutomaticMode = (profile: ConnectionProfile): JointMode =>
   profile === "pin-round"
     ? "rotation"
     : profile === "axle-round"
       ? "rotation-linear"
       : "fixed";
+
 const rebalanceSmartDefaults = (state: AppState, shaftPiece: Piece) => {
   const connections = state.connections.filter(
     (connection) => connection.b === shaftPiece,
@@ -1847,8 +543,7 @@ const rebalanceSmartDefaults = (state: AppState, shaftPiece: Piece) => {
   connections.forEach((connection) => {
     if (connection.userConfigured) return;
     if (connection.profile === "axle-cross") connection.mode = "fixed";
-    else if (connection.profile === "axle-round")
-      connection.mode = "rotation-linear";
+    else if (connection.profile === "axle-round") connection.mode = "rotation-linear";
     else if (shaftPiece.frictionPin) connection.mode = "fixed";
   });
   let anchored = connections.some(
@@ -1870,11 +565,13 @@ const rebalanceSmartDefaults = (state: AppState, shaftPiece: Piece) => {
     } else connection.mode = freestAutomaticMode(connection.profile);
   });
 };
+
 const rebalanceAllSmartDefaults = (state: AppState) => {
-  new Set(state.connections.map((connection) => connection.b)).forEach(
-    (piece) => rebalanceSmartDefaults(state, piece),
+  new Set(state.connections.map((connection) => connection.b)).forEach((piece) =>
+    rebalanceSmartDefaults(state, piece),
   );
 };
+
 const modeLabel: Record<JointMode, string> = {
   fixed: "Fija",
   rotation: "Rotación libre",
@@ -1882,182 +579,149 @@ const modeLabel: Record<JointMode, string> = {
   "rotation-linear": "Rotación y lineal libres",
   motor: "Motor",
 };
+
 const profileLabel: Record<ConnectionProfile, string> = {
   "pin-round": "Naranja ↔ azul",
   "axle-cross": "Morado ↔ verde",
   "axle-round": "Morado ↔ azul",
 };
 
-function DeferredNumberInput({
-  value,
-  min,
-  step = 0.01,
-  onCommit,
-}: {
-  value: number;
-  min?: number;
-  step?: number;
-  onCommit: (value: number) => void;
-}) {
-  const [draft, setDraft] = useState(String(+value.toFixed(4)));
-  useEffect(() => setDraft(String(+value.toFixed(4))), [value]);
-  const commit = () => {
-    const parsed = Number(draft.replace(",", "."));
-    if (Number.isFinite(parsed) && (min === undefined || parsed >= min))
-      onCommit(parsed);
-    else setDraft(String(+value.toFixed(4)));
-  };
-  return (
-    <input
-      type="text"
-      inputMode="decimal"
-      value={draft}
-      data-step={step}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") event.currentTarget.blur();
-        if (event.key === "Escape") {
-          setDraft(String(+value.toFixed(4)));
-          event.currentTarget.blur();
-        }
-      }}
-    />
-  );
-}
-
-const createProjectId = () =>
-  globalThis.crypto?.randomUUID?.() ??
-  `project-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-const uniqueProjectName = (
-  requestedName: string,
-  existingProjects: ProjectSummary[],
-  fallback: string,
-) => {
-  const base = requestedName.trim().slice(0, 20) || fallback.slice(0, 20),
-    names = new Set(existingProjects.map((project) => project.name.toLocaleLowerCase()));
-  if (!names.has(base.toLocaleLowerCase())) return base;
-  for (let index = 2; index < 10000; index++) {
-    const suffix = ` (${index})`,
-      candidate = `${base.slice(0, 20 - suffix.length)}${suffix}`;
-    if (!names.has(candidate.toLocaleLowerCase())) return candidate;
-  }
-  return `${base.slice(0, 14)}-${Date.now().toString(36).slice(-5)}`;
-};
-
+// --- React application shell ------------------------------------------------
+// Home coordinates the extracted subsystems and owns browser/UI state. The
+// Three.js/Rapier runtime is created once inside its main effect below.
 export default function Home() {
-  const studioRef = useRef<HTMLElement>(null),
-    mountRef = useRef<HTMLDivElement>(null),
-    fpsRef = useRef<HTMLDivElement>(null),
-    fileRef = useRef<HTMLInputElement>(null),
-    projectFileRef = useRef<HTMLInputElement>(null),
-    projectNameInputRef = useRef<HTMLInputElement>(null),
-    suppressProjectNameDirtyRef = useRef(false),
-    connectorFileRef = useRef<HTMLInputElement>(null),
-    colliderFileRef = useRef<HTMLInputElement>(null),
-    importTokenRef = useRef(0),
-    appRef = useRef<AppState | null>(null),
-    activeProjectIdRef = useRef(createProjectId()),
-    projectNameRef = useRef("Untitled mechanism"),
-    projectCreatedAtRef = useRef(new Date().toISOString()),
-    structuralModeRef = useRef<StructuralMode>("rigid"),
-    structuralStiffnessRef = useRef(85),
-    projectRevisionRef = useRef(0),
-    savedProjectRevisionRef = useRef<number | null>(null),
-    projectRestoringRef = useRef(false),
-    physicsTransitionRef = useRef(false),
-    saveShortcutRef = useRef<() => void>(() => undefined);
-  const [running, setRunning] = useState(false),
-    [physicsBusy, setPhysicsBusy] = useState(false),
-    [count, setCount] = useState(0),
-    [selectedId, setSelectedId] = useState<number | null>(null);
-  const [category, setCategory] = useState("beams"),
-    [search, setSearch] = useState(""),
-    [reference, setReference] = useState("");
-  const [results, setResults] = useState<CatalogPart[]>([]),
-    [imported, setImported] = useState<CatalogPart[]>([]);
-  const [catalogBusy, setCatalogBusy] = useState(false),
-    [message, setMessage] = useState("catalog-ready");
+  // Three.js host elements and mutable runtime handles. These values should not
+  // trigger React renders, so they deliberately live in refs rather than state.
+  const studioRef = useRef<HTMLElement>(null);
+  const mountRef = useRef<HTMLDivElement>(null);
+  const fpsRef = useRef<HTMLDivElement>(null);
+  const appRef = useRef<AppState | null>(null);
+
+  // Hidden file inputs used by the import and map editors.
+  const fileRef = useRef<HTMLInputElement>(null);
+  const projectFileRef = useRef<HTMLInputElement>(null);
+  const connectorFileRef = useRef<HTMLInputElement>(null);
+  const colliderFileRef = useRef<HTMLInputElement>(null);
+  const projectNameInputRef = useRef<HTMLInputElement>(null);
+
+  // Mutable guards shared with asynchronous loaders and the simulation loop.
+  const importTokenRef = useRef(0);
+  const suppressProjectNameDirtyRef = useRef(false);
+  const projectRestoringRef = useRef(false);
+  const physicsTransitionRef = useRef(false);
+  const saveShortcutRef = useRef<() => void>(() => undefined);
+
+  // Project identity and revision bookkeeping are kept outside React state so
+  // recovery saves can read the latest values without recreating callbacks.
+  const activeProjectIdRef = useRef(createProjectId());
+  const projectNameRef = useRef("Untitled mechanism");
+  const projectCreatedAtRef = useRef(new Date().toISOString());
+  const projectRevisionRef = useRef(0);
+  const savedProjectRevisionRef = useRef<number | null>(null);
+
+  // Physics preferences are mirrored in refs for the requestAnimationFrame loop.
+  const structuralModeRef = useRef<StructuralMode>("rigid");
+  const structuralStiffnessRef = useRef(85);
+
+  // Simulation and selection state.
+  const [running, setRunning] = useState(false);
+  const [physicsBusy, setPhysicsBusy] = useState(false);
+  const [count, setCount] = useState(0);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  // Palette and external catalog state.
+  const [category, setCategory] = useState("beams");
+  const [search, setSearch] = useState("");
+  const [reference, setReference] = useState("");
+  const [results, setResults] = useState<CatalogPart[]>([]);
+  const [imported, setImported] = useState<CatalogPart[]>([]);
+  const [, setCatalogBusy] = useState(false);
+  const [message, setMessage] = useState("catalog-ready");
+
+  // Technical overlays and map editors.
   const [debugViews, setDebugViews] = useState<DebugFlags>({
-      colliders: false,
-      connectors: false,
-      physics: false,
-    }),
-    [lastLog, setLastLog] = useState("");
+    colliders: false,
+    connectors: false,
+    physics: false,
+  });
+  const [lastLog, setLastLog] = useState("");
   const [, setConnectionRevision] = useState(0);
-  const [rotationAngle, setRotationAngle] = useState(15),
-    [, setConnectorRevision] = useState(0),
-    [, setColliderRevision] = useState(0),
-    [connectionMapOpen, setConnectionMapOpen] = useState(false),
-    [collisionMapOpen, setCollisionMapOpen] = useState(false),
-    [collisionLayer, setCollisionLayer] = useState<"normal" | "gear">(
-      "normal",
-    ),
-    [importDraft, setImportDraft] = useState<ImportDraft | null>(null);
-  const [theme, setTheme] = useState<"dark" | "light">("light"),
-    [language, setLanguage] = useState<Language>("en"),
-    [controlsHelpVisible, setControlsHelpVisible] = useState(true),
-    [gridStep, setGridStep] = useState<GridStep>(0.25),
-    [axleSnapStep, setAxleSnapStep] = useState<AxleSnapStep>(0.25),
-    [rotationSnapStep, setRotationSnapStep] =
-      useState<RotationSnapStep>(22.5),
-    [inspectorWidth, setInspectorWidth] = useState(270),
-    [structuralMode, setStructuralMode] = useState<StructuralMode>("rigid"),
-    [structuralStiffness, setStructuralStiffness] = useState(85),
-    [physicsSettings, setPhysicsSettings] = useState<PhysicsSettings>({
-      ...DEFAULT_PHYSICS_SETTINGS,
-    }),
-    [projectName, setProjectName] = useState("Untitled mechanism"),
-    [projectNameEditing, setProjectNameEditing] = useState(false),
-    [projectNameDraft, setProjectNameDraft] = useState(""),
-    [duplicateProjectDocument, setDuplicateProjectDocument] =
-      useState<SimStudioProjectDocument | null>(null),
-    [duplicateProjectName, setDuplicateProjectName] = useState(""),
-    [projectMenuOpen, setProjectMenuOpen] = useState(false),
-    [projects, setProjects] = useState<ProjectSummary[]>([]),
-    [projectPage, setProjectPage] = useState(0),
-    [projectBusy, setProjectBusy] = useState(false),
-    [currentProjectSaved, setCurrentProjectSaved] = useState(false),
-    [projectDirty, setProjectDirty] = useState(false),
-    [saveNamePrompt, setSaveNamePrompt] = useState(false),
-    [projectConfirmation, setProjectConfirmation] = useState<
-      | { kind: "new" }
-      | { kind: "open" | "delete"; project: ProjectSummary }
-      | { kind: "import"; document: SimStudioProjectDocument }
-      | null
-    >(null),
-    [recoveryStatus, setRecoveryStatus] = useState<
-      "idle" | "saving" | "saved"
-    >("idle");
-  const t = translations[language],
-    modeLabels: Record<JointMode, string> =
-      language === "es"
-        ? modeLabel
-        : {
-            fixed: "Fixed",
-            rotation: "Free rotation",
-            linear: "Free linear travel",
-            "rotation-linear": "Free rotation and linear travel",
-            motor: "Motor",
-          },
-    profileLabels: Record<ConnectionProfile, string> =
-      language === "es"
-        ? profileLabel
-        : {
-            "pin-round": "Orange ↔ blue",
-            "axle-cross": "Purple ↔ green",
-            "axle-round": "Purple ↔ blue",
-          };
+  const [, setConnectorRevision] = useState(0);
+  const [, setColliderRevision] = useState(0);
+  const [connectionMapOpen, setConnectionMapOpen] = useState(false);
+  const [collisionMapOpen, setCollisionMapOpen] = useState(false);
+  const [collisionLayer, setCollisionLayer] = useState<"normal" | "gear">("normal");
+
+  // Placement, snapping and pending import controls.
+  const [rotationAngle, setRotationAngle] = useState(15);
+  const [gridStep, setGridStep] = useState<GridStep>(0.25);
+  const [axleSnapStep, setAxleSnapStep] = useState<AxleSnapStep>(0.25);
+  const [rotationSnapStep, setRotationSnapStep] = useState<RotationSnapStep>(22.5);
+  const [importDraft, setImportDraft] = useState<ImportDraft | null>(null);
+
+  // User interface preferences.
+  const [theme, setTheme] = useState<"dark" | "light">("light");
+  const [language, setLanguage] = useState<Language>("en");
+  const [controlsHelpVisible, setControlsHelpVisible] = useState(true);
+  const [inspectorWidth, setInspectorWidth] = useState(270);
+
+  // Global physics controls.
+  const [structuralMode, setStructuralMode] = useState<StructuralMode>("rigid");
+  const [structuralStiffness, setStructuralStiffness] = useState(85);
+  const [physicsSettings, setPhysicsSettings] = useState<PhysicsSettings>({
+    ...DEFAULT_PHYSICS_SETTINGS,
+  });
+
+  // Project manager and recovery-save state.
+  const [projectName, setProjectName] = useState("Untitled mechanism");
+  const [projectNameEditing, setProjectNameEditing] = useState(false);
+  const [projectNameDraft, setProjectNameDraft] = useState("");
+  const [duplicateProjectDocument, setDuplicateProjectDocument] =
+    useState<SimStudioProjectDocument | null>(null);
+  const [duplicateProjectName, setDuplicateProjectName] = useState("");
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [projectPage, setProjectPage] = useState(0);
+  const [projectBusy, setProjectBusy] = useState(false);
+  const [currentProjectSaved, setCurrentProjectSaved] = useState(false);
+  const [projectDirty, setProjectDirty] = useState(false);
+  const [saveNamePrompt, setSaveNamePrompt] = useState(false);
+  const [projectConfirmation, setProjectConfirmation] = useState<
+    | { kind: "new" }
+    | { kind: "open" | "delete"; project: ProjectSummary }
+    | { kind: "import"; document: SimStudioProjectDocument }
+    | null
+  >(null);
+  const [recoveryStatus, setRecoveryStatus] = useState<"idle" | "saving" | "saved">(
+    "idle",
+  );
+
+  // Translated labels are computed once per render and shared by the inspector.
+  const t = translations[language];
+  const modeLabels: Record<JointMode, string> =
+    language === "es"
+      ? modeLabel
+      : {
+          fixed: "Fixed",
+          rotation: "Free rotation",
+          linear: "Free linear travel",
+          "rotation-linear": "Free rotation and linear travel",
+          motor: "Motor",
+        };
+  const profileLabels: Record<ConnectionProfile, string> =
+    language === "es"
+      ? profileLabel
+      : {
+          "pin-round": "Orange ↔ blue",
+          "axle-cross": "Purple ↔ green",
+          "axle-round": "Purple ↔ blue",
+        };
 
   useEffect(() => {
     try {
       setLastLog(localStorage.getItem("sim-studio:physics-log") ?? "");
-      setTheme(
-        localStorage.getItem("sim-studio:theme") === "dark" ? "dark" : "light",
-      );
-      setLanguage(
-        localStorage.getItem("sim-studio:language") === "es" ? "es" : "en",
-      );
+      setTheme(localStorage.getItem("sim-studio:theme") === "dark" ? "dark" : "light");
+      setLanguage(localStorage.getItem("sim-studio:language") === "es" ? "es" : "en");
       setControlsHelpVisible(
         localStorage.getItem("sim-studio:controls-help-hidden") !== "1",
       );
@@ -2071,8 +735,7 @@ export default function Home() {
       )
         setGridStep(savedGridStep);
       const savedAxleSnapText = localStorage.getItem("sim-studio:axle-snap"),
-        savedAxleSnap =
-          savedAxleSnapText === null ? NaN : Number(savedAxleSnapText);
+        savedAxleSnap = savedAxleSnapText === null ? NaN : Number(savedAxleSnapText);
       if (
         savedAxleSnap === 0 ||
         savedAxleSnap === 0.0625 ||
@@ -2080,9 +743,7 @@ export default function Home() {
         savedAxleSnap === 0.25
       )
         setAxleSnapStep(savedAxleSnap);
-      const savedRotationSnapText = localStorage.getItem(
-          "sim-studio:rotation-snap",
-        ),
+      const savedRotationSnapText = localStorage.getItem("sim-studio:rotation-snap"),
         savedRotationSnap =
           savedRotationSnapText === null ? NaN : Number(savedRotationSnapText);
       if (
@@ -2115,17 +776,20 @@ export default function Home() {
       }
     } catch {}
   }, []);
+
   useEffect(() => {
     try {
       localStorage.setItem("sim-studio:theme", theme);
     } catch {}
   }, [theme]);
+
   useEffect(() => {
     try {
       localStorage.setItem("sim-studio:language", language);
     } catch {}
     document.documentElement.lang = language;
   }, [language]);
+
   useEffect(() => {
     try {
       localStorage.setItem("sim-studio:grid-step", String(gridStep));
@@ -2133,6 +797,7 @@ export default function Home() {
     if (appRef.current) appRef.current.gridStep = gridStep;
     appRef.current?.scheduleRecoverySave();
   }, [gridStep]);
+
   useEffect(() => {
     try {
       localStorage.setItem("sim-studio:axle-snap", String(axleSnapStep));
@@ -2140,16 +805,15 @@ export default function Home() {
     if (appRef.current) appRef.current.axleSnapStep = axleSnapStep;
     appRef.current?.scheduleRecoverySave();
   }, [axleSnapStep]);
+
   useEffect(() => {
     try {
-      localStorage.setItem(
-        "sim-studio:rotation-snap",
-        String(rotationSnapStep),
-      );
+      localStorage.setItem("sim-studio:rotation-snap", String(rotationSnapStep));
     } catch {}
     if (appRef.current) appRef.current.rotationSnapStep = rotationSnapStep;
     appRef.current?.scheduleRecoverySave();
   }, [rotationSnapStep]);
+
   useEffect(() => {
     try {
       localStorage.setItem("sim-studio:structural-mode", structuralMode);
@@ -2162,6 +826,7 @@ export default function Home() {
     structuralStiffnessRef.current = structuralStiffness;
     appRef.current?.scheduleRecoverySave();
   }, [structuralMode, structuralStiffness]);
+
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -2172,6 +837,7 @@ export default function Home() {
     if (appRef.current) appRef.current.physicsSettings = physicsSettings;
     appRef.current?.scheduleRecoverySave();
   }, [physicsSettings]);
+
   useEffect(() => {
     projectNameRef.current = projectName.trim() || "Untitled mechanism";
     const markDirty = !suppressProjectNameDirtyRef.current;
@@ -2188,9 +854,7 @@ export default function Home() {
     setCatalogBusy(false);
     setResults(
       query
-        ? source.filter((p) =>
-            (p.part + " " + p.name).toLowerCase().includes(query),
-          )
+        ? source.filter((p) => (p.part + " " + p.name).toLowerCase().includes(query))
         : source,
     );
   }, [category, search, imported]);
@@ -2208,20 +872,20 @@ export default function Home() {
     scene.background = new THREE.Color(sceneColor);
     scene.fog = new THREE.Fog(sceneColor, 30, 75);
     const camera = new THREE.PerspectiveCamera(
-      43,
-      host.clientWidth / host.clientHeight,
-      0.1,
-      160,
-    ),
+        43,
+        host.clientWidth / host.clientHeight,
+        0.1,
+        160,
+      ),
       defaultCameraPosition = new THREE.Vector3(13, 12, 17),
       defaultCameraTarget = new THREE.Vector3(0, 2, 0),
       cameraTarget = defaultCameraTarget.clone();
     camera.position.copy(defaultCameraPosition);
     camera.lookAt(cameraTarget);
     const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      powerPreference: "high-performance",
-    }),
+        antialias: true,
+        powerPreference: "high-performance",
+      }),
       nativePixelRatio = Math.min(devicePixelRatio, 2);
     let renderScale = 1,
       healthyFpsWindows = 0,
@@ -2231,9 +895,7 @@ export default function Home() {
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     const gl = renderer.getContext() as WebGL2RenderingContext,
-      gpuTimerExtension = gl.getExtension(
-        "EXT_disjoint_timer_query_webgl2",
-      ) as {
+      gpuTimerExtension = gl.getExtension("EXT_disjoint_timer_query_webgl2") as {
         TIME_ELAPSED_EXT: number;
         GPU_DISJOINT_EXT: number;
       } | null,
@@ -2343,10 +1005,11 @@ export default function Home() {
       p.embeddedGeometry
         ? `project:${p.projectAssetKey ?? p.part}`
         : p.geometry
-        ? `asset:${p.geometry}`
-        : `ldraw:${p.modelPart ?? p.resolvedPart ?? p.part}`;
+          ? `asset:${p.geometry}`
+          : `ldraw:${p.modelPart ?? p.resolvedPart ?? p.part}`;
     const modelRenderKey = (p: CatalogPart) =>
       `${modelSourceIdentity(p)}:source-color:${p.sourceColor ?? p.color}:display-color:${p.color}`;
+    // --- Model loading and catalog analysis --------------------------------
     const loadPartModel = async (p: CatalogPart) => {
       if (p.geometry && invalidPackagedGeometry.has(p.part)) {
         p.geometry = undefined;
@@ -2364,14 +1027,14 @@ export default function Home() {
           (p.embeddedGeometry
             ? {}
             : p.geometry
-            ? {
-                downloadUrl: assetUrl(p.geometry),
-                downloadSource: "local" as const,
-              }
-            : {
-                downloadUrl: `${LDRAW}parts/${resolvedFile}`,
-                downloadSource: "primary" as const,
-              }),
+              ? {
+                  downloadUrl: assetUrl(p.geometry),
+                  downloadSource: "local" as const,
+                }
+              : {
+                  downloadUrl: `${LDRAW}parts/${resolvedFile}`,
+                  downloadSource: "primary" as const,
+                }),
       );
       const cached = modelCache.get(key);
       if (cached) return cached.clone(true);
@@ -2441,11 +1104,9 @@ export default function Home() {
             : undefined;
         if (replacement) {
           exact.traverse((child) => {
-            if (!(child instanceof THREE.Mesh) && !(child instanceof THREE.Line))
-              return;
+            if (!(child instanceof THREE.Mesh) && !(child instanceof THREE.Line)) return;
             const replace = (material: THREE.Material) => {
-              if (String(material.userData.code) !== String(sourceColor))
-                return material;
+              if (String(material.userData.code) !== String(sourceColor)) return material;
               if (child instanceof THREE.Mesh) return replacement;
               // ObjectLoader serializes LDrawConditionalLineMaterial as a plain
               // ShaderMaterial. Detect it by its required geometry attributes too,
@@ -2461,8 +1122,8 @@ export default function Home() {
                   child.geometry.hasAttribute("control1") &&
                   child.geometry.hasAttribute("direction"));
               return conditional
-                ? conditionalReplacement ?? edgeReplacement ?? material
-                : edgeReplacement ?? material;
+                ? (conditionalReplacement ?? edgeReplacement ?? material)
+                : (edgeReplacement ?? material);
             };
             child.material = Array.isArray(child.material)
               ? child.material.map(replace)
@@ -2481,9 +1142,7 @@ export default function Home() {
             };
             material.color?.copy(blackOutline);
             for (const uniformName of ["diffuse", "color"])
-              if (
-                material.uniforms?.[uniformName]?.value instanceof THREE.Color
-              )
+              if (material.uniforms?.[uniformName]?.value instanceof THREE.Color)
                 material.uniforms[uniformName].value.copy(blackOutline);
             material.needsUpdate = true;
             return material;
@@ -2496,11 +1155,13 @@ export default function Home() {
       modelCache.set(key, exact.clone(true));
       return exact;
     };
+
     const prepareModel = (exact: THREE.Object3D) => {
       exact.rotation.x = Math.PI;
       exact.scale.setScalar(0.05);
       exact.updateMatrixWorld(true);
     };
+
     const cloneConnectors = (connectors: MeshConnector[]) =>
       connectors.map((connector) => ({
         ...connector,
@@ -2508,34 +1169,33 @@ export default function Home() {
         axis: connector.axis.clone(),
       }));
     const analyzePart = (wrapper: THREE.Object3D, p: CatalogPart) => {
-      let connectors: MeshConnector[] | undefined = straightAxleConnectors(
-          p.name,
-        ),
+      let connectors: MeshConnector[] | undefined = straightAxleConnectors(p.name),
         hasSavedConnectorMap = false;
-      if (!connectors) try {
-        const saved = localStorage.getItem(`sim-connectors-v4:${p.part}`),
-          savedIsCurrent =
-            localStorage.getItem(`sim-connectors-revision:${p.part}`) ===
-            CORRECTION_MAP_REVISION;
-        if (saved && (!preloadedConnectionMaps[p.part] || savedIsCurrent)) {
-          hasSavedConnectorMap = true;
-          connectors = (
-            JSON.parse(saved) as {
-              local: number[];
-              axis: number[];
-              kind: "round" | "axle" | "half";
-              role?: "socket" | "shaft";
-              diameter: number;
-              length?: number;
-            }[]
-          ).map((connector) => ({
-            ...connector,
-            role: connector.role ?? "socket",
-            local: new THREE.Vector3().fromArray(connector.local),
-            axis: new THREE.Vector3().fromArray(connector.axis).normalize(),
-          }));
-        }
-      } catch {}
+      if (!connectors)
+        try {
+          const saved = localStorage.getItem(`sim-connectors-v4:${p.part}`),
+            savedIsCurrent =
+              localStorage.getItem(`sim-connectors-revision:${p.part}`) ===
+              CORRECTION_MAP_REVISION;
+          if (saved && (!preloadedConnectionMaps[p.part] || savedIsCurrent)) {
+            hasSavedConnectorMap = true;
+            connectors = (
+              JSON.parse(saved) as {
+                local: number[];
+                axis: number[];
+                kind: "round" | "axle" | "half";
+                role?: "socket" | "shaft";
+                diameter: number;
+                length?: number;
+              }[]
+            ).map((connector) => ({
+              ...connector,
+              role: connector.role ?? "socket",
+              local: new THREE.Vector3().fromArray(connector.local),
+              axis: new THREE.Vector3().fromArray(connector.axis).normalize(),
+            }));
+          }
+        } catch {}
       if (!connectors && preloadedConnectionMaps[p.part])
         connectors = preloadedConnectionMaps[p.part].map((connector) => ({
           ...connector,
@@ -2550,8 +1210,7 @@ export default function Home() {
         }));
       if (!connectors)
         connectors =
-          connectorCache.get(p.part) &&
-          cloneConnectors(connectorCache.get(p.part)!);
+          connectorCache.get(p.part) && cloneConnectors(connectorCache.get(p.part)!);
       if (!connectors) {
         if (isPinPart(p)) {
           const shafts = /^Technic Axle Pin/i.test(p.name)
@@ -2562,9 +1221,7 @@ export default function Home() {
             ...shafts,
             ...sockets.filter(
               (socket) =>
-                !shafts.some(
-                  (shaft) => shaft.local.distanceTo(socket.local) < 0.12,
-                ),
+                !shafts.some((shaft) => shaft.local.distanceTo(socket.local) < 0.12),
             ),
           ];
         } else if (isAxlePart(p)) {
@@ -2574,17 +1231,14 @@ export default function Home() {
             ...shafts,
             ...sockets.filter(
               (socket) =>
-                !shafts.some(
-                  (shaft) => shaft.local.distanceTo(socket.local) < 0.12,
-                ),
+                !shafts.some((shaft) => shaft.local.distanceTo(socket.local) < 0.12),
             ),
           ];
         }
       }
       if (!connectors) {
         connectors = detectConnectorHoles(wrapper);
-        if (!connectors.length)
-          connectors = fallbackBeamConnectors(wrapper, p.name);
+        if (!connectors.length) connectors = fallbackBeamConnectors(wrapper, p.name);
         try {
           localStorage.setItem(
             `sim-connectors-v4:${p.part}`,
@@ -2607,50 +1261,51 @@ export default function Home() {
               : connector.kind,
         }));
       connectorCache.set(p.part, cloneConnectors(connectors));
-      let colliders: CollisionPrimitive[] | undefined =
-        straightAxleCollisionPrimitives(p.name);
-      if (!colliders) try {
-        const saved = localStorage.getItem(`sim-colliders-v1:${p.part}`),
-          savedIsCurrent =
-            localStorage.getItem(`sim-colliders-revision:${p.part}`) ===
-            CORRECTION_MAP_REVISION;
-        if (saved && (!preloadedCollisionMaps[p.part] || savedIsCurrent)) {
-          const stored = JSON.parse(saved) as {
-            shape: "box" | "cylinder";
-            center: number[];
-            size?: number[];
-            radius?: number;
-            halfHeight?: number;
-            rotation: number[];
-          }[];
-          if (Array.isArray(stored))
-            colliders = stored
-              .filter(
-                (primitive) =>
-                  (primitive.shape === "box" ||
-                    primitive.shape === "cylinder") &&
-                  primitive.center?.length >= 3 &&
-                  primitive.rotation?.length >= 4,
-              )
-              .map((primitive) => ({
-                shape: primitive.shape,
-                center: new THREE.Vector3().fromArray(primitive.center),
-                size:
-                  primitive.shape === "box" && primitive.size?.length === 3
-                    ? new THREE.Vector3().fromArray(primitive.size)
-                    : undefined,
-                radius:
-                  primitive.shape === "cylinder"
-                    ? Math.max(0.01, primitive.radius ?? 0.5)
-                    : undefined,
-                halfHeight:
-                  primitive.shape === "cylinder"
-                    ? Math.max(0.01, primitive.halfHeight ?? 0.5)
-                    : undefined,
-                rotation: new THREE.Quaternion().fromArray(primitive.rotation),
-              }));
-        }
-      } catch {}
+      let colliders: CollisionPrimitive[] | undefined = straightAxleCollisionPrimitives(
+        p.name,
+      );
+      if (!colliders)
+        try {
+          const saved = localStorage.getItem(`sim-colliders-v1:${p.part}`),
+            savedIsCurrent =
+              localStorage.getItem(`sim-colliders-revision:${p.part}`) ===
+              CORRECTION_MAP_REVISION;
+          if (saved && (!preloadedCollisionMaps[p.part] || savedIsCurrent)) {
+            const stored = JSON.parse(saved) as {
+              shape: "box" | "cylinder";
+              center: number[];
+              size?: number[];
+              radius?: number;
+              halfHeight?: number;
+              rotation: number[];
+            }[];
+            if (Array.isArray(stored))
+              colliders = stored
+                .filter(
+                  (primitive) =>
+                    (primitive.shape === "box" || primitive.shape === "cylinder") &&
+                    primitive.center?.length >= 3 &&
+                    primitive.rotation?.length >= 4,
+                )
+                .map((primitive) => ({
+                  shape: primitive.shape,
+                  center: new THREE.Vector3().fromArray(primitive.center),
+                  size:
+                    primitive.shape === "box" && primitive.size?.length === 3
+                      ? new THREE.Vector3().fromArray(primitive.size)
+                      : undefined,
+                  radius:
+                    primitive.shape === "cylinder"
+                      ? Math.max(0.01, primitive.radius ?? 0.5)
+                      : undefined,
+                  halfHeight:
+                    primitive.shape === "cylinder"
+                      ? Math.max(0.01, primitive.halfHeight ?? 0.5)
+                      : undefined,
+                  rotation: new THREE.Quaternion().fromArray(primitive.rotation),
+                }));
+          }
+        } catch {}
       if (!colliders && preloadedCollisionMaps[p.part])
         colliders = preloadedCollisionMaps[p.part].map((primitive) => ({
           ...primitive,
@@ -2702,9 +1357,7 @@ export default function Home() {
       let gearColliders: CollisionPrimitive[] = [];
       if (isGearPart(p)) {
         try {
-          const saved = localStorage.getItem(
-            `sim-gear-colliders-v1:${p.part}`,
-          );
+          const saved = localStorage.getItem(`sim-gear-colliders-v1:${p.part}`);
           if (saved) {
             const rows = JSON.parse(saved) as {
               shape: "box" | "cylinder";
@@ -2726,16 +1379,14 @@ export default function Home() {
           }
         } catch {}
         if (!gearColliders.length && preloadedGearCollisionMaps[p.part])
-          gearColliders = preloadedGearCollisionMaps[p.part].map(
-            (primitive) => ({
-              ...primitive,
-              center: new THREE.Vector3().fromArray(primitive.center),
-              size: primitive.size
-                ? new THREE.Vector3().fromArray(primitive.size)
-                : undefined,
-              rotation: new THREE.Quaternion().fromArray(primitive.rotation),
-            }),
-          );
+          gearColliders = preloadedGearCollisionMaps[p.part].map((primitive) => ({
+            ...primitive,
+            center: new THREE.Vector3().fromArray(primitive.center),
+            size: primitive.size
+              ? new THREE.Vector3().fromArray(primitive.size)
+              : undefined,
+            rotation: new THREE.Quaternion().fromArray(primitive.rotation),
+          }));
         if (!gearColliders.length)
           gearColliders =
             gearCollisionCache.get(p.part)?.map((primitive) => ({
@@ -2745,16 +1396,14 @@ export default function Home() {
               rotation: primitive.rotation.clone(),
             })) ?? [];
         if (!gearColliders.length && packagedParts[p.part]?.gearColliders)
-          gearColliders = packagedParts[p.part].gearColliders!.map(
-            (primitive) => ({
-              ...primitive,
-              center: new THREE.Vector3().fromArray(primitive.center),
-              size: primitive.size
-                ? new THREE.Vector3().fromArray(primitive.size)
-                : undefined,
-              rotation: new THREE.Quaternion().fromArray(primitive.rotation),
-            }),
-          );
+          gearColliders = packagedParts[p.part].gearColliders!.map((primitive) => ({
+            ...primitive,
+            center: new THREE.Vector3().fromArray(primitive.center),
+            size: primitive.size
+              ? new THREE.Vector3().fromArray(primitive.size)
+              : undefined,
+            rotation: new THREE.Quaternion().fromArray(primitive.rotation),
+          }));
         if (!gearColliders.length) {
           gearColliders = approximateGearCollisionPrimitives(colliders);
           gearCollisionCache.set(
@@ -2770,6 +1419,7 @@ export default function Home() {
       }
       return { connectors, colliders, gearColliders };
     };
+
     const preloadPart = async (p: CatalogPart) => {
       const preloadKey = modelRenderKey(p);
       if (preloaded.has(preloadKey)) return;
@@ -2788,6 +1438,7 @@ export default function Home() {
       preloading.set(preloadKey, task);
       return task;
     };
+
     const renderImportPreview = async (parts: PreparedImportPlacement[]) => {
       const previewScene = new THREE.Scene();
       previewScene.background = new THREE.Color(darkTheme ? 0x202328 : 0xe8edf0);
@@ -2808,19 +1459,16 @@ export default function Home() {
         previewModels = new Map<string, THREE.Object3D>();
       let previewCursor = 0;
       await Promise.all(
-        Array.from(
-          { length: Math.min(4, uniqueCatalogs.length) },
-          async () => {
-            while (previewCursor < uniqueCatalogs.length) {
-              const [key, catalog] = uniqueCatalogs[previewCursor++];
-              try {
-                previewModels.set(key, await loadPartModel(catalog));
-              } catch {
-                // A missing part must not keep the entire preview open forever.
-              }
+        Array.from({ length: Math.min(4, uniqueCatalogs.length) }, async () => {
+          while (previewCursor < uniqueCatalogs.length) {
+            const [key, catalog] = uniqueCatalogs[previewCursor++];
+            try {
+              previewModels.set(key, await loadPartModel(catalog));
+            } catch {
+              // A missing part must not keep the entire preview open forever.
             }
-          },
-        ),
+          }
+        }),
       );
       const detailedPreview = parts.length <= 180,
         proxyTemplates = new Map<
@@ -2876,9 +1524,7 @@ export default function Home() {
         wrapper.quaternion.copy(placement.rotation);
         root.add(wrapper);
         if (index % 80 === 79)
-          await new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve()),
-          );
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       }
       if (!root.children.length)
         throw new Error("No se pudo cargar ninguna geometría para la vista previa");
@@ -2888,9 +1534,9 @@ export default function Home() {
         size = box.getSize(new THREE.Vector3()),
         radius = Math.max(size.x, size.y, size.z, 1),
         previewCamera = new THREE.PerspectiveCamera(32, 16 / 9, 0.01, radius * 20);
-      previewCamera.position.copy(center).add(
-        new THREE.Vector3(radius * 1.35, radius * 1.05, radius * 1.55),
-      );
+      previewCamera.position
+        .copy(center)
+        .add(new THREE.Vector3(radius * 1.35, radius * 1.05, radius * 1.55));
       previewCamera.lookAt(center);
       const previewRenderer = new THREE.WebGLRenderer({
         antialias: true,
@@ -2909,6 +1555,7 @@ export default function Home() {
       });
       return image;
     };
+
     const state = {} as AppState,
       debugRoot = new THREE.Group();
     let showRotationPivot = false;
@@ -2928,26 +1575,22 @@ export default function Home() {
         });
       }
     };
+
     const updateDebug = () => {
       debugRoot.children.forEach((object) => {
         const data = object.userData,
           piece = data.piece as Piece | undefined;
         if (
-          (data.debugKind === "collider" ||
-            data.debugKind === "connector-volume") &&
+          (data.debugKind === "collider" || data.debugKind === "connector-volume") &&
           piece
         ) {
           piece.mesh.updateMatrixWorld(true);
           object.position.copy(
             piece.mesh.localToWorld((data.local as THREE.Vector3).clone()),
           );
-          const worldRotation = piece.mesh.getWorldQuaternion(
-            new THREE.Quaternion(),
-          );
+          const worldRotation = piece.mesh.getWorldQuaternion(new THREE.Quaternion());
           object.quaternion.copy(
-            worldRotation.multiply(
-              (data.localRotation as THREE.Quaternion).clone(),
-            ),
+            worldRotation.multiply((data.localRotation as THREE.Quaternion).clone()),
           );
         } else if (data.debugKind === "connector-point" && piece)
           object.position.copy(
@@ -2964,25 +1607,17 @@ export default function Home() {
               .normalize(),
           );
         } else if (data.debugKind === "body-axes" && piece) {
-          object.position.copy(
-            piece.mesh.getWorldPosition(new THREE.Vector3()),
-          );
-          object.quaternion.copy(
-            piece.mesh.getWorldQuaternion(new THREE.Quaternion()),
-          );
+          object.position.copy(piece.mesh.getWorldPosition(new THREE.Vector3()));
+          object.quaternion.copy(piece.mesh.getWorldQuaternion(new THREE.Quaternion()));
         } else if (data.debugKind === "joint-point") {
           const connection = data.connection as Connection;
           object.position.copy(
-            connection.a.mesh.localToWorld(
-              (data.local as THREE.Vector3).clone(),
-            ),
+            connection.a.mesh.localToWorld((data.local as THREE.Vector3).clone()),
           );
         } else if (data.debugKind === "joint-axis") {
           const connection = data.connection as Connection;
           object.position.copy(
-            connection.a.mesh.localToWorld(
-              (data.local as THREE.Vector3).clone(),
-            ),
+            connection.a.mesh.localToWorld((data.local as THREE.Vector3).clone()),
           );
           (object as THREE.ArrowHelper).setDirection(
             (data.axis as THREE.Vector3)
@@ -2998,16 +1633,13 @@ export default function Home() {
         } else if (data.debugKind === "forced-joint-link") {
           const connection = data.connection as Connection;
           if (!connection.localPointA || !connection.localPointB) return;
-          const a = connection.a.mesh.localToWorld(
-              connection.localPointA.clone(),
-            ),
-            b = connection.b.mesh.localToWorld(
-              connection.localPointB.clone(),
-            );
+          const a = connection.a.mesh.localToWorld(connection.localPointA.clone()),
+            b = connection.b.mesh.localToWorld(connection.localPointB.clone());
           (object as THREE.Line).geometry.setFromPoints([a, b]);
         }
       });
     };
+
     const configureDebugOverlay = () => {
       debugRoot.children.forEach((rootObject) => {
         const kind = rootObject.userData.debugKind as string | undefined,
@@ -3042,6 +1674,7 @@ export default function Home() {
         });
       });
     };
+
     const refreshDebug = () => {
       disposeDebug();
       for (const piece of state.pieces) {
@@ -3074,11 +1707,7 @@ export default function Home() {
             const helper = new THREE.Mesh(
               geometry,
               new THREE.MeshBasicMaterial({
-                color: gearLayer
-                  ? 0xff4fa3
-                  : piece.fixed
-                    ? 0xffc928
-                    : 0x3dff78,
+                color: gearLayer ? 0xff4fa3 : piece.fixed ? 0xffc928 : 0x3dff78,
                 wireframe: true,
                 transparent: true,
                 opacity: 0.72,
@@ -3099,13 +1728,11 @@ export default function Home() {
         if (state.debug.connectors)
           for (const connector of piece.connectors) {
             const manual = state.manualConnect,
-              selectedNode =
-                manual?.piece === piece && manual.connector === connector;
+              selectedNode = manual?.piece === piece && manual.connector === connector;
             if (
               manual &&
               ((piece === manual.piece && !selectedNode) ||
-                (piece !== manual.piece &&
-                  !pairProfile(manual.connector, connector)))
+                (piece !== manual.piece && !pairProfile(manual.connector, connector)))
             )
               continue;
             const color = selectedNode
@@ -3115,12 +1742,12 @@ export default function Home() {
                   ? 0xff4fa3
                   : 0x16dbe5
                 : connector.role === "shaft"
-                ? connector.kind === "axle"
-                  ? 0xa855f7
-                  : 0xff8a1f
-                : connector.kind === "axle"
-                  ? 0x35d36f
-                  : 0x26a7ff;
+                  ? connector.kind === "axle"
+                    ? 0xa855f7
+                    : 0xff8a1f
+                  : connector.kind === "axle"
+                    ? 0x35d36f
+                    : 0x26a7ff;
             if (connector.role === "shaft" && connector.kind === "axle") {
               const localRotation = new THREE.Quaternion().setFromUnitVectors(
                   new THREE.Vector3(0, 1, 0),
@@ -3190,11 +1817,7 @@ export default function Home() {
                         7,
                         14,
                       )
-                    : new THREE.SphereGeometry(
-                      selectedNode ? 0.16 : 0.085,
-                      10,
-                      8,
-                    ),
+                    : new THREE.SphereGeometry(selectedNode ? 0.16 : 0.085, 10, 8),
                 new THREE.MeshBasicMaterial({ color, depthTest: false }),
               );
               point.renderOrder = 41;
@@ -3221,11 +1844,7 @@ export default function Home() {
             };
             debugRoot.add(arrow);
           }
-        if (
-          showRotationPivot &&
-          piece === state.selected &&
-          piece.rotationPivotLocal
-        ) {
+        if (showRotationPivot && piece === state.selected && piece.rotationPivotLocal) {
           const pivotMarker = new THREE.Mesh(
             new THREE.TorusGeometry(0.14, 0.035, 8, 20),
             new THREE.MeshBasicMaterial({
@@ -3288,14 +1907,10 @@ export default function Home() {
       if (state.debug.physics)
         for (const connection of state.connections) {
           connection.a.mesh.updateMatrixWorld(true);
-          const local = connection.a.mesh.worldToLocal(
-              connection.point.clone(),
-            ),
+          const local = connection.a.mesh.worldToLocal(connection.point.clone()),
             nearest = connection.a.connectors
               .slice()
-              .sort(
-                (a, b) => a.local.distanceTo(local) - b.local.distanceTo(local),
-              )[0],
+              .sort((a, b) => a.local.distanceTo(local) - b.local.distanceTo(local))[0],
             axis = nearest?.axis.clone() ?? new THREE.Vector3(1, 0, 0);
           const point = new THREE.Mesh(
             new THREE.SphereGeometry(0.11, 12, 8),
@@ -3337,10 +1952,10 @@ export default function Home() {
       configureDebugOverlay();
       updateDebug();
     };
+
     const disposeRenderBatches = () => {
       state.renderBatchItems?.forEach(({ mesh }) => {
-        if (mesh.userData.ownedBatchMaterial)
-          (mesh.material as THREE.Material).dispose();
+        if (mesh.userData.ownedBatchMaterial) (mesh.material as THREE.Material).dispose();
         if (mesh.userData.ownedBatchGeometry) mesh.geometry.dispose();
         mesh.dispose();
       });
@@ -3359,10 +1974,7 @@ export default function Home() {
       outlineGeometries.forEach((geometry) => geometry.dispose());
       if (state.renderBatchRoot) {
         state.renderBatchRoot.traverse((object) => {
-          if (
-            object.userData.ownedBatchGeometry &&
-            object instanceof THREE.Line
-          )
+          if (object.userData.ownedBatchGeometry && object instanceof THREE.Line)
             object.geometry.dispose();
         });
         scene.remove(state.renderBatchRoot);
@@ -3387,6 +1999,7 @@ export default function Home() {
         });
       });
     };
+
     const updateRenderBatches = () => {
       const matrix = new THREE.Matrix4();
       const pieceMatrices = new Map<Piece, THREE.Matrix4>();
@@ -3415,6 +2028,7 @@ export default function Home() {
       }
       state.renderBatchesDirty = false;
     };
+
     const rebuildRenderBatches = (batchPieces = state.pieces) => {
       disposeRenderBatches();
       if (!batchPieces.length) return;
@@ -3481,10 +2095,7 @@ export default function Home() {
         // Keep that hierarchy direct; instancing is reserved for the uniform,
         // locally precached assets.
         if (
-          pieces.some(
-            (piece) =>
-              piece.sourceKind !== "packaged-cache" || !piece.geometry,
-          )
+          pieces.some((piece) => piece.sourceKind !== "packaged-cache" || !piece.geometry)
         )
           return;
         const template = pieces[0];
@@ -3500,28 +2111,27 @@ export default function Home() {
           const materials = Array.isArray(child.material)
               ? child.material
               : [child.material],
-            ranges = Array.isArray(child.material) && child.geometry.groups.length
-              ? child.geometry.groups.map((group) => ({
-                  start: group.start,
-                  count: group.count,
-                  material: materials[group.materialIndex ?? 0],
-                }))
-              : [{
-                  start: 0,
-                  count: child.geometry.index
-                    ? child.geometry.index.count
-                    : child.geometry.getAttribute("position").count,
-                  material: materials[0],
-                }],
+            ranges =
+              Array.isArray(child.material) && child.geometry.groups.length
+                ? child.geometry.groups.map((group) => ({
+                    start: group.start,
+                    count: group.count,
+                    material: materials[group.materialIndex ?? 0],
+                  }))
+                : [
+                    {
+                      start: 0,
+                      count: child.geometry.index
+                        ? child.geometry.index.count
+                        : child.geometry.getAttribute("position").count,
+                      material: materials[0],
+                    },
+                  ],
             localTransform = inverseWrapper.clone().multiply(child.matrixWorld);
           ranges.forEach(({ start, count, material }) => {
             if (!material || count <= 0) return;
             const geometry = cloneGeometryRange(child.geometry, start, count),
-              instance = new THREE.InstancedMesh(
-                geometry,
-                material,
-                pieces.length,
-              );
+              instance = new THREE.InstancedMesh(geometry, material, pieces.length);
             instance.name = `${template.part} × ${pieces.length}`;
             instance.castShadow = false;
             instance.receiveShadow = true;
@@ -3561,6 +2171,7 @@ export default function Home() {
       };
       updateRenderBatches();
     };
+
     let renderBatchRebuildFrame = 0;
     const scheduleRenderBatchRebuild = () => {
       if (state.bulkLoading || state.running || renderBatchRebuildFrame) return;
@@ -3569,6 +2180,7 @@ export default function Home() {
         if (!state.bulkLoading && !state.running) state.rebuildRenderBatches();
       });
     };
+
     const recolorPart = async (piece: Piece, color: number) => {
       if (piece.color === color) return true;
       const sourceColor = piece.sourceColor ?? piece.color;
@@ -3599,6 +2211,8 @@ export default function Home() {
         return false;
       }
     };
+
+    // --- Scene editing and connections -------------------------------------
     const addPart = async (
       p: CatalogPart,
       position: THREE.Vector3,
@@ -3634,7 +2248,7 @@ export default function Home() {
             pin: isPinPart(p),
             frictionPin: hasPinFriction(p),
             dynamicAxleConnections: isAxlePart(p),
-        };
+          };
         wrapper.userData.piece = piece;
         wrapper.userData.connectorReach = connectorMapReach(connectors);
         wrapper.visible = !state.bulkLoading;
@@ -3741,6 +2355,7 @@ export default function Home() {
           .normalize(),
       };
     };
+
     const nearestAxleSnapWorld = (
       host: Piece,
       connector: MeshConnector,
@@ -3755,10 +2370,10 @@ export default function Home() {
         }))
         .sort(
           (left, right) =>
-            left.world.distanceToSquared(target) -
-            right.world.distanceToSquared(target),
+            left.world.distanceToSquared(target) - right.world.distanceToSquared(target),
         )[0];
     };
+
     const forceConnectorAxesCompatible = (
       sourcePiece: Piece,
       sourceConnector: MeshConnector,
@@ -3771,16 +2386,15 @@ export default function Home() {
       // cannot describe a physical pin/axle joint and must be rejected.
       return Math.abs(sourceAxis.dot(targetAxis)) >= 0.985;
     };
-    const socketSurfaceHalfThickness = (
-      host: Piece,
-      socket: MeshConnector,
-    ) => {
+
+    const socketSurfaceHalfThickness = (host: Piece, socket: MeshConnector) => {
       const mapped = (socket.length ?? 0) / 2,
         nominal = isHalfBeamPart(host) ? 0.25 : 0.5;
       // Connection-map lengths win when present; otherwise LEGO's full/half
       // beam thickness gives the collider surface without traversing the mesh.
       return THREE.MathUtils.clamp(Math.max(mapped, nominal), 0.12, 0.6);
     };
+
     const addConnection = (
       host: Piece,
       rod: Piece,
@@ -3857,6 +2471,7 @@ export default function Home() {
       if (!state.bulkConnecting) rebalanceSmartDefaults(state, rod);
       return true;
     };
+
     const connectManual = (
       sourcePiece: Piece,
       sourceConnector: MeshConnector,
@@ -3883,12 +2498,9 @@ export default function Home() {
       sourcePiece.mesh.updateMatrixWorld(true);
       const socket =
           sourceConnector.role === "socket" ? sourceConnector : targetConnector,
-        shaft =
-          sourceConnector.role === "shaft" ? sourceConnector : targetConnector,
+        shaft = sourceConnector.role === "shaft" ? sourceConnector : targetConnector,
         alignedSourceWorld = worldConnector(sourcePiece, sourceConnector),
-        alignedSourcePoint = sourcePiece.mesh.localToWorld(
-          sourceAnchorLocal.clone(),
-        ),
+        alignedSourcePoint = sourcePiece.mesh.localToWorld(sourceAnchorLocal.clone()),
         shaftWorld =
           sourceConnector.role === "shaft"
             ? { ...alignedSourceWorld, point: alignedSourcePoint }
@@ -3911,32 +2523,23 @@ export default function Home() {
             sourceConnector.role === "shaft" ? offset : -offset,
           );
       sourcePiece.mesh.position.add(
-        sourceTarget.sub(
-          sourcePiece.mesh.localToWorld(sourceAnchorLocal.clone()),
-        ),
+        sourceTarget.sub(sourcePiece.mesh.localToWorld(sourceAnchorLocal.clone())),
       );
       sourcePiece.mesh.updateMatrixWorld(true);
       state.renderBatchesDirty = true;
       state.connections = state.connections.filter(
-        (connection) =>
-          connection.a !== sourcePiece && connection.b !== sourcePiece,
+        (connection) => connection.a !== sourcePiece && connection.b !== sourcePiece,
       );
       rebalanceAllSmartDefaults(state);
-      const socketPiece =
-          sourceConnector.role === "socket" ? sourcePiece : targetPiece,
+      const socketPiece = sourceConnector.role === "socket" ? sourcePiece : targetPiece,
         socketConnector =
           sourceConnector.role === "socket" ? sourceConnector : targetConnector,
-        shaftPiece =
-          sourceConnector.role === "shaft" ? sourcePiece : targetPiece,
+        shaftPiece = sourceConnector.role === "shaft" ? sourcePiece : targetPiece,
         shaftConnector =
           sourceConnector.role === "shaft" ? sourceConnector : targetConnector;
-      return addConnection(
-        socketPiece,
-        shaftPiece,
-        socketConnector,
-        shaftConnector,
-      );
+      return addConnection(socketPiece, shaftPiece, socketConnector, shaftConnector);
     };
+
     const connectForced = (
       sourcePiece: Piece,
       sourceConnector: MeshConnector,
@@ -3955,25 +2558,17 @@ export default function Home() {
         )
       )
         return false;
-      const sourcePoint = sourcePiece.mesh.localToWorld(
-          sourceAnchorLocal.clone(),
-        ),
+      const sourcePoint = sourcePiece.mesh.localToWorld(sourceAnchorLocal.clone()),
         targetPoint = targetPiece.mesh.localToWorld(targetAnchorLocal.clone());
       if (sourcePoint.distanceTo(targetPoint) > 5) return false;
-      const socketPiece =
-          sourceConnector.role === "socket" ? sourcePiece : targetPiece,
+      const socketPiece = sourceConnector.role === "socket" ? sourcePiece : targetPiece,
         socketConnector =
-          sourceConnector.role === "socket"
-            ? sourceConnector
-            : targetConnector,
-        shaftPiece =
-          sourceConnector.role === "shaft" ? sourcePiece : targetPiece,
+          sourceConnector.role === "socket" ? sourceConnector : targetConnector,
+        shaftPiece = sourceConnector.role === "shaft" ? sourcePiece : targetPiece,
         shaftConnector =
           sourceConnector.role === "shaft" ? sourceConnector : targetConnector,
-        pointA =
-          sourceConnector.role === "socket" ? sourcePoint : targetPoint,
-        pointB =
-          sourceConnector.role === "shaft" ? sourcePoint : targetPoint,
+        pointA = sourceConnector.role === "socket" ? sourcePoint : targetPoint,
+        pointB = sourceConnector.role === "shaft" ? sourcePoint : targetPoint,
         socketWorld = worldConnector(socketPiece, socketConnector);
       return addConnection(
         socketPiece,
@@ -3988,6 +2583,7 @@ export default function Home() {
         { pointA, pointB },
       );
     };
+
     type IndexedSocket = {
       host: Piece;
       socket: MeshConnector;
@@ -3995,12 +2591,14 @@ export default function Home() {
       axis: THREE.Vector3;
       localAxisA: THREE.Vector3;
     };
+
     type IndexedShaft = {
       rod: Piece;
       shaft: MeshConnector;
       point: THREE.Vector3;
       axis: THREE.Vector3;
     };
+
     const connectionCellSize = 0.45,
       connectionCell = (point: THREE.Vector3) =>
         `${Math.floor(point.x / connectionCellSize)}:${Math.floor(point.y / connectionCellSize)}:${Math.floor(point.z / connectionCellSize)}`,
@@ -4037,15 +2635,10 @@ export default function Home() {
                 axis,
               },
               occupiedCells = new Set<string>();
-            if (connector.kind !== "axle")
-              occupiedCells.add(connectionCell(point));
+            if (connector.kind !== "axle") occupiedCells.add(connectionCell(point));
             else {
-              const half =
-                  (connector.length ?? 0.5) / 2 + 0.12 + axleEndCapture,
-                steps = Math.max(
-                  1,
-                  Math.ceil((half * 2) / (connectionCellSize * 0.5)),
-                );
+              const half = (connector.length ?? 0.5) / 2 + 0.12 + axleEndCapture,
+                steps = Math.max(1, Math.ceil((half * 2) / (connectionCellSize * 0.5)));
               for (let step = 0; step <= steps; step++)
                 occupiedCells.add(
                   connectionCell(
@@ -4082,9 +2675,7 @@ export default function Home() {
       ) => {
         const candidates = new Set<IndexedShaft>();
         nearbyShafts(grid, candidateSocket.point, candidates);
-        let best:
-          | { candidate: IndexedShaft; score: number }
-          | undefined;
+        let best: { candidate: IndexedShaft; score: number } | undefined;
         candidates.forEach((candidate) => {
           const { rod, shaft, point, axis } = candidate,
             profile = connectorProfile(shaft, candidateSocket.socket);
@@ -4096,8 +2687,8 @@ export default function Home() {
               along = delta.dot(axis),
               radial = delta.clone().addScaledVector(axis, -along).length(),
               axialError = Math.min(
-                ...connectorAxialOffsets(shaft, candidateSocket.socket).map(
-                  (offset) => Math.abs(along - offset),
+                ...connectorAxialOffsets(shaft, candidateSocket.socket).map((offset) =>
+                  Math.abs(along - offset),
                 ),
               );
             if (radial > 0.16 || axialError > 0.1) return;
@@ -4147,7 +2738,7 @@ export default function Home() {
         setConnectionRevision((value) => value + 1);
         refreshDebug();
         return state.connections.length;
-    };
+      };
     const verifyConnections = () => {
       if (!AUTO_CONNECTIONS_ENABLED) {
         state.connectionScanVersion++;
@@ -4158,9 +2749,7 @@ export default function Home() {
       }
       const started = performance.now();
       state.connectionScanVersion++;
-      state.connections = state.connections.filter(
-        (connection) => connection.forced,
-      );
+      state.connections = state.connections.filter((connection) => connection.forced);
       state.bulkConnecting = true;
       const { sockets, shaftGrid } = buildConnectionIndex();
       sockets.forEach((socket) => scanSocketOnce(socket, shaftGrid));
@@ -4168,20 +2757,18 @@ export default function Home() {
       state.pendingConnectionMs += performance.now() - started;
       return result;
     };
+
     const verifyConnectionsAsync = async () => {
       if (!AUTO_CONNECTIONS_ENABLED) return state.connections.length;
       const scanVersion = ++state.connectionScanVersion;
       let operationStarted = performance.now();
-      state.connections = state.connections.filter(
-        (connection) => connection.forced,
-      );
+      state.connections = state.connections.filter((connection) => connection.forced);
       state.bulkConnecting = true;
       const { sockets, shaftGrid } = buildConnectionIndex();
       state.pendingConnectionMs += performance.now() - operationStarted;
       let sliceStarted = performance.now();
       for (let index = 0; index < sockets.length; index++) {
-        if (scanVersion !== state.connectionScanVersion)
-          return state.connections.length;
+        if (scanVersion !== state.connectionScanVersion) return state.connections.length;
         operationStarted = performance.now();
         scanSocketOnce(sockets[index], shaftGrid);
         state.pendingConnectionMs += performance.now() - operationStarted;
@@ -4206,15 +2793,13 @@ export default function Home() {
       const started = performance.now(),
         previousPartners = state.connections
           .filter(
-            (connection) =>
-              connection.a === movedPiece || connection.b === movedPiece,
+            (connection) => connection.a === movedPiece || connection.b === movedPiece,
           )
           .map((connection) =>
             connection.a === movedPiece ? connection.b : connection.a,
           );
       state.connections = state.connections.filter(
-        (connection) =>
-          connection.a !== movedPiece && connection.b !== movedPiece,
+        (connection) => connection.a !== movedPiece && connection.b !== movedPiece,
       );
       state.bulkConnecting = true;
       const tryPair = (
@@ -4229,16 +2814,9 @@ export default function Home() {
         if (Math.abs(socketWorld.axis.dot(shaftWorld.axis)) < 0.965) return;
         const delta = socketWorld.point.clone().sub(shaftWorld.point),
           along = delta.dot(shaftWorld.axis),
-          radial = delta
-            .clone()
-            .addScaledVector(shaftWorld.axis, -along)
-            .length();
+          radial = delta.clone().addScaledVector(shaftWorld.axis, -along).length();
         if (shaft.kind === "axle") {
-          if (
-            radial > 0.16 ||
-            Math.abs(along) > (shaft.length ?? 0.5) / 2 + 0.1
-          )
-            return;
+          if (radial > 0.16 || Math.abs(along) > (shaft.length ?? 0.5) / 2 + 0.1) return;
         } else {
           const axialError = Math.min(
             ...connectorAxialOffsets(shaft, socket).map((offset) =>
@@ -4260,9 +2838,7 @@ export default function Home() {
         if (other === movedPiece) continue;
         // A cheap piece-level rejection prevents connector work for nearly all
         // distant parts in a large imported assembly.
-        const centerDistance = movedPiece.mesh.position.distanceTo(
-          other.mesh.position,
-        );
+        const centerDistance = movedPiece.mesh.position.distanceTo(other.mesh.position);
         const otherReach =
             (other.mesh.userData.connectorReach as number | undefined) ??
             connectorMapReach(other.connectors),
@@ -4270,26 +2846,10 @@ export default function Home() {
         if (centerDistance > maximumReach) continue;
         for (const movedConnector of movedPiece.connectors)
           for (const otherConnector of other.connectors) {
-            if (
-              movedConnector.role === "socket" &&
-              otherConnector.role === "shaft"
-            )
-              tryPair(
-                movedPiece,
-                movedConnector,
-                other,
-                otherConnector,
-              );
-            else if (
-              movedConnector.role === "shaft" &&
-              otherConnector.role === "socket"
-            )
-              tryPair(
-                other,
-                otherConnector,
-                movedPiece,
-                movedConnector,
-              );
+            if (movedConnector.role === "socket" && otherConnector.role === "shaft")
+              tryPair(movedPiece, movedConnector, other, otherConnector);
+            else if (movedConnector.role === "shaft" && otherConnector.role === "socket")
+              tryPair(other, otherConnector, movedPiece, movedConnector);
           }
       }
       state.bulkConnecting = false;
@@ -4303,6 +2863,7 @@ export default function Home() {
       refreshDebug();
       return state.connections.length;
     };
+
     const updateDynamicMechanisms = () => {
       const dynamicScanStarted = performance.now();
       state.differentialLinks = detectDifferentialLinks(
@@ -4332,9 +2893,7 @@ export default function Home() {
             .normalize();
         }
       });
-      const differentialExclusions = differentialPairKeys(
-          state.differentialLinks,
-        ),
+      const differentialExclusions = differentialPairKeys(state.differentialLinks),
         previousGearLinks = state.gearLinks.length,
         previousLinksByKey = new Map(
           state.gearLinks.map((link) => [gearLinkKey(link), link]),
@@ -4358,14 +2917,16 @@ export default function Home() {
           ] as [Piece, THREE.Vector3][]) {
             const rotation = piece.body?.rotation();
             if (!rotation) continue;
-            axis.applyQuaternion(
-              new THREE.Quaternion(
-                rotation.x,
-                rotation.y,
-                rotation.z,
-                rotation.w,
-              ).invert(),
-            ).normalize();
+            axis
+              .applyQuaternion(
+                new THREE.Quaternion(
+                  rotation.x,
+                  rotation.y,
+                  rotation.z,
+                  rotation.w,
+                ).invert(),
+              )
+              .normalize();
           }
           return;
         }
@@ -4374,8 +2935,7 @@ export default function Home() {
         link.axisB.copy(sameOrder ? previous.axisB : previous.axisA);
         link.signB = previous.signB;
         link.perpendicular = previous.perpendicular;
-        link.ratio =
-          -link.a.spec.teeth / (link.signB * link.b.spec.teeth);
+        link.ratio = -link.a.spec.teeth / (link.signB * link.b.spec.teeth);
       });
       state.gearLinks = detectedGearLinks;
       const activeGearKeys = new Set(state.gearLinks.map(gearLinkKey));
@@ -4396,8 +2956,7 @@ export default function Home() {
       for (const connection of state.connections) {
         const dynamicAxle =
           !connection.forced &&
-          (connection.profile === "axle-cross" ||
-            connection.profile === "axle-round") &&
+          (connection.profile === "axle-cross" || connection.profile === "axle-round") &&
           connection.b.dynamicAxleConnections;
         if (!dynamicAxle) {
           retained.push(connection);
@@ -4408,18 +2967,12 @@ export default function Home() {
           alignment = Math.abs(socketWorld.axis.dot(shaftWorld.axis)),
           delta = socketWorld.point.clone().sub(shaftWorld.point),
           along = delta.dot(shaftWorld.axis),
-          radial = delta
-            .clone()
-            .addScaledVector(shaftWorld.axis, -along)
-            .length(),
+          radial = delta.clone().addScaledVector(shaftWorld.axis, -along).length(),
           halfShaft = (connection.shaft.length ?? 0.5) / 2,
           entranceAllowance =
             connection.socket.kind === "axle"
               ? 0.12
-              : socketSurfaceHalfThickness(
-                  connection.a,
-                  connection.socket,
-                ) + 0.08,
+              : socketSurfaceHalfThickness(connection.a, connection.socket) + 0.08,
           engaged =
             alignment >= 0.94 &&
             radial <= 0.2 &&
@@ -4452,13 +3005,10 @@ export default function Home() {
             (connection.a === a && connection.b === b) ||
             (connection.a === b && connection.b === a),
         );
-        if (!stillConnected)
-          state.dynamicNoContactPairs.delete(contactPairKey(a, b));
+        if (!stillConnected) state.dynamicNoContactPairs.delete(contactPairKey(a, b));
       });
 
-      const existingIds = new Set(
-        state.connections.map((connection) => connection.id),
-      );
+      const existingIds = new Set(state.connections.map((connection) => connection.id));
       state.bulkConnecting = true;
       for (const pair of state.contactCandidates.values())
         for (const [rod, host] of [
@@ -4467,8 +3017,7 @@ export default function Home() {
         ] as [Piece, Piece][]) {
           if (!rod.dynamicAxleConnections) continue;
           for (const shaft of rod.connectors.filter(
-            (connector) =>
-              connector.role === "shaft" && connector.kind === "axle",
+            (connector) => connector.role === "shaft" && connector.kind === "axle",
           )) {
             const shaftWorld = worldConnector(rod, shaft),
               halfShaft = (shaft.length ?? 0.5) / 2;
@@ -4477,22 +3026,13 @@ export default function Home() {
             )) {
               if (!connectorProfile(shaft, socket)) continue;
               const socketWorld = worldConnector(host, socket),
-                alignment = Math.abs(
-                  socketWorld.axis.dot(shaftWorld.axis),
-                );
+                alignment = Math.abs(socketWorld.axis.dot(shaftWorld.axis));
               if (alignment < 0.94) continue;
               const delta = socketWorld.point.clone().sub(shaftWorld.point),
                 along = delta.dot(shaftWorld.axis),
-                radial = delta
-                  .clone()
-                  .addScaledVector(shaftWorld.axis, -along)
-                  .length(),
+                radial = delta.clone().addScaledVector(shaftWorld.axis, -along).length(),
                 surface = socketSurfaceHalfThickness(host, socket);
-              if (
-                radial > 0.16 ||
-                Math.abs(along) > halfShaft + surface + 0.12
-              )
-                continue;
+              if (radial > 0.16 || Math.abs(along) > halfShaft + surface + 0.12) continue;
               addConnection(host, rod, socket, shaft, {
                 point: socketWorld.point,
                 axis: socketWorld.axis,
@@ -4514,21 +3054,15 @@ export default function Home() {
           continue;
         }
         const dynamicAxle =
-          (connection.profile === "axle-cross" ||
-            connection.profile === "axle-round") &&
+          (connection.profile === "axle-cross" || connection.profile === "axle-round") &&
           connection.b.dynamicAxleConnections;
         if (!dynamicAxle) continue;
         accepted.push(connection);
-        state.dynamicNoContactPairs.add(
-          contactPairKey(connection.a, connection.b),
-        );
+        state.dynamicNoContactPairs.add(contactPairKey(connection.a, connection.b));
         const hostBody = connection.a.body,
           axleBody = connection.b.body;
         if (hostBody && axleBody && hostBody !== axleBody) {
-          const axis = worldConnector(
-              connection.a,
-              connection.socket,
-            ).axis,
+          const axis = worldConnector(connection.a, connection.socket).axis,
             hostVelocity = hostBody.linvel(),
             axleVelocity = axleBody.linvel(),
             relativeAxial = THREE.MathUtils.clamp(
@@ -4579,9 +3113,7 @@ export default function Home() {
         );
         state.contactExclusions.clear();
         refreshed.forEach((key) => state.contactExclusions.add(key));
-        differentialExclusions.forEach((key) =>
-          state.contactExclusions.add(key),
-        );
+        differentialExclusions.forEach((key) => state.contactExclusions.add(key));
       }
       if (changed) {
         setConnectionRevision((value) => value + 1);
@@ -4589,6 +3121,7 @@ export default function Home() {
       }
       state.pendingConnectionMs += performance.now() - dynamicScanStarted;
     };
+
     const connect = (piece: Piece) => {
       if (!AUTO_CONNECTIONS_ENABLED) return;
       if (isRod(piece)) {
@@ -4614,10 +3147,7 @@ export default function Home() {
               if (shaft.kind !== "axle") {
                 const delta = shaftWorld.point.clone().sub(socketWorld.point),
                   along = delta.dot(axis),
-                  radial = delta
-                    .clone()
-                    .addScaledVector(axis, -along)
-                    .length(),
+                  radial = delta.clone().addScaledVector(axis, -along).length(),
                   axialError = Math.min(
                     ...connectorAxialOffsets(shaft, socket).map((offset) =>
                       Math.abs(along - offset),
@@ -4625,14 +3155,10 @@ export default function Home() {
                   );
                 score = radial + axialError;
               } else {
-                const delta = socketWorld.point
-                    .clone()
-                    .sub(shaftWorld.point),
+                const delta = socketWorld.point.clone().sub(shaftWorld.point),
                   along = delta.dot(axis),
                   radial = delta.clone().addScaledVector(axis, -along).length();
-                score =
-                  radial +
-                  Math.max(0, Math.abs(along) - (shaft.length ?? 0.5) / 2);
+                score = radial + Math.max(0, Math.abs(along) - (shaft.length ?? 0.5) / 2);
               }
               if (score < 0.75 && (!best || score < best.score))
                 best = { host, socket, shaft, score };
@@ -4640,8 +3166,7 @@ export default function Home() {
         if (best) {
           let targetAxis = worldConnector(best.host, best.socket).axis,
             currentAxis = worldConnector(piece, best.shaft).axis;
-          if (currentAxis.dot(targetAxis) < 0)
-            targetAxis = targetAxis.clone().negate();
+          if (currentAxis.dot(targetAxis) < 0) targetAxis = targetAxis.clone().negate();
           const alignment = new THREE.Quaternion().setFromUnitVectors(
             currentAxis,
             targetAxis,
@@ -4658,18 +3183,10 @@ export default function Home() {
                 socketPoint,
                 targetAxis,
               ),
-              targetShaftPoint = socketPoint
-                .clone()
-                .addScaledVector(targetAxis, offset);
-            piece.mesh.position.add(
-              targetShaftPoint.sub(shaftPoint),
-            );
+              targetShaftPoint = socketPoint.clone().addScaledVector(targetAxis, offset);
+            piece.mesh.position.add(targetShaftPoint.sub(shaftPoint));
           } else {
-            const snap = nearestAxleSnapWorld(
-              piece,
-              best.shaft,
-              socketPoint,
-            );
+            const snap = nearestAxleSnapWorld(piece, best.shaft, socketPoint);
             if (snap) piece.mesh.position.add(socketPoint.clone().sub(snap.world));
           }
           piece.mesh.updateMatrixWorld(true);
@@ -4700,10 +3217,7 @@ export default function Home() {
             if (shaft.kind !== "axle") {
               const delta = shaftWorld.point.clone().sub(socketWorld.point),
                 along = delta.dot(axis),
-                radial = delta
-                  .clone()
-                  .addScaledVector(axis, -along)
-                  .length(),
+                radial = delta.clone().addScaledVector(axis, -along).length(),
                 axialError = Math.min(
                   ...connectorAxialOffsets(shaft, socket).map((offset) =>
                     Math.abs(along - offset),
@@ -4714,9 +3228,7 @@ export default function Home() {
               const delta = socketWorld.point.clone().sub(shaftWorld.point),
                 along = delta.dot(axis),
                 radial = delta.clone().addScaledVector(axis, -along).length();
-              score =
-                radial +
-                Math.max(0, Math.abs(along) - (shaft.length ?? 0.5) / 2);
+              score = radial + Math.max(0, Math.abs(along) - (shaft.length ?? 0.5) / 2);
             }
             if (score < 0.75 && (!best || score < best.score))
               best = { rod, socket, shaft, score };
@@ -4727,8 +3239,7 @@ export default function Home() {
           .clone()
           .transformDirection(piece.mesh.matrixWorld)
           .normalize();
-      if (currentAxis.dot(targetAxis) < 0)
-        targetAxis = targetAxis.clone().negate();
+      if (currentAxis.dot(targetAxis) < 0) targetAxis = targetAxis.clone().negate();
       const alignment = new THREE.Quaternion().setFromUnitVectors(
         currentAxis,
         targetAxis,
@@ -4745,18 +3256,10 @@ export default function Home() {
             socketPoint,
             targetAxis,
           ),
-          targetSocketPoint = shaftPoint
-            .clone()
-            .addScaledVector(targetAxis, -offset);
-        piece.mesh.position.add(
-          targetSocketPoint.sub(socketPoint),
-        );
+          targetSocketPoint = shaftPoint.clone().addScaledVector(targetAxis, -offset);
+        piece.mesh.position.add(targetSocketPoint.sub(socketPoint));
       } else {
-        const snap = nearestAxleSnapWorld(
-          best.rod,
-          best.shaft,
-          socketPoint,
-        );
+        const snap = nearestAxleSnapWorld(best.rod, best.shaft, socketPoint);
         if (snap) piece.mesh.position.add(snap.world.clone().sub(socketPoint));
       }
       piece.mesh.updateMatrixWorld(true);
@@ -4817,6 +3320,7 @@ export default function Home() {
       );
       ray.setFromCamera(pointer, camera);
     };
+
     const nearestScreenConnector = (
       piece: Piece,
       e: { clientX: number; clientY: number },
@@ -4833,8 +3337,8 @@ export default function Home() {
             const projected = piece.mesh
                 .localToWorld(anchor.local.clone())
                 .project(camera),
-            x = bounds.left + ((projected.x + 1) * bounds.width) / 2,
-            y = bounds.top + ((1 - projected.y) * bounds.height) / 2;
+              x = bounds.left + ((projected.x + 1) * bounds.width) / 2,
+              y = bounds.top + ((1 - projected.y) * bounds.height) / 2;
             return {
               connector,
               anchorLocal: anchor.local.clone(),
@@ -4844,6 +3348,7 @@ export default function Home() {
         })
         .sort((a, b) => a.distance - b.distance)[0];
     };
+
     const nearestConnectedPivot = (
       piece: Piece,
       e: { clientX: number; clientY: number },
@@ -4853,8 +3358,7 @@ export default function Home() {
       return state.connections
         .filter((connection) => connection.a === piece || connection.b === piece)
         .map((connection) => {
-          const connector =
-              connection.a === piece ? connection.socket : connection.shaft,
+          const connector = connection.a === piece ? connection.socket : connection.shaft,
             socketPoint = worldConnector(connection.a, connection.socket).point,
             anchorLocal = piece.mesh.worldToLocal(socketPoint.clone()),
             projected = socketPoint.clone().project(camera),
@@ -4869,6 +3373,7 @@ export default function Home() {
         })
         .sort((a, b) => a.distance - b.distance)[0];
     };
+
     const nearbyPivotConnectionCorrection = (draft: {
       piece: Piece;
       local: THREE.Vector3;
@@ -4878,9 +3383,7 @@ export default function Home() {
     }) => {
       draft.piece.mesh.updateMatrixWorld(true);
       const pivotSupport =
-          draft.connection.a === draft.piece
-            ? draft.connection.b
-            : draft.connection.a,
+          draft.connection.a === draft.piece ? draft.connection.b : draft.connection.a,
         pivotTargetConnector =
           draft.connection.a === draft.piece
             ? draft.connection.shaft
@@ -4896,11 +3399,7 @@ export default function Home() {
               : connection.b === current
                 ? connection.a
                 : undefined;
-          if (
-            next &&
-            next !== draft.piece &&
-            !supportPieces.has(next)
-          ) {
+          if (next && next !== draft.piece && !supportPieces.has(next)) {
             supportPieces.add(next);
             supportQueue.push(next);
           }
@@ -4916,9 +3415,7 @@ export default function Home() {
           .transformDirection(draft.piece.mesh.matrixWorld)
           .normalize(),
         maximumCorrection = THREE.MathUtils.degToRad(12);
-      let best:
-        | { angle: number; other: Piece; score: number }
-        | undefined;
+      let best: { angle: number; other: Piece; score: number } | undefined;
       for (const sourceConnector of draft.piece.connectors) {
         if (sourceConnector === draft.connector) continue;
         const sourceAnchors =
@@ -4929,43 +3426,31 @@ export default function Home() {
           if (other === draft.piece) continue;
           other.mesh.updateMatrixWorld(true);
           for (const targetConnector of other.connectors) {
-            if (
-              other === pivotSupport &&
-              targetConnector === pivotTargetConnector
-            )
+            if (other === pivotSupport && targetConnector === pivotTargetConnector)
               continue;
             const profile = pairProfile(sourceConnector, targetConnector);
             if (!profile) continue;
             const targetAnchors =
-              targetConnector.role === "shaft" &&
-              targetConnector.kind === "axle"
+              targetConnector.role === "shaft" && targetConnector.kind === "axle"
                 ? axleSnapPoints(targetConnector).map((point) => point.local)
                 : [targetConnector.local];
             for (const sourceLocal of sourceAnchors)
               for (const targetLocal of targetAnchors) {
-                const sourcePoint = draft.piece.mesh.localToWorld(
-                    sourceLocal.clone(),
-                  ),
+                const sourcePoint = draft.piece.mesh.localToWorld(sourceLocal.clone()),
                   targetPoint = other.mesh.localToWorld(targetLocal.clone()),
                   sourceRadius = sourcePoint
                     .clone()
                     .sub(pivotWorld)
                     .addScaledVector(
                       pivotAxisWorld,
-                      -sourcePoint
-                        .clone()
-                        .sub(pivotWorld)
-                        .dot(pivotAxisWorld),
+                      -sourcePoint.clone().sub(pivotWorld).dot(pivotAxisWorld),
                     ),
                   targetRadius = targetPoint
                     .clone()
                     .sub(pivotWorld)
                     .addScaledVector(
                       pivotAxisWorld,
-                      -targetPoint
-                        .clone()
-                        .sub(pivotWorld)
-                        .dot(pivotAxisWorld),
+                      -targetPoint.clone().sub(pivotWorld).dot(pivotAxisWorld),
                     );
                 if (
                   sourceRadius.lengthSq() < 1e-5 ||
@@ -4974,9 +3459,7 @@ export default function Home() {
                 )
                   continue;
                 const angle = Math.atan2(
-                  pivotAxisWorld.dot(
-                    sourceRadius.clone().cross(targetRadius),
-                  ),
+                  pivotAxisWorld.dot(sourceRadius.clone().cross(targetRadius)),
                   sourceRadius.dot(targetRadius),
                 );
                 if (Math.abs(angle) > maximumCorrection) continue;
@@ -4994,43 +3477,28 @@ export default function Home() {
                     sourceConnector,
                   ).axis.applyQuaternion(correction),
                   targetAxis = worldConnector(other, targetConnector).axis;
-                if (Math.abs(predictedSourceAxis.dot(targetAxis)) < 0.965)
-                  continue;
+                if (Math.abs(predictedSourceAxis.dot(targetAxis)) < 0.965) continue;
                 const shaft =
-                    sourceConnector.role === "shaft"
-                      ? sourceConnector
-                      : targetConnector,
+                    sourceConnector.role === "shaft" ? sourceConnector : targetConnector,
                   socket =
-                    sourceConnector.role === "socket"
-                      ? sourceConnector
-                      : targetConnector,
+                    sourceConnector.role === "socket" ? sourceConnector : targetConnector,
                   shaftPoint =
-                    sourceConnector.role === "shaft"
-                      ? predictedSourcePoint
-                      : targetPoint,
+                    sourceConnector.role === "shaft" ? predictedSourcePoint : targetPoint,
                   socketPoint =
                     sourceConnector.role === "socket"
                       ? predictedSourcePoint
                       : targetPoint,
                   shaftAxis =
-                    sourceConnector.role === "shaft"
-                      ? predictedSourceAxis
-                      : targetAxis,
+                    sourceConnector.role === "shaft" ? predictedSourceAxis : targetAxis,
                   delta = socketPoint.clone().sub(shaftPoint),
                   along = delta.dot(shaftAxis),
-                  radial = delta
-                    .clone()
-                    .addScaledVector(shaftAxis, -along)
-                    .length(),
+                  radial = delta.clone().addScaledVector(shaftAxis, -along).length(),
                   axialError =
                     shaft.kind === "axle"
-                      ? Math.max(
-                          0,
-                          Math.abs(along) - (shaft.length ?? 0.5) / 2,
-                        )
+                      ? Math.max(0, Math.abs(along) - (shaft.length ?? 0.5) / 2)
                       : Math.min(
-                          ...connectorAxialOffsets(shaft, socket).map(
-                            (offset) => Math.abs(along - offset),
+                          ...connectorAxialOffsets(shaft, socket).map((offset) =>
+                            Math.abs(along - offset),
                           ),
                         );
                 if (radial > 0.18 || axialError > 0.14) continue;
@@ -5039,14 +3507,14 @@ export default function Home() {
                   axialError +
                   Math.abs(angle) * 0.04 +
                   (supportPieces.has(other) ? 0 : 0.025);
-                if (!best || score < best.score)
-                  best = { angle, other, score };
+                if (!best || score < best.score) best = { angle, other, score };
               }
           }
         }
       }
       return best;
     };
+
     const updateManualForceMode = (forced: boolean) => {
       const draft = state.manualConnect;
       if (!draft || draft.forced === forced) return;
@@ -5066,10 +3534,10 @@ export default function Home() {
             : "Normal manual Connect",
       );
     };
+
     const pieceFrom = (object: THREE.Object3D, instanceId?: number) => {
       const instancePieces = object.userData.instancePieces as Piece[] | undefined;
-      if (instancePieces && instanceId !== undefined)
-        return instancePieces[instanceId];
+      if (instancePieces && instanceId !== undefined) return instancePieces[instanceId];
       let o: THREE.Object3D | null = object;
       while (o) {
         if (o.userData.piece) return o.userData.piece as Piece;
@@ -5077,10 +3545,9 @@ export default function Home() {
       }
       return undefined;
     };
+
     const pickPiece = () => {
-      let best:
-        | { piece: Piece; point: THREE.Vector3; distance: number }
-        | undefined;
+      let best: { piece: Piece; point: THREE.Vector3; distance: number } | undefined;
       const visualHits = ray.intersectObjects(
         [
           ...state.pieces
@@ -5139,16 +3606,17 @@ export default function Home() {
           if (!localHit) continue;
           const point = localHit.applyMatrix4(primitiveMatrix),
             distance = ray.ray.origin.distanceTo(point);
-          if (!best || distance < best.distance)
-            best = { piece, point, distance };
+          if (!best || distance < best.distance) best = { piece, point, distance };
         }
       }
       return best;
     };
+
     const paintForceLabel = (label: HTMLDivElement, force: number) => {
       const text = `${force.toFixed(1)} N`;
       if (label.textContent !== text) label.textContent = text;
     };
+
     const updateSpring = () => {
       if (!spring) return;
       const projected = spring.piece.mesh
@@ -5188,6 +3656,7 @@ export default function Home() {
       spring.label.style.top = `${(anchor.y + target.y) / 2}px`;
       paintForceLabel(spring.label, spring.force);
     };
+
     const connectedPieces = (start: Piece) => {
       const found = new Set<Piece>([start]),
         queue = [start];
@@ -5208,11 +3677,8 @@ export default function Home() {
       }
       return [...found];
     };
-    const clampMotion = (
-      piece: Piece,
-      linearLimit: number,
-      angularLimit: number,
-    ) => {
+
+    const clampMotion = (piece: Piece, linearLimit: number, angularLimit: number) => {
       if (!piece.body || piece.physicsIslandFixed) return;
       const v = piece.body.linvel(),
         w = piece.body.angvel(),
@@ -5220,19 +3686,14 @@ export default function Home() {
         angular = Math.hypot(w.x, w.y, w.z);
       if (linear > linearLimit) {
         const scale = linearLimit / linear;
-        piece.body.setLinvel(
-          { x: v.x * scale, y: v.y * scale, z: v.z * scale },
-          true,
-        );
+        piece.body.setLinvel({ x: v.x * scale, y: v.y * scale, z: v.z * scale }, true);
       }
       if (angular > angularLimit) {
         const scale = angularLimit / angular;
-        piece.body.setAngvel(
-          { x: w.x * scale, y: w.y * scale, z: w.z * scale },
-          true,
-        );
+        piece.body.setAngvel({ x: w.x * scale, y: w.y * scale, z: w.z * scale }, true);
       }
     };
+
     const colliderExtentAlongWorldAxis = (
       piece: Piece,
       primitive: CollisionPrimitive,
@@ -5246,11 +3707,11 @@ export default function Home() {
           alignment = Math.abs(cylinderAxis.dot(axis));
         return (
           alignment * (primitive.halfHeight ?? 0) +
-          Math.sqrt(Math.max(0, 1 - alignment * alignment)) *
-            (primitive.radius ?? 0)
+          Math.sqrt(Math.max(0, 1 - alignment * alignment)) * (primitive.radius ?? 0)
         );
       }
-      const rotation = piece.mesh.getWorldQuaternion(new THREE.Quaternion())
+      const rotation = piece.mesh
+          .getWorldQuaternion(new THREE.Quaternion())
           .multiply(primitive.rotation),
         size = primitive.size!,
         x = new THREE.Vector3(1, 0, 0).applyQuaternion(rotation),
@@ -5262,6 +3723,7 @@ export default function Home() {
         Math.abs(axis.dot(z)) * size.z * 0.5
       );
     };
+
     const enforceAxialStops = () => {
       for (const connection of state.connections) {
         if (
@@ -5274,10 +3736,7 @@ export default function Home() {
         const socketWorld = worldConnector(connection.a, connection.socket),
           axis = socketWorld.axis.normalize();
         if (!connection.axialStops) {
-          const surface = socketSurfaceHalfThickness(
-            connection.a,
-            connection.socket,
-          );
+          const surface = socketSurfaceHalfThickness(connection.a, connection.socket);
           connection.axialStops = [];
           for (const piece of connection.b.physicsIsland ?? [connection.b]) {
             if (!/bush|nut/i.test(piece.name)) continue;
@@ -5298,10 +3757,7 @@ export default function Home() {
                 extent = colliderExtentAlongWorldAxis(piece, primitive, axis),
                 minimumDistance =
                   surface +
-                  Math.max(
-                    0.01,
-                    extent - state.physicsSettings.axleTolerance * 0.5,
-                  );
+                  Math.max(0.01, extent - state.physicsSettings.axleTolerance * 0.5);
               if (
                 radial <= radialReach + 0.12 &&
                 Math.abs(Math.abs(distance) - minimumDistance) <= 0.2
@@ -5317,16 +3773,11 @@ export default function Home() {
         }
         for (const stop of connection.axialStops) {
           stop.piece.mesh.updateMatrixWorld(true);
-          const center = stop.piece.mesh.localToWorld(
-              stop.primitive.center.clone(),
-            ),
-            signedDistance =
-              center.clone().sub(socketWorld.point).dot(axis) * stop.side;
+          const center = stop.piece.mesh.localToWorld(stop.primitive.center.clone()),
+            signedDistance = center.clone().sub(socketWorld.point).dot(axis) * stop.side;
           if (signedDistance >= stop.minimumDistance) continue;
           const correctionDistance = stop.minimumDistance - signedDistance,
-            correction = axis
-              .clone()
-              .multiplyScalar(stop.side * correctionDistance),
+            correction = axis.clone().multiplyScalar(stop.side * correctionDistance),
             body = connection.b.body,
             translation = body.translation();
           body.setTranslation(
@@ -5368,11 +3819,9 @@ export default function Home() {
         }
       }
     };
+
     const enforceGearLinks = () => {
-      const gearNodes = new Map<
-          number,
-          { piece: Piece; localAxis: THREE.Vector3 }
-        >(),
+      const gearNodes = new Map<number, { piece: Piece; localAxis: THREE.Vector3 }>(),
         bodyRotations = new Map<number, THREE.Quaternion>(),
         bodyRotationVectors = new Map<number, THREE.Vector3>(),
         stepGearDeltas = new Map<number, number>();
@@ -5395,8 +3844,7 @@ export default function Home() {
             ).normalize(),
             previous = state.gearBodyRotations.get(body.handle) ?? current,
             delta = current.clone().multiply(previous.clone().invert());
-          if (delta.w < 0)
-            delta.set(-delta.x, -delta.y, -delta.z, -delta.w);
+          if (delta.w < 0) delta.set(-delta.x, -delta.y, -delta.z, -delta.w);
           const vectorLength = Math.hypot(delta.x, delta.y, delta.z),
             angle = 2 * Math.atan2(vectorLength, Math.max(0, delta.w)),
             rotationVector =
@@ -5416,12 +3864,11 @@ export default function Home() {
         const body = piece.body,
           rotation = bodyRotations.get(body!.handle);
         if (!body || !rotation) continue;
-          const worldAxis = localAxis.clone().applyQuaternion(rotation).normalize(),
-            deltaAngle =
-              bodyRotationVectors.get(body.handle)?.dot(worldAxis) ?? 0,
-            angleKey = `piece:${piece.id}`;
-          stepGearDeltas.set(piece.id, deltaAngle);
-          state.gearAngles.set(
+        const worldAxis = localAxis.clone().applyQuaternion(rotation).normalize(),
+          deltaAngle = bodyRotationVectors.get(body.handle)?.dot(worldAxis) ?? 0,
+          angleKey = `piece:${piece.id}`;
+        stepGearDeltas.set(piece.id, deltaAngle);
+        state.gearAngles.set(
           angleKey,
           (state.gearAngles.get(angleKey) ?? 0) + deltaAngle,
         );
@@ -5430,31 +3877,17 @@ export default function Home() {
           const body = piece.body!,
             translation = body.translation(),
             rotation = body.rotation();
-          return new THREE.Vector3(
-            translation.x,
-            translation.y,
-            translation.z,
-          ).add(
+          return new THREE.Vector3(translation.x, translation.y, translation.z).add(
             (piece.physicsOffset ?? new THREE.Vector3())
               .clone()
               .applyQuaternion(
-                new THREE.Quaternion(
-                  rotation.x,
-                  rotation.y,
-                  rotation.z,
-                  rotation.w,
-                ),
+                new THREE.Quaternion(rotation.x, rotation.y, rotation.z, rotation.w),
               ),
           );
         },
-        rotateBodyAtGear = (
-          piece: Piece,
-          localAxis: THREE.Vector3,
-          angle: number,
-        ) => {
+        rotateBodyAtGear = (piece: Piece, localAxis: THREE.Vector3, angle: number) => {
           const body = piece.body;
-          if (!body || piece.physicsIslandFixed || Math.abs(angle) < 1e-8)
-            return;
+          if (!body || piece.physicsIslandFixed || Math.abs(angle) < 1e-8) return;
           const rotation = body.rotation(),
             current = new THREE.Quaternion(
               rotation.x,
@@ -5467,11 +3900,7 @@ export default function Home() {
             next = delta.clone().multiply(current).normalize(),
             pivot = gearCenter(piece),
             translation = body.translation(),
-            nextPosition = new THREE.Vector3(
-              translation.x,
-              translation.y,
-              translation.z,
-            )
+            nextPosition = new THREE.Vector3(translation.x, translation.y, translation.z)
               .sub(pivot)
               .applyQuaternion(delta)
               .add(pivot);
@@ -5482,15 +3911,11 @@ export default function Home() {
           // body rotation to every phase coordinate on that island.
           for (const node of gearNodes.values()) {
             if (node.piece.body !== body) continue;
-            const nodeAxis = node.localAxis
-              .clone()
-              .applyQuaternion(current)
-              .normalize();
+            const nodeAxis = node.localAxis.clone().applyQuaternion(current).normalize();
             const key = `piece:${node.piece.id}`;
             state.gearAngles.set(
               key,
-              (state.gearAngles.get(key) ?? 0) +
-                angle * worldAxis.dot(nodeAxis),
+              (state.gearAngles.get(key) ?? 0) + angle * worldAxis.dot(nodeAxis),
             );
           }
         },
@@ -5513,12 +3938,8 @@ export default function Home() {
           const fixedA = !!pieceA.physicsIslandFixed,
             fixedB = !!pieceB.physicsIslandFixed;
           if (fixedA && fixedB) return;
-          const phaseMotionA = Math.abs(
-              teethA * (stepGearDeltas.get(pieceA.id) ?? 0),
-            ),
-            phaseMotionB = Math.abs(
-              signedTeethB * (stepGearDeltas.get(pieceB.id) ?? 0),
-            );
+          const phaseMotionA = Math.abs(teethA * (stepGearDeltas.get(pieceA.id) ?? 0)),
+            phaseMotionB = Math.abs(signedTeethB * (stepGearDeltas.get(pieceB.id) ?? 0));
           let correctionA = 0,
             correctionB = 0;
           if (fixedA) correctionB = -error / signedTeethB;
@@ -5528,8 +3949,7 @@ export default function Home() {
           else if (phaseMotionB > phaseMotionA * 1.1 + 1e-7)
             correctionB = -error / signedTeethB;
           else {
-            const denominator =
-              teethA * teethA + signedTeethB * signedTeethB;
+            const denominator = teethA * teethA + signedTeethB * signedTeethB;
             correctionA = (-error * teethA) / denominator;
             correctionB = (-error * signedTeethB) / denominator;
           }
@@ -5547,99 +3967,6 @@ export default function Home() {
       // phase correction is intentionally much stronger than a normal motor;
       // it behaves like engaged teeth instead of a soft friction drive.
       const solveLink = (link: RuntimeGearLink) => {
-          const pieceA = link.a.value,
-            pieceB = link.b.value,
-            bodyA = pieceA.body,
-            bodyB = pieceB.body;
-          if (!bodyA || !bodyB || bodyA === bodyB) return;
-          const rotationA = bodyA.rotation(),
-            rotationB = bodyB.rotation(),
-            axisA = link.axisA
-              .clone()
-              .applyQuaternion(
-                new THREE.Quaternion(
-                  rotationA.x,
-                  rotationA.y,
-                  rotationA.z,
-                  rotationA.w,
-                ),
-              ),
-            axisB = link.axisB
-              .clone()
-              .applyQuaternion(
-                new THREE.Quaternion(
-                  rotationB.x,
-                  rotationB.y,
-                  rotationB.z,
-                  rotationB.w,
-                ),
-              ),
-            angularA = bodyA.angvel(),
-            angularB = bodyB.angvel(),
-            velocityA =
-              angularA.x * axisA.x +
-              angularA.y * axisA.y +
-              angularA.z * axisA.z,
-            velocityB =
-              angularB.x * axisB.x +
-              angularB.y * axisB.y +
-              angularB.z * axisB.z,
-            teethA = link.a.spec.teeth,
-            teethB = link.b.spec.teeth,
-            signedTeethB = link.signB * teethB;
-          // Tooth position is already projected rigidly above. Mixing its old
-          // phase-velocity correction into this equation deformed the actual
-          // ratio under load (e.g. 20:28 became roughly 20:6). Velocity now has
-          // one exact invariant only: teethA*wA + signedTeethB*wB = 0.
-          const error = teethA * velocityA + signedTeethB * velocityB;
-          if (Math.abs(error) < 1e-5) return;
-          const fixedA = !!pieceA.physicsIslandFixed,
-            fixedB = !!pieceB.physicsIslandFixed;
-          if (fixedA && fixedB) return;
-          let deltaA = 0,
-            deltaB = 0;
-          if (fixedA) deltaB = -error / signedTeethB;
-          else if (fixedB) deltaA = -error / teethA;
-          else {
-            const denominator =
-              teethA * teethA + signedTeethB * signedTeethB;
-            deltaA = (-error * teethA) / denominator;
-            deltaB = (-error * signedTeethB) / denominator;
-          }
-          if (!fixedA)
-            bodyA.setAngvel(
-              {
-                x: angularA.x + axisA.x * deltaA,
-                y: angularA.y + axisA.y * deltaA,
-                z: angularA.z + axisA.z * deltaA,
-              },
-              true,
-            );
-          if (!fixedB)
-            bodyB.setAngvel(
-              {
-                x: angularB.x + axisB.x * deltaB,
-                y: angularB.y + axisB.y * deltaB,
-                z: angularB.z + axisB.z * deltaB,
-              },
-              true,
-            );
-      };
-      // Symmetric Gauss-Seidel sweeps make a train transmit equally well from
-      // either end instead of favouring the pair that happens to be stored first.
-      for (let iteration = 0; iteration < 8; iteration++) {
-        state.gearLinks.forEach(solveLink);
-        for (let index = state.gearLinks.length - 1; index >= 0; index--)
-          solveLink(state.gearLinks[index]);
-      }
-    };
-    // Non-positional gear constraint. It never writes a quaternion or an
-    // absolute angle: only the angular velocities that physically exist are
-    // projected onto the exact tooth ratio. Running this around small Rapier
-    // substeps lets contacts and motor torque participate without teleporting
-    // either gear when the applied force changes direction.
-    const projectGearVelocities = () => {
-      const solve = (link: RuntimeGearLink) => {
         const pieceA = link.a.value,
           pieceB = link.b.value,
           bodyA = pieceA.body,
@@ -5650,39 +3977,26 @@ export default function Home() {
           axisA = link.axisA
             .clone()
             .applyQuaternion(
-              new THREE.Quaternion(
-                rotationA.x,
-                rotationA.y,
-                rotationA.z,
-                rotationA.w,
-              ),
-            )
-            .normalize(),
+              new THREE.Quaternion(rotationA.x, rotationA.y, rotationA.z, rotationA.w),
+            ),
           axisB = link.axisB
             .clone()
             .applyQuaternion(
-              new THREE.Quaternion(
-                rotationB.x,
-                rotationB.y,
-                rotationB.z,
-                rotationB.w,
-              ),
-            )
-            .normalize(),
+              new THREE.Quaternion(rotationB.x, rotationB.y, rotationB.z, rotationB.w),
+            ),
           angularA = bodyA.angvel(),
           angularB = bodyB.angvel(),
-          velocityA =
-            angularA.x * axisA.x +
-            angularA.y * axisA.y +
-            angularA.z * axisA.z,
-          velocityB =
-            angularB.x * axisB.x +
-            angularB.y * axisB.y +
-            angularB.z * axisB.z,
+          velocityA = angularA.x * axisA.x + angularA.y * axisA.y + angularA.z * axisA.z,
+          velocityB = angularB.x * axisB.x + angularB.y * axisB.y + angularB.z * axisB.z,
           teethA = link.a.spec.teeth,
-          signedTeethB = link.signB * link.b.spec.teeth,
-          error = teethA * velocityA + signedTeethB * velocityB;
-        if (Math.abs(error) < 1e-6) return;
+          teethB = link.b.spec.teeth,
+          signedTeethB = link.signB * teethB;
+        // Tooth position is already projected rigidly above. Mixing its old
+        // phase-velocity correction into this equation deformed the actual
+        // ratio under load (e.g. 20:28 became roughly 20:6). Velocity now has
+        // one exact invariant only: teethA*wA + signedTeethB*wB = 0.
+        const error = teethA * velocityA + signedTeethB * velocityB;
+        if (Math.abs(error) < 1e-5) return;
         const fixedA = !!pieceA.physicsIslandFixed,
           fixedB = !!pieceB.physicsIslandFixed;
         if (fixedA && fixedB) return;
@@ -5691,8 +4005,7 @@ export default function Home() {
         if (fixedA) deltaB = -error / signedTeethB;
         else if (fixedB) deltaA = -error / teethA;
         else {
-          const denominator =
-            teethA * teethA + signedTeethB * signedTeethB;
+          const denominator = teethA * teethA + signedTeethB * signedTeethB;
           deltaA = (-error * teethA) / denominator;
           deltaB = (-error * signedTeethB) / denominator;
         }
@@ -5714,7 +4027,82 @@ export default function Home() {
             },
             true,
           );
-      },
+      };
+      // Symmetric Gauss-Seidel sweeps make a train transmit equally well from
+      // either end instead of favouring the pair that happens to be stored first.
+      for (let iteration = 0; iteration < 8; iteration++) {
+        state.gearLinks.forEach(solveLink);
+        for (let index = state.gearLinks.length - 1; index >= 0; index--)
+          solveLink(state.gearLinks[index]);
+      }
+    };
+    // Non-positional gear constraint. It never writes a quaternion or an
+    // absolute angle: only the angular velocities that physically exist are
+    // projected onto the exact tooth ratio. Running this around small Rapier
+    // substeps lets contacts and motor torque participate without teleporting
+    // either gear when the applied force changes direction.
+    const projectGearVelocities = () => {
+      const solve = (link: RuntimeGearLink) => {
+          const pieceA = link.a.value,
+            pieceB = link.b.value,
+            bodyA = pieceA.body,
+            bodyB = pieceB.body;
+          if (!bodyA || !bodyB || bodyA === bodyB) return;
+          const rotationA = bodyA.rotation(),
+            rotationB = bodyB.rotation(),
+            axisA = link.axisA
+              .clone()
+              .applyQuaternion(
+                new THREE.Quaternion(rotationA.x, rotationA.y, rotationA.z, rotationA.w),
+              )
+              .normalize(),
+            axisB = link.axisB
+              .clone()
+              .applyQuaternion(
+                new THREE.Quaternion(rotationB.x, rotationB.y, rotationB.z, rotationB.w),
+              )
+              .normalize(),
+            angularA = bodyA.angvel(),
+            angularB = bodyB.angvel(),
+            velocityA =
+              angularA.x * axisA.x + angularA.y * axisA.y + angularA.z * axisA.z,
+            velocityB =
+              angularB.x * axisB.x + angularB.y * axisB.y + angularB.z * axisB.z,
+            teethA = link.a.spec.teeth,
+            signedTeethB = link.signB * link.b.spec.teeth,
+            error = teethA * velocityA + signedTeethB * velocityB;
+          if (Math.abs(error) < 1e-6) return;
+          const fixedA = !!pieceA.physicsIslandFixed,
+            fixedB = !!pieceB.physicsIslandFixed;
+          if (fixedA && fixedB) return;
+          let deltaA = 0,
+            deltaB = 0;
+          if (fixedA) deltaB = -error / signedTeethB;
+          else if (fixedB) deltaA = -error / teethA;
+          else {
+            const denominator = teethA * teethA + signedTeethB * signedTeethB;
+            deltaA = (-error * teethA) / denominator;
+            deltaB = (-error * signedTeethB) / denominator;
+          }
+          if (!fixedA)
+            bodyA.setAngvel(
+              {
+                x: angularA.x + axisA.x * deltaA,
+                y: angularA.y + axisA.y * deltaA,
+                z: angularA.z + axisA.z * deltaA,
+              },
+              true,
+            );
+          if (!fixedB)
+            bodyB.setAngvel(
+              {
+                x: angularB.x + axisB.x * deltaB,
+                y: angularB.y + axisB.y * deltaB,
+                z: angularB.z + axisB.z * deltaB,
+              },
+              true,
+            );
+        },
         solveDifferential = (link: RuntimeDifferentialLink) => {
           const entries = [
             {
@@ -5737,12 +4125,7 @@ export default function Home() {
                 worldAxis = axis
                   .clone()
                   .applyQuaternion(
-                    new THREE.Quaternion(
-                      rotation.x,
-                      rotation.y,
-                      rotation.z,
-                      rotation.w,
-                    ),
+                    new THREE.Quaternion(rotation.x, rotation.y, rotation.z, rotation.w),
                   )
                   .normalize(),
                 angular = body.angvel(),
@@ -5767,16 +4150,13 @@ export default function Home() {
             denominator = samples.reduce(
               (sum, sample) =>
                 sum +
-                (sample.piece.physicsIslandFixed
-                  ? 0
-                  : sample.gradient * sample.gradient),
+                (sample.piece.physicsIslandFixed ? 0 : sample.gradient * sample.gradient),
               0,
             );
           if (Math.abs(error) < 1e-6 || denominator < 1e-9) return;
           samples.forEach((sample) => {
             if (sample.piece.physicsIslandFixed) return;
-            const correction =
-              (-error * sample.gradient) / denominator;
+            const correction = (-error * sample.gradient) / denominator;
             sample.body.setAngvel(
               {
                 x: sample.angular.x + sample.worldAxis.x * correction,
@@ -5796,6 +4176,7 @@ export default function Home() {
         state.differentialLinks.forEach(solveDifferential);
       }
     };
+
     const makeLock = () => {
       const c = document.createElement("canvas");
       c.width = c.height = 96;
@@ -5823,6 +4204,7 @@ export default function Home() {
       sprite.renderOrder = 20;
       return sprite;
     };
+
     const toggleFixed = (piece: Piece) => {
       piece.fixed = !piece.fixed;
       if (piece.fixed) {
@@ -5848,11 +4230,10 @@ export default function Home() {
           true,
         );
       setMessage(
-        piece.fixed
-          ? `${piece.part} fijada al espacio`
-          : `${piece.part} liberada`,
+        piece.fixed ? `${piece.part} fijada al espacio` : `${piece.part} liberada`,
       );
     };
+
     const cloneConnection = (connection: Connection): Connection => ({
         ...connection,
         point: connection.point.clone(),
@@ -5922,6 +4303,7 @@ export default function Home() {
       piece.lockSprite.material.dispose();
       piece.lockSprite = undefined;
     };
+
     const restoreEditorSnapshot = async (snapshot: EditorSnapshot) => {
       restoringHistory = true;
       try {
@@ -5936,8 +4318,7 @@ export default function Home() {
         for (const item of snapshot.pieces) {
           const piece = item.piece;
           if (piece.mesh.parent !== scene) scene.add(piece.mesh);
-          if (piece.color !== item.color)
-            await state.recolorPart(piece, item.color);
+          if (piece.color !== item.color) await state.recolorPart(piece, item.color);
           piece.mesh.position.copy(item.position);
           piece.mesh.quaternion.copy(item.rotation);
           piece.mesh.scale.copy(item.scale);
@@ -5979,6 +4360,7 @@ export default function Home() {
         restoringHistory = false;
       }
     };
+
     const recordHistory = () => {
       if (restoringHistory || historyBusy || state.running) return;
       undoStack.push(captureEditorSnapshot());
@@ -5986,6 +4368,7 @@ export default function Home() {
       redoStack.length = 0;
       scheduleRecoverySave();
     };
+
     const undo = async () => {
       if (historyBusy || state.running) return false;
       if (!undoStack.length) {
@@ -6002,6 +4385,7 @@ export default function Home() {
         historyBusy = false;
       }
     };
+
     const redo = async () => {
       if (historyBusy || state.running) return false;
       if (!redoStack.length) {
@@ -6018,6 +4402,7 @@ export default function Home() {
         historyBusy = false;
       }
     };
+
     const catalogFromPiece = (piece: Piece): CatalogPart => ({
       part: piece.part,
       name: piece.name,
@@ -6045,14 +4430,19 @@ export default function Home() {
       tuple4 = (quaternion: THREE.Quaternion) =>
         quaternion.toArray() as [number, number, number, number],
       saveConnector = (connector: MeshConnector): SavedConnector => ({
-        local: tuple3(connector.local), axis: tuple3(connector.axis),
-        kind: connector.kind, role: connector.role,
-        diameter: connector.diameter, length: connector.length,
+        local: tuple3(connector.local),
+        axis: tuple3(connector.axis),
+        kind: connector.kind,
+        role: connector.role,
+        diameter: connector.diameter,
+        length: connector.length,
       }),
       saveCollider = (collider: CollisionPrimitive): SavedCollisionPrimitive => ({
-        shape: collider.shape, center: tuple3(collider.center),
+        shape: collider.shape,
+        center: tuple3(collider.center),
         size: collider.size ? tuple3(collider.size) : undefined,
-        radius: collider.radius, halfHeight: collider.halfHeight,
+        radius: collider.radius,
+        halfHeight: collider.halfHeight,
         rotation: tuple4(collider.rotation),
       }),
       loadConnector = (connector: SavedConnector): MeshConnector => ({
@@ -6066,9 +4456,13 @@ export default function Home() {
         size: collider.size ? new THREE.Vector3().fromArray(collider.size) : undefined,
         rotation: new THREE.Quaternion().fromArray(collider.rotation),
       });
-    let recoveryTimer = 0, recoveryGeneration = 0, restoringProject = false;
+    let recoveryTimer = 0,
+      recoveryGeneration = 0,
+      restoringProject = false;
     const createProjectDocument = (identity?: {
-      id?: string; name?: string; createdAt?: string;
+      id?: string;
+      name?: string;
+      createdAt?: string;
     }): SimStudioProjectDocument => {
       const now = new Date().toISOString(),
         id = identity?.id ?? activeProjectIdRef.current,
@@ -6081,30 +4475,41 @@ export default function Home() {
         connectorIndex = (piece: Piece, connector: MeshConnector) => {
           const direct = piece.connectors.indexOf(connector);
           if (direct >= 0) return direct;
-          return Math.max(0, piece.connectors.findIndex((candidate) =>
-            candidate.kind === connector.kind &&
-            candidate.role === connector.role &&
-            candidate.local.distanceToSquared(connector.local) < 1e-8));
+          return Math.max(
+            0,
+            piece.connectors.findIndex(
+              (candidate) =>
+                candidate.kind === connector.kind &&
+                candidate.role === connector.role &&
+                candidate.local.distanceToSquared(connector.local) < 1e-8,
+            ),
+          );
         };
       const pieces = state.pieces.map((piece) => {
           const asset = modelRenderKey(piece);
           if (!assets[asset]) {
             const visual = (piece.mesh.children[0] ?? piece.mesh).clone(true);
-            visual.traverse((object) => { object.visible = true; });
+            visual.traverse((object) => {
+              object.visible = true;
+            });
             assets[asset] = visual.toJSON() as unknown as JsonObject;
           }
           const catalog = catalogFromPiece(piece);
           delete catalog.embeddedGeometry;
           delete catalog.projectAssetKey;
           return {
-            id: pieceIds.get(piece)!, catalog: catalog as unknown as JsonObject,
-            asset, position: tuple3(piece.mesh.position),
-            rotation: tuple4(piece.mesh.quaternion), scale: tuple3(piece.mesh.scale),
+            id: pieceIds.get(piece)!,
+            catalog: catalog as unknown as JsonObject,
+            asset,
+            position: tuple3(piece.mesh.position),
+            rotation: tuple4(piece.mesh.quaternion),
+            scale: tuple3(piece.mesh.scale),
             fixed: piece.fixed,
             exactCollider: piece.exactCollider,
             dynamicAxleConnections: piece.dynamicAxleConnections,
             rotationPivotLocal: piece.rotationPivotLocal
-              ? tuple3(piece.rotationPivotLocal) : undefined,
+              ? tuple3(piece.rotationPivotLocal)
+              : undefined,
             rotationPivotKey: piece.rotationPivotKey,
             connectors: piece.connectors.map(saveConnector),
             colliders: piece.colliders.map(saveCollider),
@@ -6112,54 +4517,99 @@ export default function Home() {
           };
         }),
         connections = state.connections.map((connection) => ({
-          id: connection.id, a: pieceIds.get(connection.a)!,
+          id: connection.id,
+          a: pieceIds.get(connection.a)!,
           b: pieceIds.get(connection.b)!,
           socketIndex: connectorIndex(connection.a, connection.socket),
           shaftIndex: connectorIndex(connection.b, connection.shaft),
-          mode: connection.mode, profile: connection.profile,
-          point: tuple3(connection.point), axis: tuple3(connection.axis),
-          localAxisA: tuple3(connection.localAxisA), travel: connection.travel,
-          motorSpeed: connection.motorSpeed, motorForce: connection.motorForce,
-          userConfigured: connection.userConfigured, forced: connection.forced,
+          mode: connection.mode,
+          profile: connection.profile,
+          point: tuple3(connection.point),
+          axis: tuple3(connection.axis),
+          localAxisA: tuple3(connection.localAxisA),
+          travel: connection.travel,
+          motorSpeed: connection.motorSpeed,
+          motorForce: connection.motorForce,
+          userConfigured: connection.userConfigured,
+          forced: connection.forced,
           forcedOffset: connection.forcedOffset,
-          localPointA: connection.localPointA ? tuple3(connection.localPointA) : undefined,
-          localPointB: connection.localPointB ? tuple3(connection.localPointB) : undefined,
+          localPointA: connection.localPointA
+            ? tuple3(connection.localPointA)
+            : undefined,
+          localPointB: connection.localPointB
+            ? tuple3(connection.localPointB)
+            : undefined,
         })),
         gearLinks = state.gearLinks.flatMap((link) => {
-          const a = pieceIds.get(link.a.value), b = pieceIds.get(link.b.value);
-          return !a || !b ? [] : [{
-            a, b, specA: link.a.spec, specB: link.b.spec,
-            centerA: link.a.center, centerB: link.b.center,
-            poseAxisA: link.a.axis, poseAxisB: link.b.axis,
-            axisA: tuple3(link.axisA), axisB: tuple3(link.axisB),
-            ratio: link.ratio, centerDistance: link.centerDistance,
-            expectedDistance: link.expectedDistance,
-            distanceError: link.distanceError, signB: link.signB,
-            perpendicular: link.perpendicular,
-          }];
+          const a = pieceIds.get(link.a.value),
+            b = pieceIds.get(link.b.value);
+          return !a || !b
+            ? []
+            : [
+                {
+                  a,
+                  b,
+                  specA: link.a.spec,
+                  specB: link.b.spec,
+                  centerA: link.a.center,
+                  centerB: link.b.center,
+                  poseAxisA: link.a.axis,
+                  poseAxisB: link.b.axis,
+                  axisA: tuple3(link.axisA),
+                  axisB: tuple3(link.axisB),
+                  ratio: link.ratio,
+                  centerDistance: link.centerDistance,
+                  expectedDistance: link.expectedDistance,
+                  distanceError: link.distanceError,
+                  signB: link.signB,
+                  perpendicular: link.perpendicular,
+                },
+              ];
         }),
-        importedCatalog = [...new Map(
-          state.pieces.filter((piece) => !belongsToDefaultPalette(piece)).map((piece) => {
-            const catalog = catalogFromPiece(piece);
-            return [`${catalog.part}:${catalog.color}`, catalog as unknown as JsonObject];
-          }),
-        ).values()];
+        importedCatalog = [
+          ...new Map(
+            state.pieces
+              .filter((piece) => !belongsToDefaultPalette(piece))
+              .map((piece) => {
+                const catalog = catalogFromPiece(piece);
+                return [
+                  `${catalog.part}:${catalog.color}`,
+                  catalog as unknown as JsonObject,
+                ];
+              }),
+          ).values(),
+        ];
       return {
-        format: "simstudio-project", version: 1, id, name, createdAt,
-        updatedAt: now, appVersion: "0.4",
+        format: "simstudio-project",
+        version: 1,
+        id,
+        name,
+        createdAt,
+        updatedAt: now,
+        appVersion: "0.4",
         revision: projectRevisionRef.current,
         savedRevision: savedProjectRevisionRef.current,
-        assets, pieces, connections,
-        gearLinks, importedCatalog,
-        camera: { position: tuple3(camera.position),
-          quaternion: tuple4(camera.quaternion), target: tuple3(cameraTarget) },
-        settings: { gridStep: state.gridStep, axleSnapStep: state.axleSnapStep,
+        assets,
+        pieces,
+        connections,
+        gearLinks,
+        importedCatalog,
+        camera: {
+          position: tuple3(camera.position),
+          quaternion: tuple4(camera.quaternion),
+          target: tuple3(cameraTarget),
+        },
+        settings: {
+          gridStep: state.gridStep,
+          axleSnapStep: state.axleSnapStep,
           rotationSnapStep: state.rotationSnapStep,
           structuralMode: structuralModeRef.current,
           structuralStiffness: structuralStiffnessRef.current,
-          physics: { ...state.physicsSettings } },
+          physics: { ...state.physicsSettings },
+        },
       };
     };
+
     const scheduleRecoverySave = (immediate = false, markDirty = true) => {
       if (restoringProject || projectRestoringRef.current || state.running) return;
       if (markDirty) {
@@ -6169,13 +4619,17 @@ export default function Home() {
       const generation = ++recoveryGeneration;
       if (recoveryTimer) window.clearTimeout(recoveryTimer);
       setRecoveryStatus("saving");
-      recoveryTimer = window.setTimeout(() => {
-        if (generation !== recoveryGeneration || restoringProject) return;
-        void saveRecoveryProject(createProjectDocument())
-          .then(() => setRecoveryStatus("saved"))
-          .catch(() => setRecoveryStatus("idle"));
-      }, immediate ? 0 : 450);
+      recoveryTimer = window.setTimeout(
+        () => {
+          if (generation !== recoveryGeneration || restoringProject) return;
+          void saveRecoveryProject(createProjectDocument())
+            .then(() => setRecoveryStatus("saved"))
+            .catch(() => setRecoveryStatus("idle"));
+        },
+        immediate ? 0 : 450,
+      );
     };
+
     const restoreProjectDocument = async (document: SimStudioProjectDocument) => {
       if (state.running) return;
       restoringProject = true;
@@ -6184,77 +4638,130 @@ export default function Home() {
       if (recoveryTimer) window.clearTimeout(recoveryTimer);
       state.bulkLoading = true;
       state.disposeRenderBatches();
-      state.pieces.forEach((piece) => { scene.remove(piece.mesh); disposeLock(piece); });
-      state.pieces = []; state.connections = []; state.connectionModes.clear();
-      state.gearLinks = []; state.differentialLinks = []; state.selected = undefined;
+      state.pieces.forEach((piece) => {
+        scene.remove(piece.mesh);
+        disposeLock(piece);
+      });
+      state.pieces = [];
+      state.connections = [];
+      state.connectionModes.clear();
+      state.gearLinks = [];
+      state.differentialLinks = [];
+      state.selected = undefined;
       const piecesById = new Map<string, Piece>();
       try {
         for (const saved of document.pieces) {
           const asset = document.assets[saved.asset];
           if (!asset) throw new Error(`Missing embedded asset ${saved.asset}`);
-          const catalog = { ...(saved.catalog as unknown as CatalogPart),
-              embeddedGeometry: asset, projectAssetKey: saved.asset,
-              sourceKind: "packaged-cache" as const },
-            piece = await addPart(catalog,
+          const catalog = {
+              ...(saved.catalog as unknown as CatalogPart),
+              embeddedGeometry: asset,
+              projectAssetKey: saved.asset,
+              sourceKind: "packaged-cache" as const,
+            },
+            piece = await addPart(
+              catalog,
               new THREE.Vector3().fromArray(saved.position),
-              new THREE.Quaternion().fromArray(saved.rotation));
+              new THREE.Quaternion().fromArray(saved.rotation),
+            );
           if (!piece) throw new Error(`Could not restore ${catalog.part}`);
           piece.mesh.scale.fromArray(saved.scale);
           piece.connectors = saved.connectors.map(loadConnector);
           piece.colliders = saved.colliders.map(loadCollider);
           piece.gearColliders = saved.gearColliders.map(loadCollider);
           piece.fixed = saved.fixed;
-          piece.exactCollider =
-            saved.exactCollider ?? isDifferentialPart(piece);
+          piece.exactCollider = saved.exactCollider ?? isDifferentialPart(piece);
           piece.dynamicAxleConnections = saved.dynamicAxleConnections;
           piece.rotationPivotLocal = saved.rotationPivotLocal
-            ? new THREE.Vector3().fromArray(saved.rotationPivotLocal) : undefined;
+            ? new THREE.Vector3().fromArray(saved.rotationPivotLocal)
+            : undefined;
           piece.rotationPivotKey = saved.rotationPivotKey;
-          piece.mesh.visible = true; piece.mesh.updateMatrixWorld(true);
-          if (piece.fixed) { piece.lockSprite = makeLock(); scene.add(piece.lockSprite); }
+          piece.mesh.visible = true;
+          piece.mesh.updateMatrixWorld(true);
+          if (piece.fixed) {
+            piece.lockSprite = makeLock();
+            scene.add(piece.lockSprite);
+          }
           piecesById.set(saved.id, piece);
         }
         state.connections = document.connections.flatMap((saved) => {
-          const a = piecesById.get(saved.a), b = piecesById.get(saved.b);
+          const a = piecesById.get(saved.a),
+            b = piecesById.get(saved.b);
           if (!a || !b) return [];
-          const socket = a.connectors[saved.socketIndex], shaft = b.connectors[saved.shaftIndex];
+          const socket = a.connectors[saved.socketIndex],
+            shaft = b.connectors[saved.shaftIndex];
           if (!socket || !shaft) return [];
-          const connection: Connection = { id: saved.id, a, b, socket, shaft,
-            mode: saved.mode, profile: saved.profile,
+          const connection: Connection = {
+            id: saved.id,
+            a,
+            b,
+            socket,
+            shaft,
+            mode: saved.mode,
+            profile: saved.profile,
             point: new THREE.Vector3().fromArray(saved.point),
             axis: new THREE.Vector3().fromArray(saved.axis),
             localAxisA: new THREE.Vector3().fromArray(saved.localAxisA),
-            travel: saved.travel, motorSpeed: saved.motorSpeed,
-            motorForce: saved.motorForce, userConfigured: saved.userConfigured,
-            forced: saved.forced, forcedOffset: saved.forcedOffset,
-            localPointA: saved.localPointA ? new THREE.Vector3().fromArray(saved.localPointA) : undefined,
-            localPointB: saved.localPointB ? new THREE.Vector3().fromArray(saved.localPointB) : undefined };
-          state.connectionModes.set(connection.id, { mode: connection.mode,
-            motorSpeed: connection.motorSpeed, motorForce: connection.motorForce,
-            userConfigured: connection.userConfigured });
+            travel: saved.travel,
+            motorSpeed: saved.motorSpeed,
+            motorForce: saved.motorForce,
+            userConfigured: saved.userConfigured,
+            forced: saved.forced,
+            forcedOffset: saved.forcedOffset,
+            localPointA: saved.localPointA
+              ? new THREE.Vector3().fromArray(saved.localPointA)
+              : undefined,
+            localPointB: saved.localPointB
+              ? new THREE.Vector3().fromArray(saved.localPointB)
+              : undefined,
+          };
+          state.connectionModes.set(connection.id, {
+            mode: connection.mode,
+            motorSpeed: connection.motorSpeed,
+            motorForce: connection.motorForce,
+            userConfigured: connection.userConfigured,
+          });
           return [connection];
         });
         state.gearLinks = document.gearLinks.flatMap((saved) => {
-          const a = piecesById.get(saved.a), b = piecesById.get(saved.b);
-          return !a || !b ? [] : [{
-            a: { value: a, spec: saved.specA as GearPose<Piece>["spec"], center: saved.centerA, axis: saved.poseAxisA },
-            b: { value: b, spec: saved.specB as GearPose<Piece>["spec"], center: saved.centerB, axis: saved.poseAxisB },
-            ratio: saved.ratio, centerDistance: saved.centerDistance,
-            expectedDistance: saved.expectedDistance, distanceError: saved.distanceError,
-            axisA: new THREE.Vector3().fromArray(saved.axisA),
-            axisB: new THREE.Vector3().fromArray(saved.axisB),
-            signB: saved.signB, perpendicular: saved.perpendicular }];
+          const a = piecesById.get(saved.a),
+            b = piecesById.get(saved.b);
+          return !a || !b
+            ? []
+            : [
+                {
+                  a: {
+                    value: a,
+                    spec: saved.specA as GearPose<Piece>["spec"],
+                    center: saved.centerA,
+                    axis: saved.poseAxisA,
+                  },
+                  b: {
+                    value: b,
+                    spec: saved.specB as GearPose<Piece>["spec"],
+                    center: saved.centerB,
+                    axis: saved.poseAxisB,
+                  },
+                  ratio: saved.ratio,
+                  centerDistance: saved.centerDistance,
+                  expectedDistance: saved.expectedDistance,
+                  distanceError: saved.distanceError,
+                  axisA: new THREE.Vector3().fromArray(saved.axisA),
+                  axisB: new THREE.Vector3().fromArray(saved.axisB),
+                  signB: saved.signB,
+                  perpendicular: saved.perpendicular,
+                },
+              ];
         });
         camera.position.fromArray(document.camera.position);
         camera.quaternion.fromArray(document.camera.quaternion);
-        cameraTarget.fromArray(document.camera.target); camera.lookAt(cameraTarget);
+        cameraTarget.fromArray(document.camera.target);
+        camera.lookAt(cameraTarget);
         activeProjectIdRef.current = document.id;
         projectCreatedAtRef.current = document.createdAt;
         projectRevisionRef.current = document.revision ?? 0;
         savedProjectRevisionRef.current = document.savedRevision ?? null;
-        setProjectDirty(
-          savedProjectRevisionRef.current !== projectRevisionRef.current,
-        );
+        setProjectDirty(savedProjectRevisionRef.current !== projectRevisionRef.current);
         projectNameRef.current = document.name.slice(0, 20);
         suppressProjectNameDirtyRef.current = true;
         setProjectName(document.name.slice(0, 20));
@@ -6263,13 +4770,20 @@ export default function Home() {
         setRotationSnapStep(document.settings.rotationSnapStep as RotationSnapStep);
         setStructuralMode(document.settings.structuralMode);
         setStructuralStiffness(document.settings.structuralStiffness);
-        setPhysicsSettings({ ...DEFAULT_PHYSICS_SETTINGS,
-          ...(document.settings.physics as Partial<PhysicsSettings>) });
-        setImported(document.importedCatalog.map((catalog) => catalog as unknown as CatalogPart));
-        state.rebuildRenderBatches(); state.refreshDebug();
-        setSelectedId(null); setCount(state.pieces.length);
+        setPhysicsSettings({
+          ...DEFAULT_PHYSICS_SETTINGS,
+          ...(document.settings.physics as Partial<PhysicsSettings>),
+        });
+        setImported(
+          document.importedCatalog.map((catalog) => catalog as unknown as CatalogPart),
+        );
+        state.rebuildRenderBatches();
+        state.refreshDebug();
+        setSelectedId(null);
+        setCount(state.pieces.length);
         setConnectionRevision((value) => value + 1);
-        undoStack.length = 0; redoStack.length = 0;
+        undoStack.length = 0;
+        redoStack.length = 0;
       } finally {
         state.bulkLoading = false;
         restoringProject = false;
@@ -6279,6 +4793,7 @@ export default function Home() {
         }, 50);
       }
     };
+
     const copySelected = () => {
       const piece = state.selected;
       if (!piece || state.running) return false;
@@ -6300,6 +4815,7 @@ export default function Home() {
       setMessage(`${piece.part} copiada`);
       return true;
     };
+
     const pasteClipboard = async () => {
       if (state.running || historyBusy) return null;
       if (!clipboard) {
@@ -6367,10 +4883,7 @@ export default function Home() {
             (project) => project.id === recovery.id,
           );
           setCurrentProjectSaved(existsInProjectManager);
-          if (
-            existsInProjectManager &&
-            recovery.savedRevision === undefined
-          ) {
+          if (existsInProjectManager && recovery.savedRevision === undefined) {
             savedProjectRevisionRef.current = projectRevisionRef.current;
             setProjectDirty(false);
           }
@@ -6397,10 +4910,7 @@ export default function Home() {
         const now = performance.now(),
           isDoubleMiddle =
             now - lastMiddleDown.time < 380 &&
-            Math.hypot(
-              e.clientX - lastMiddleDown.x,
-              e.clientY - lastMiddleDown.y,
-            ) < 8;
+            Math.hypot(e.clientX - lastMiddleDown.x, e.clientY - lastMiddleDown.y) < 8;
         lastMiddleDown = isDoubleMiddle
           ? { time: 0, x: 0, y: 0 }
           : { time: now, x: e.clientX, y: e.clientY };
@@ -6416,24 +4926,17 @@ export default function Home() {
                 ? new THREE.Sphere(center, 0.5)
                 : bounds.getBoundingSphere(new THREE.Sphere()),
               verticalFov = THREE.MathUtils.degToRad(camera.fov),
-              horizontalFov =
-                2 * Math.atan(Math.tan(verticalFov / 2) * camera.aspect),
+              horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * camera.aspect),
               limitingFov = Math.min(verticalFov, horizontalFov),
               focusDistance = Math.max(
                 1.6,
                 (sphere.radius / Math.sin(limitingFov / 2)) * 1.18,
               ),
-              viewDirection = camera.position
-                .clone()
-                .sub(cameraTarget)
-                .normalize();
+              viewDirection = camera.position.clone().sub(cameraTarget).normalize();
             if (viewDirection.lengthSq() < 0.5)
               viewDirection.set(0.55, 0.45, 0.7).normalize();
             cameraTarget.copy(center);
-            camera.position.copy(center).addScaledVector(
-              viewDirection,
-              focusDistance,
-            );
+            camera.position.copy(center).addScaledVector(viewDirection, focusDistance);
             camera.lookAt(cameraTarget);
             setMessage(
               language === "es"
@@ -6459,9 +4962,7 @@ export default function Home() {
         const placed = state.pendingPlacement.pieces.length;
         state.pendingPlacement = undefined;
         const connections = verifyConnections();
-        setMessage(
-          `${placed} piezas colocadas · ${connections} conexiones detectadas`,
-        );
+        setMessage(`${placed} piezas colocadas · ${connections} conexiones detectadas`);
         if (placed > 0) scheduleRecoverySave();
         return;
       }
@@ -6470,12 +4971,7 @@ export default function Home() {
       orbit = e.button === 2 || e.altKey;
       altCandidate = e.altKey && e.button === 0 ? hitPiece : undefined;
       if (orbit) return;
-      if (
-        !state.running &&
-        rotationPivotHeld &&
-        e.button === 0 &&
-        hitPiece
-      ) {
+      if (!state.running && rotationPivotHeld && e.button === 0 && hitPiece) {
         const selectedConnector = nearestConnectedPivot(hitPiece, e);
         if (!selectedConnector) {
           setMessage(
@@ -6497,10 +4993,7 @@ export default function Home() {
           connector,
           connection,
           startX: e.clientX,
-          startAbsoluteAngle: absoluteRotationAroundLocalAxis(
-            hitPiece,
-            connector.axis,
-          ),
+          startAbsoluteAngle: absoluteRotationAroundLocalAxis(hitPiece, connector.axis),
           startPosition: hitPiece.mesh.position.clone(),
           startQuaternion: hitPiece.mesh.quaternion.clone(),
           lastAppliedAngle: 0,
@@ -6572,22 +5065,11 @@ export default function Home() {
         return;
       }
       if (state.running) {
-        if (
-          hit &&
-          hitPiece &&
-          !hitPiece.physicsIslandFixed &&
-          hitPiece.body
-        ) {
+        if (hit && hitPiece && !hitPiece.physicsIslandFixed && hitPiece.body) {
           state.selected = hitPiece;
           setSelectedId(hitPiece.id);
-          const overlay = document.createElementNS(
-              "http://www.w3.org/2000/svg",
-              "svg",
-            ),
-            line = document.createElementNS(
-              "http://www.w3.org/2000/svg",
-              "polyline",
-            ),
+          const overlay = document.createElementNS("http://www.w3.org/2000/svg", "svg"),
+            line = document.createElementNS("http://www.w3.org/2000/svg", "polyline"),
             component = connectedPieces(hitPiece),
             label = document.createElement("div"),
             canvasBounds = canvas.getBoundingClientRect();
@@ -6664,22 +5146,21 @@ export default function Home() {
         setSelectedId(null);
       }
     };
+
     const move = (e: PointerEvent) => {
       if (pivotRotate) {
         const rawAngle = (e.clientX - pivotRotate.startX) * 0.012,
           angleStep = THREE.MathUtils.degToRad(state.rotationSnapStep),
           requestedAngle = angleStep
-            ? Math.round(
-                (pivotRotate.startAbsoluteAngle + rawAngle) / angleStep,
-              ) * angleStep - pivotRotate.startAbsoluteAngle
+            ? Math.round((pivotRotate.startAbsoluteAngle + rawAngle) / angleStep) *
+                angleStep -
+              pivotRotate.startAbsoluteAngle
             : rawAngle,
           angle =
             angleStep &&
-            Math.abs(requestedAngle - pivotRotate.lastAppliedAngle) >
-              angleStep + 1e-6
+            Math.abs(requestedAngle - pivotRotate.lastAppliedAngle) > angleStep + 1e-6
               ? pivotRotate.lastAppliedAngle +
-                Math.sign(requestedAngle - pivotRotate.lastAppliedAngle) *
-                  angleStep
+                Math.sign(requestedAngle - pivotRotate.lastAppliedAngle) * angleStep
               : requestedAngle;
         pivotRotate.lastAppliedAngle = angle;
         if (Math.abs(angle) < 0.01) return;
@@ -6696,11 +5177,7 @@ export default function Home() {
         pivotRotate.piece.mesh.position.copy(pivotRotate.startPosition);
         pivotRotate.piece.mesh.quaternion.copy(pivotRotate.startQuaternion);
         pivotRotate.piece.mesh.updateMatrixWorld(true);
-        rotatePieceAroundLocalAxis(
-          pivotRotate.piece,
-          pivotRotate.axis,
-          angle,
-        );
+        rotatePieceAroundLocalAxis(pivotRotate.piece, pivotRotate.axis, angle);
         moved = true;
         state.renderBatchesDirty = true;
         refreshDebug();
@@ -6740,10 +5217,7 @@ export default function Home() {
             new THREE.Vector3(),
           );
         state.manualConnect.cursor.copy(candidate);
-        state.manualConnect.line.geometry.setFromPoints([
-          selectedOrigin,
-          candidate,
-        ]);
+        state.manualConnect.line.geometry.setFromPoints([selectedOrigin, candidate]);
         state.manualConnect.line.geometry.attributes.position.needsUpdate = true;
         const hostBounds = host.getBoundingClientRect();
         state.manualConnect.label.style.left = `${e.clientX - hostBounds.left + 14}px`;
@@ -6786,24 +5260,17 @@ export default function Home() {
         return;
       }
       if (orbit) {
-        const distance = Math.hypot(
-            e.clientX - orbitStart.x,
-            e.clientY - orbitStart.y,
-          ),
+        const distance = Math.hypot(e.clientX - orbitStart.x, e.clientY - orbitStart.y),
           dx = e.clientX - previous.x,
           dy = e.clientY - previous.y;
         previous = { x: e.clientX, y: e.clientY };
         if (distance <= 5) return;
         moved = true;
         const s = new THREE.Spherical().setFromVector3(
-            camera.position.clone().sub(cameraTarget),
-          );
-        s.theta -= dx * 0.006;
-        s.phi = THREE.MathUtils.clamp(
-          s.phi - dy * 0.006,
-          0.03,
-          Math.PI - 0.03,
+          camera.position.clone().sub(cameraTarget),
         );
+        s.theta -= dx * 0.006;
+        s.phi = THREE.MathUtils.clamp(s.phi - dy * 0.006, 0.03, Math.PI - 0.03);
         const nextPosition = cameraTarget
           .clone()
           .add(new THREE.Vector3().setFromSpherical(s));
@@ -6824,8 +5291,7 @@ export default function Home() {
           movingPrepared = true;
           moved = true;
           state.connections = state.connections.filter(
-            (connection) =>
-              connection.a !== moving && connection.b !== moving,
+            (connection) => connection.a !== moving && connection.b !== moving,
           );
           rebalanceAllSmartDefaults(state);
           setConnectionRevision((value) => value + 1);
@@ -6842,9 +5308,7 @@ export default function Home() {
               );
             },
             screenStart = project(movingStartPosition),
-            screenEnd = project(
-              movingStartPosition.clone().add(movingLinearAxis),
-            ),
+            screenEnd = project(movingStartPosition.clone().add(movingLinearAxis)),
             screenAxis = screenEnd.sub(screenStart),
             pixelsPerUnit = screenAxis.length(),
             pointerDelta = new THREE.Vector2(
@@ -6864,32 +5328,29 @@ export default function Home() {
         } else if (shiftActive)
           moving.mesh.position.y = state.gridStep
             ? Math.round(
-                (movingStartPosition.y -
-                  (e.clientY - movingStartPointer.y) * 0.0125) /
+                (movingStartPosition.y - (e.clientY - movingStartPointer.y) * 0.0125) /
                   state.gridStep,
               ) * state.gridStep
-            : movingStartPosition.y -
-              (e.clientY - movingStartPointer.y) * 0.0125;
+            : movingStartPosition.y - (e.clientY - movingStartPointer.y) * 0.0125;
         else {
           cast(e);
           const ground = ray.intersectObject(floor)[0];
           if (ground) {
-            moving.mesh.position.x =
-              state.gridStep
-                ? Math.round((ground.point.x + moveOffset.x) / state.gridStep) *
-                  state.gridStep
-                : ground.point.x + moveOffset.x;
-            moving.mesh.position.z =
-              state.gridStep
-                ? Math.round((ground.point.z + moveOffset.y) / state.gridStep) *
-                  state.gridStep
-                : ground.point.z + moveOffset.y;
+            moving.mesh.position.x = state.gridStep
+              ? Math.round((ground.point.x + moveOffset.x) / state.gridStep) *
+                state.gridStep
+              : ground.point.x + moveOffset.x;
+            moving.mesh.position.z = state.gridStep
+              ? Math.round((ground.point.z + moveOffset.y) / state.gridStep) *
+                state.gridStep
+              : ground.point.z + moveOffset.y;
           }
         }
         previous = { x: e.clientX, y: e.clientY };
         state.renderBatchesDirty = true;
       }
     };
+
     const up = (e: PointerEvent) => {
       if (canvas.hasPointerCapture(e.pointerId))
         canvas.releasePointerCapture(e.pointerId);
@@ -6900,11 +5361,7 @@ export default function Home() {
         if (rotated.prepared) {
           const correction = nearbyPivotConnectionCorrection(rotated);
           if (correction && Math.abs(correction.angle) > 1e-5)
-            rotatePieceAroundLocalAxis(
-              rotated.piece,
-              rotated.axis,
-              correction.angle,
-            );
+            rotatePieceAroundLocalAxis(rotated.piece, rotated.axis, correction.angle);
           verifyPieceConnections(rotated.piece);
           if (rotated.piece.renderBatched) state.rebuildRenderBatches();
           else state.renderBatchesDirty = true;
@@ -6951,15 +5408,10 @@ export default function Home() {
                 projected = worldPoint.clone().project(camera);
               if (projected.z < -1 || projected.z > 1) continue;
               const screenX =
-                  canvasBounds.left +
-                  ((projected.x + 1) * canvasBounds.width) / 2,
+                  canvasBounds.left + ((projected.x + 1) * canvasBounds.width) / 2,
                 screenY =
-                  canvasBounds.top +
-                  ((1 - projected.y) * canvasBounds.height) / 2,
-                screenDistance = Math.hypot(
-                  screenX - e.clientX,
-                  screenY - e.clientY,
-                ),
+                  canvasBounds.top + ((1 - projected.y) * canvasBounds.height) / 2,
+                screenDistance = Math.hypot(screenX - e.clientX, screenY - e.clientY),
                 rayDistance = ray.ray.distanceToPoint(worldPoint);
               if (
                 draft.forced &&
@@ -7022,8 +5474,7 @@ export default function Home() {
           ...current,
           connectors: draft.connectorsWereVisible,
         }));
-        if (connected && draft.piece.renderBatched)
-          state.rebuildRenderBatches();
+        if (connected && draft.piece.renderBatched) state.rebuildRenderBatches();
         setConnectionRevision((value) => value + 1);
         setMessage(
           connected && best
@@ -7038,7 +5489,7 @@ export default function Home() {
                 ? language === "es"
                   ? "Force Connect rechazado: los ejes de los conectores no están alineados"
                   : "Force Connect rejected: connector axes are not aligned"
-              : "Connect manual cancelado: no hay un punto compatible bajo el cursor",
+                : "Connect manual cancelado: no hay un punto compatible bajo el cursor",
         );
         refreshDebug();
         if (connected && !draft.forced) {
@@ -7054,11 +5505,7 @@ export default function Home() {
         const released = spring;
         const releasedBodies = new Set<RAPIER.RigidBody>();
         released.component.forEach((p) => {
-          if (
-            p.body &&
-            !p.physicsIslandFixed &&
-            !releasedBodies.has(p.body)
-          ) {
+          if (p.body && !p.physicsIslandFixed && !releasedBodies.has(p.body)) {
             releasedBodies.add(p.body);
             clampMotion(p, 3.5, 4.5);
             p.body.setLinearDamping(0.35);
@@ -7090,12 +5537,12 @@ export default function Home() {
       movingPrepared = false;
       movingLinearAxis = undefined;
       movedAxially = false;
-      if (movedPiece?.renderBatched && moved)
-        state.rebuildRenderBatches();
+      if (movedPiece?.renderBatched && moved) state.rebuildRenderBatches();
       setConnectionRevision((value) => value + 1);
       refreshDebug();
       if (toggledFixed || (movedPiece && moved)) scheduleRecoverySave();
     };
+
     const drop = (e: DragEvent) => {
       e.preventDefault();
       if (state.running) return;
@@ -7138,6 +5585,7 @@ export default function Home() {
         setMessage("No se pudo soltar esa pieza");
       }
     };
+
     const wheel = (e: WheelEvent) => {
       e.preventDefault();
       const offset = camera.position.clone().sub(cameraTarget),
@@ -7146,11 +5594,10 @@ export default function Home() {
           0.5,
           120,
         );
-      camera.position.copy(
-        cameraTarget.clone().add(offset.setLength(nextDistance)),
-      );
+      camera.position.copy(cameraTarget.clone().add(offset.setLength(nextDistance)));
       camera.lookAt(cameraTarget);
     };
+
     const resize = () => {
       camera.aspect = host.clientWidth / host.clientHeight;
       camera.updateProjectionMatrix();
@@ -7158,14 +5605,14 @@ export default function Home() {
       renderer.setPixelRatio(nativePixelRatio * renderScale);
       renderer.setSize(host.clientWidth, host.clientHeight);
     };
+
     const keydown = (e: KeyboardEvent) => {
       if (e.code === "ShiftLeft" || e.code === "ShiftRight") {
         shiftHeld = true;
         updateManualForceMode(true);
       }
       const target = e.target as HTMLElement | null;
-      if (target?.matches("input, textarea, select, [contenteditable=true]"))
-        return;
+      if (target?.matches("input, textarea, select, [contenteditable=true]")) return;
       if (e.code === "KeyR") {
         rotationPivotHeld = true;
         e.preventDefault();
@@ -7178,8 +5625,7 @@ export default function Home() {
           if (!e.repeat) saveShortcutRef.current();
           return;
         }
-        const redoShortcut =
-          e.code === "KeyY" || (e.code === "KeyZ" && e.shiftKey);
+        const redoShortcut = e.code === "KeyY" || (e.code === "KeyZ" && e.shiftKey);
         if (e.code === "KeyZ" || redoShortcut) {
           e.preventDefault();
           if (!e.repeat) void (redoShortcut ? state.redo() : state.undo());
@@ -7247,8 +5693,7 @@ export default function Home() {
       if (piece.renderBatched) state.rebuildRenderBatches();
       else state.renderBatchesDirty = true;
       refreshDebug();
-      if (disconnected)
-        setConnectionRevision((value) => value + 1);
+      if (disconnected) setConnectionRevision((value) => value + 1);
       setSelectedId(piece.id);
       setMessage(
         disconnected
@@ -7258,6 +5703,7 @@ export default function Home() {
           : `${piece.part} rotada 90° · ${rotation.axis.toUpperCase()}`,
       );
     };
+
     const keyup = (e: KeyboardEvent) => {
       if (e.code === "ShiftLeft" || e.code === "ShiftRight") {
         shiftHeld = false;
@@ -7265,16 +5711,19 @@ export default function Home() {
       }
       if (e.code === "KeyR") rotationPivotHeld = false;
     };
+
     const clearModifiers = () => {
       shiftHeld = false;
       rotationPivotHeld = false;
       updateManualForceMode(false);
     };
+
     const canvas = renderer.domElement;
     let pointerMoveStarted = 0;
     const beginMeasuredMove = () => {
       pointerMoveStarted = performance.now();
     };
+
     const measuredMove = (event: PointerEvent) => {
       const started = pointerMoveStarted || performance.now();
       try {
@@ -7317,6 +5766,9 @@ export default function Home() {
       sample: FramePerformanceSample;
     }[] = [];
     const clock = new THREE.Clock();
+    // --- Render and simulation frame loop ----------------------------------
+    // Rapier advances only while state.running; rendering and input overlays
+    // continue in edit mode using the same requestAnimationFrame loop.
     const animate = (animationFrameTime: number) => {
       frame = requestAnimationFrame(animate);
       const animationInterval = animationFrameTime - lastAnimationFrame;
@@ -7329,21 +5781,15 @@ export default function Home() {
       if (gpuTimerExtension) {
         while (pendingGpuTimers.length) {
           const pending = pendingGpuTimers[0],
-            available = gl.getQueryParameter(
-              pending.query,
-              gl.QUERY_RESULT_AVAILABLE,
-            ),
+            available = gl.getQueryParameter(pending.query, gl.QUERY_RESULT_AVAILABLE),
             disjoint = gl.getParameter(gpuTimerExtension.GPU_DISJOINT_EXT);
           if (disjoint) {
-            pendingGpuTimers.splice(0).forEach(({ query }) =>
-              gl.deleteQuery(query),
-            );
+            pendingGpuTimers.splice(0).forEach(({ query }) => gl.deleteQuery(query));
             break;
           }
           if (!available) break;
           pending.sample.gpuMs =
-            Number(gl.getQueryParameter(pending.query, gl.QUERY_RESULT)) /
-            1_000_000;
+            Number(gl.getQueryParameter(pending.query, gl.QUERY_RESULT)) / 1_000_000;
           gl.deleteQuery(pending.query);
           pendingGpuTimers.shift();
         }
@@ -7395,307 +5841,299 @@ export default function Home() {
         sleepingBodies = 0;
       if (state.running && state.world) {
         try {
-        let phaseStarted = performance.now();
-        const forceStepSeconds = Math.min(
-          1 / 60,
-          Math.max(1 / 240, frameIntervalMs / 1000),
-        );
-        // Do not call RigidBody.isSleeping() here. Rapier's WASM bindings can
-        // still have the rigid-body set borrowed after a world rebuild (most
-        // visibly after placing a freshly downloaded catalog part). Querying
-        // isSleeping in that state triggers wasm-bindgen's "recursive use of
-        // an object" guard and the render loop then reports the same error on
-        // every frame. Handles are plain numbers, so they are also a safer way
-        // to deduplicate all pieces that share one rigid-island body.
-        const steppedBodyHandles = new Set<number>();
-        state.sleepingBodyHandles.clear();
-        state.pieces.forEach((p) => {
-          if (!p.body || steppedBodyHandles.has(p.body.handle)) return;
-          steppedBodyHandles.add(p.body.handle);
-          if (p.physicsIslandFixed) {
-            sleepingBodies++;
-          } else {
-            activeBodies++;
-          }
-        });
-        forceResetMs = performance.now() - phaseStarted;
-        phaseStarted = performance.now();
-        if (spring?.piece.body && !spring.piece.physicsIslandFixed) {
-          const anchor = spring.piece.mesh.localToWorld(spring.anchor.clone()),
-            delta = spring.target.clone().sub(anchor);
-          if (delta.length() > 3.5) delta.setLength(3.5);
-          const velocity = spring.piece.body.linvel(),
-            acceleration = delta
-              .multiplyScalar(42)
-              .addScaledVector(
+          let phaseStarted = performance.now();
+          const forceStepSeconds = Math.min(
+            1 / 60,
+            Math.max(1 / 240, frameIntervalMs / 1000),
+          );
+          // Do not call RigidBody.isSleeping() here. Rapier's WASM bindings can
+          // still have the rigid-body set borrowed after a world rebuild (most
+          // visibly after placing a freshly downloaded catalog part). Querying
+          // isSleeping in that state triggers wasm-bindgen's "recursive use of
+          // an object" guard and the render loop then reports the same error on
+          // every frame. Handles are plain numbers, so they are also a safer way
+          // to deduplicate all pieces that share one rigid-island body.
+          const steppedBodyHandles = new Set<number>();
+          state.sleepingBodyHandles.clear();
+          state.pieces.forEach((p) => {
+            if (!p.body || steppedBodyHandles.has(p.body.handle)) return;
+            steppedBodyHandles.add(p.body.handle);
+            if (p.physicsIslandFixed) {
+              sleepingBodies++;
+            } else {
+              activeBodies++;
+            }
+          });
+          forceResetMs = performance.now() - phaseStarted;
+          phaseStarted = performance.now();
+          if (spring?.piece.body && !spring.piece.physicsIslandFixed) {
+            const anchor = spring.piece.mesh.localToWorld(spring.anchor.clone()),
+              delta = spring.target.clone().sub(anchor);
+            if (delta.length() > 3.5) delta.setLength(3.5);
+            const velocity = spring.piece.body.linvel(),
+              acceleration = delta.multiplyScalar(42).addScaledVector(
                 new THREE.Vector3(velocity.x, velocity.y, velocity.z),
                 // Critical damping for k=42 (2 * sqrt(42) ≈ 13).
                 // This prevents the mouse spring from storing energy against
                 // a collider and launching the dragged assembly past it.
                 -13,
               ),
-            movingMass = Math.max(0.25, spring.piece.body.mass());
-          if (acceleration.length() > 90) acceleration.setLength(90);
-          const force = acceleration.multiplyScalar(Math.max(0.25, movingMass)),
-            totalForce = force.length();
-          spring.piece.body.applyImpulseAtPoint(
-            {
-              x: force.x * forceStepSeconds,
-              y: force.y * forceStepSeconds,
-              z: force.z * forceStepSeconds,
-            },
-            { x: anchor.x, y: anchor.y, z: anchor.z },
-            true,
-          );
-          spring.force = totalForce;
-          if (state.simLog)
-            state.simLog.maxSpringForce = Math.max(
-              state.simLog.maxSpringForce,
-              totalForce,
+              movingMass = Math.max(0.25, spring.piece.body.mass());
+            if (acceleration.length() > 90) acceleration.setLength(90);
+            const force = acceleration.multiplyScalar(Math.max(0.25, movingMass)),
+              totalForce = force.length();
+            spring.piece.body.applyImpulseAtPoint(
+              {
+                x: force.x * forceStepSeconds,
+                y: force.y * forceStepSeconds,
+                z: force.z * forceStepSeconds,
+              },
+              { x: anchor.x, y: anchor.y, z: anchor.z },
+              true,
             );
-          updateSpring();
-        }
-        springMs = performance.now() - phaseStarted;
-        phaseStarted = performance.now();
-        for (const connection of state.connections) {
-          if (
-            (connection.mode !== "linear" &&
-              connection.mode !== "rotation-linear") ||
-            !connection.a.body ||
-            !connection.b.body ||
-            connection.a.body === connection.b.body
-          )
-            continue;
-          const axis = connection.localAxisA
-              .clone()
-              .transformDirection(connection.a.mesh.matrixWorld)
-              .normalize(),
-            velocityA = connection.a.body.linvel(),
-            velocityB = connection.b.body.linvel(),
-            relativeVelocity = new THREE.Vector3(
-              velocityB.x - velocityA.x,
-              velocityB.y - velocityA.y,
-              velocityB.z - velocityA.z,
-            ),
-            relativeSpeed = relativeVelocity.dot(axis),
-            // A free connector should only have a slight guide resistance.
-            // Contact friction already accounts for surfaces rubbing together.
-            damping =
-              state.physicsSettings.axleSlidingFriction *
-              (connection.mode === "linear" ? 1 : 0.375),
-            forceMagnitude = THREE.MathUtils.clamp(
-              relativeSpeed * damping,
-              -0.35,
-              0.35,
-            ),
-            frictionForce = axis.clone().multiplyScalar(forceMagnitude);
-          // The generic rotation+linear guide can keep the bodies visually
-          // aligned while a perpendicular velocity from gravity/contact keeps
-          // accumulating. When a bush reaches its physical stop, Rapier may
-          // convert that hidden velocity into a large axial depenetration.
-          // Project only the relative velocity onto the permitted axle axis;
-          // common motion, axial sliding and axial rotation remain untouched.
-          const perpendicularVelocity = relativeVelocity.addScaledVector(
-            axis,
-            -relativeSpeed,
-          );
-          if (perpendicularVelocity.lengthSq() > 1e-10) {
-            if (connection.a.physicsIslandFixed) {
-              connection.b.body.setLinvel(
-                {
-                  x: velocityB.x - perpendicularVelocity.x,
-                  y: velocityB.y - perpendicularVelocity.y,
-                  z: velocityB.z - perpendicularVelocity.z,
-                },
-                true,
+            spring.force = totalForce;
+            if (state.simLog)
+              state.simLog.maxSpringForce = Math.max(
+                state.simLog.maxSpringForce,
+                totalForce,
               );
-            } else if (connection.b.physicsIslandFixed) {
-              connection.a.body.setLinvel(
-                {
-                  x: velocityA.x + perpendicularVelocity.x,
-                  y: velocityA.y + perpendicularVelocity.y,
-                  z: velocityA.z + perpendicularVelocity.z,
-                },
-                true,
-              );
-            } else {
-              connection.a.body.setLinvel(
-                {
-                  x: velocityA.x + perpendicularVelocity.x * 0.5,
-                  y: velocityA.y + perpendicularVelocity.y * 0.5,
-                  z: velocityA.z + perpendicularVelocity.z * 0.5,
-                },
-                true,
-              );
-              connection.b.body.setLinvel(
-                {
-                  x: velocityB.x - perpendicularVelocity.x * 0.5,
-                  y: velocityB.y - perpendicularVelocity.y * 0.5,
-                  z: velocityB.z - perpendicularVelocity.z * 0.5,
-                },
-                true,
-              );
-            }
+            updateSpring();
           }
-          if (!connection.b.physicsIslandFixed)
-            connection.b.body.applyImpulse(
-              {
-                x: -frictionForce.x * forceStepSeconds,
-                y: -frictionForce.y * forceStepSeconds,
-                z: -frictionForce.z * forceStepSeconds,
-              },
-              true,
-            );
-          if (!connection.a.physicsIslandFixed)
-            connection.a.body.applyImpulse(
-              {
-                x: frictionForce.x * forceStepSeconds,
-                y: frictionForce.y * forceStepSeconds,
-                z: frictionForce.z * forceStepSeconds,
-              },
-              true,
-            );
-          if (
-            connection.mode === "rotation-linear" &&
-            (connection.profile === "axle-cross" ||
-              connection.profile === "axle-round") &&
-            state.physicsSettings.axleRotationFriction > 0
-          ) {
-            const angularA = connection.a.body.angvel(),
-              angularB = connection.b.body.angvel(),
-              relativeAngularSpeed =
-                (angularB.x - angularA.x) * axis.x +
-                (angularB.y - angularA.y) * axis.y +
-                (angularB.z - angularA.z) * axis.z,
-              torqueMagnitude = THREE.MathUtils.clamp(
-                relativeAngularSpeed *
-                  state.physicsSettings.axleRotationFriction,
-                -1,
-                1,
+          springMs = performance.now() - phaseStarted;
+          phaseStarted = performance.now();
+          for (const connection of state.connections) {
+            if (
+              (connection.mode !== "linear" && connection.mode !== "rotation-linear") ||
+              !connection.a.body ||
+              !connection.b.body ||
+              connection.a.body === connection.b.body
+            )
+              continue;
+            const axis = connection.localAxisA
+                .clone()
+                .transformDirection(connection.a.mesh.matrixWorld)
+                .normalize(),
+              velocityA = connection.a.body.linvel(),
+              velocityB = connection.b.body.linvel(),
+              relativeVelocity = new THREE.Vector3(
+                velocityB.x - velocityA.x,
+                velocityB.y - velocityA.y,
+                velocityB.z - velocityA.z,
               ),
-              torque = axis.clone().multiplyScalar(torqueMagnitude);
+              relativeSpeed = relativeVelocity.dot(axis),
+              // A free connector should only have a slight guide resistance.
+              // Contact friction already accounts for surfaces rubbing together.
+              damping =
+                state.physicsSettings.axleSlidingFriction *
+                (connection.mode === "linear" ? 1 : 0.375),
+              forceMagnitude = THREE.MathUtils.clamp(
+                relativeSpeed * damping,
+                -0.35,
+                0.35,
+              ),
+              frictionForce = axis.clone().multiplyScalar(forceMagnitude);
+            // The generic rotation+linear guide can keep the bodies visually
+            // aligned while a perpendicular velocity from gravity/contact keeps
+            // accumulating. When a bush reaches its physical stop, Rapier may
+            // convert that hidden velocity into a large axial depenetration.
+            // Project only the relative velocity onto the permitted axle axis;
+            // common motion, axial sliding and axial rotation remain untouched.
+            const perpendicularVelocity = relativeVelocity.addScaledVector(
+              axis,
+              -relativeSpeed,
+            );
+            if (perpendicularVelocity.lengthSq() > 1e-10) {
+              if (connection.a.physicsIslandFixed) {
+                connection.b.body.setLinvel(
+                  {
+                    x: velocityB.x - perpendicularVelocity.x,
+                    y: velocityB.y - perpendicularVelocity.y,
+                    z: velocityB.z - perpendicularVelocity.z,
+                  },
+                  true,
+                );
+              } else if (connection.b.physicsIslandFixed) {
+                connection.a.body.setLinvel(
+                  {
+                    x: velocityA.x + perpendicularVelocity.x,
+                    y: velocityA.y + perpendicularVelocity.y,
+                    z: velocityA.z + perpendicularVelocity.z,
+                  },
+                  true,
+                );
+              } else {
+                connection.a.body.setLinvel(
+                  {
+                    x: velocityA.x + perpendicularVelocity.x * 0.5,
+                    y: velocityA.y + perpendicularVelocity.y * 0.5,
+                    z: velocityA.z + perpendicularVelocity.z * 0.5,
+                  },
+                  true,
+                );
+                connection.b.body.setLinvel(
+                  {
+                    x: velocityB.x - perpendicularVelocity.x * 0.5,
+                    y: velocityB.y - perpendicularVelocity.y * 0.5,
+                    z: velocityB.z - perpendicularVelocity.z * 0.5,
+                  },
+                  true,
+                );
+              }
+            }
             if (!connection.b.physicsIslandFixed)
-              connection.b.body.applyTorqueImpulse(
+              connection.b.body.applyImpulse(
                 {
-                  x: -torque.x * forceStepSeconds,
-                  y: -torque.y * forceStepSeconds,
-                  z: -torque.z * forceStepSeconds,
+                  x: -frictionForce.x * forceStepSeconds,
+                  y: -frictionForce.y * forceStepSeconds,
+                  z: -frictionForce.z * forceStepSeconds,
                 },
                 true,
               );
             if (!connection.a.physicsIslandFixed)
-              connection.a.body.applyTorqueImpulse(
+              connection.a.body.applyImpulse(
                 {
-                  x: torque.x * forceStepSeconds,
-                  y: torque.y * forceStepSeconds,
-                  z: torque.z * forceStepSeconds,
+                  x: frictionForce.x * forceStepSeconds,
+                  y: frictionForce.y * forceStepSeconds,
+                  z: frictionForce.z * forceStepSeconds,
                 },
                 true,
               );
+            if (
+              connection.mode === "rotation-linear" &&
+              (connection.profile === "axle-cross" ||
+                connection.profile === "axle-round") &&
+              state.physicsSettings.axleRotationFriction > 0
+            ) {
+              const angularA = connection.a.body.angvel(),
+                angularB = connection.b.body.angvel(),
+                relativeAngularSpeed =
+                  (angularB.x - angularA.x) * axis.x +
+                  (angularB.y - angularA.y) * axis.y +
+                  (angularB.z - angularA.z) * axis.z,
+                torqueMagnitude = THREE.MathUtils.clamp(
+                  relativeAngularSpeed * state.physicsSettings.axleRotationFriction,
+                  -1,
+                  1,
+                ),
+                torque = axis.clone().multiplyScalar(torqueMagnitude);
+              if (!connection.b.physicsIslandFixed)
+                connection.b.body.applyTorqueImpulse(
+                  {
+                    x: -torque.x * forceStepSeconds,
+                    y: -torque.y * forceStepSeconds,
+                    z: -torque.z * forceStepSeconds,
+                  },
+                  true,
+                );
+              if (!connection.a.physicsIslandFixed)
+                connection.a.body.applyTorqueImpulse(
+                  {
+                    x: torque.x * forceStepSeconds,
+                    y: torque.y * forceStepSeconds,
+                    z: torque.z * forceStepSeconds,
+                  },
+                  true,
+                );
+            }
           }
-        }
-        jointForcesMs = performance.now() - phaseStarted;
-        phaseStarted = performance.now();
-        const frameTimestep = Math.min(clock.getDelta(), 1 / 60),
-          gearSubsteps = state.gearLinks.length ? 4 : 1;
-        state.world.timestep = frameTimestep / gearSubsteps;
-        for (let substep = 0; substep < gearSubsteps; substep++) {
-          projectGearVelocities();
-          state.world.step(state.physicsEventQueue, state.physicsHooks);
-          projectGearVelocities();
-        }
-        // Mutating a rigid body's pose between two world.step calls can keep
-        // Rapier's internal body set borrowed and trigger wasm-bindgen's unsafe
-        // aliasing guard. Apply the hard tooth-phase projection only after all
-        // physics substeps have completed.
-        enforceGearLinks();
-        worldStepMs = performance.now() - phaseStarted;
-        phaseStarted = performance.now();
-        const startup = performance.now() - (state.simStartedMs ?? 0) < 350;
-        const gearedBodies = new Set<RAPIER.RigidBody>();
-        state.gearLinks.forEach((link) => {
-          if (link.a.value.body) gearedBodies.add(link.a.value.body);
-          if (link.b.value.body) gearedBodies.add(link.b.value.body);
-        });
-        const clampedBodies = new Set<RAPIER.RigidBody>();
-        state.pieces.forEach((p) => {
-          if (
-            p.body &&
-            !state.sleepingBodyHandles.has(p.body.handle) &&
-            !clampedBodies.has(p.body)
-          ) {
-            clampedBodies.add(p.body);
-            clampMotion(
-              p,
-              startup ? 2 : 12,
-              gearedBodies.has(p.body) ? (startup ? 20 : 80) : startup ? 3 : 14,
-            );
+          jointForcesMs = performance.now() - phaseStarted;
+          phaseStarted = performance.now();
+          const frameTimestep = Math.min(clock.getDelta(), 1 / 60),
+            gearSubsteps = state.gearLinks.length ? 4 : 1;
+          state.world.timestep = frameTimestep / gearSubsteps;
+          for (let substep = 0; substep < gearSubsteps; substep++) {
+            projectGearVelocities();
+            state.world.step(state.physicsEventQueue, state.physicsHooks);
+            projectGearVelocities();
           }
-        });
-        state.pieces.forEach((p) => {
-          if (
-            p.body &&
-            (!state.largeSimulation ||
-              startup ||
-              !state.sleepingBodyHandles.has(p.body.handle))
-          ) {
-            const t = p.body.translation(),
-              q = p.body.rotation(),
-              bodyRotation = new THREE.Quaternion(q.x, q.y, q.z, q.w),
-              offset = (p.physicsOffset ?? new THREE.Vector3())
-                .clone()
-                .applyQuaternion(bodyRotation);
-            p.mesh.position.set(t.x + offset.x, t.y + offset.y, t.z + offset.z);
-            p.mesh.quaternion.copy(
-              bodyRotation.clone().multiply(
-                p.physicsBase ?? new THREE.Quaternion(),
-              ),
-            );
-          }
-        });
-        enforceAxialStops();
-        state.dynamicConnectionFrame++;
-        if (state.dynamicConnectionFrame % 8 === 0)
-          updateDynamicMechanisms();
-        syncMs = performance.now() - phaseStarted;
-        phaseStarted = performance.now();
-        if (state.simLog) {
-          const time = (Date.now() - Date.parse(state.simLog.startedAt)) / 1000;
-          if (time >= (state.nextLogSample ?? 0)) {
-            const bodies = state.pieces.flatMap((p) => {
-              if (!p.body) return [];
-              const v = p.body.linvel(),
-                w = p.body.angvel(),
-                linear = Math.hypot(v.x, v.y, v.z),
-                angular = Math.hypot(w.x, w.y, w.z);
-              state.simLog!.maxLinearSpeed = Math.max(
-                state.simLog!.maxLinearSpeed,
-                linear,
+          // Mutating a rigid body's pose between two world.step calls can keep
+          // Rapier's internal body set borrowed and trigger wasm-bindgen's unsafe
+          // aliasing guard. Apply the hard tooth-phase projection only after all
+          // physics substeps have completed.
+          enforceGearLinks();
+          worldStepMs = performance.now() - phaseStarted;
+          phaseStarted = performance.now();
+          const startup = performance.now() - (state.simStartedMs ?? 0) < 350;
+          const gearedBodies = new Set<RAPIER.RigidBody>();
+          state.gearLinks.forEach((link) => {
+            if (link.a.value.body) gearedBodies.add(link.a.value.body);
+            if (link.b.value.body) gearedBodies.add(link.b.value.body);
+          });
+          const clampedBodies = new Set<RAPIER.RigidBody>();
+          state.pieces.forEach((p) => {
+            if (
+              p.body &&
+              !state.sleepingBodyHandles.has(p.body.handle) &&
+              !clampedBodies.has(p.body)
+            ) {
+              clampedBodies.add(p.body);
+              clampMotion(
+                p,
+                startup ? 2 : 12,
+                gearedBodies.has(p.body) ? (startup ? 20 : 80) : startup ? 3 : 14,
               );
-              state.simLog!.maxAngularSpeed = Math.max(
-                state.simLog!.maxAngularSpeed,
-                angular,
+            }
+          });
+          state.pieces.forEach((p) => {
+            if (
+              p.body &&
+              (!state.largeSimulation ||
+                startup ||
+                !state.sleepingBodyHandles.has(p.body.handle))
+            ) {
+              const t = p.body.translation(),
+                q = p.body.rotation(),
+                bodyRotation = new THREE.Quaternion(q.x, q.y, q.z, q.w),
+                offset = (p.physicsOffset ?? new THREE.Vector3())
+                  .clone()
+                  .applyQuaternion(bodyRotation);
+              p.mesh.position.set(t.x + offset.x, t.y + offset.y, t.z + offset.z);
+              p.mesh.quaternion.copy(
+                bodyRotation.clone().multiply(p.physicsBase ?? new THREE.Quaternion()),
               );
-              return [
-                {
-                  id: p.id,
-                  part: p.part,
-                  fixed: p.physicsIslandFixed ?? p.fixed,
-                  position: p.mesh.position.toArray(),
-                  rotation: p.mesh.quaternion.toArray(),
-                  linearVelocity: [v.x, v.y, v.z],
-                  angularVelocity: [w.x, w.y, w.z],
-                },
-              ];
-            });
-            state.simLog.samples.push({ time, bodies });
-            state.nextLogSample = time + (state.largeSimulation ? 0.75 : 0.2);
+            }
+          });
+          enforceAxialStops();
+          state.dynamicConnectionFrame++;
+          if (state.dynamicConnectionFrame % 8 === 0) updateDynamicMechanisms();
+          syncMs = performance.now() - phaseStarted;
+          phaseStarted = performance.now();
+          if (state.simLog) {
+            const time = (Date.now() - Date.parse(state.simLog.startedAt)) / 1000;
+            if (time >= (state.nextLogSample ?? 0)) {
+              const bodies = state.pieces.flatMap((p) => {
+                if (!p.body) return [];
+                const v = p.body.linvel(),
+                  w = p.body.angvel(),
+                  linear = Math.hypot(v.x, v.y, v.z),
+                  angular = Math.hypot(w.x, w.y, w.z);
+                state.simLog!.maxLinearSpeed = Math.max(
+                  state.simLog!.maxLinearSpeed,
+                  linear,
+                );
+                state.simLog!.maxAngularSpeed = Math.max(
+                  state.simLog!.maxAngularSpeed,
+                  angular,
+                );
+                return [
+                  {
+                    id: p.id,
+                    part: p.part,
+                    fixed: p.physicsIslandFixed ?? p.fixed,
+                    position: p.mesh.position.toArray(),
+                    rotation: p.mesh.quaternion.toArray(),
+                    linearVelocity: [v.x, v.y, v.z],
+                    angularVelocity: [w.x, w.y, w.z],
+                  },
+                ];
+              });
+              state.simLog.samples.push({ time, bodies });
+              state.nextLogSample = time + (state.largeSimulation ? 0.75 : 0.2);
+            }
           }
-        }
-        physicsLogMs = performance.now() - phaseStarted;
+          physicsLogMs = performance.now() - phaseStarted;
         } catch (error) {
-          const detail =
-            error instanceof Error ? error.message : String(error);
+          const detail = error instanceof Error ? error.message : String(error);
           console.error("Sim Studio physics frame stopped safely:", error);
           state.simLog?.events.push(`Error físico recuperado: ${detail}`);
           state.running = false;
@@ -7731,8 +6169,7 @@ export default function Home() {
         }
       } else clock.getDelta();
       let phaseStarted = performance.now();
-      if (state.running || state.renderBatchesDirty)
-        state.updateRenderBatches();
+      if (state.running || state.renderBatchesDirty) state.updateRenderBatches();
       batchMs = performance.now() - phaseStarted;
       phaseStarted = performance.now();
       state.updateDebug();
@@ -7748,11 +6185,8 @@ export default function Home() {
       const locksMs = performance.now() - phaseStarted;
       phaseStarted = performance.now();
       const gridX =
-          Math.round(camera.position.x / GRID_RECENTER_STEP) *
-          GRID_RECENTER_STEP,
-        gridZ =
-          Math.round(camera.position.z / GRID_RECENTER_STEP) *
-          GRID_RECENTER_STEP;
+          Math.round(camera.position.x / GRID_RECENTER_STEP) * GRID_RECENTER_STEP,
+        gridZ = Math.round(camera.position.z / GRID_RECENTER_STEP) * GRID_RECENTER_STEP;
       if (state.grid.position.x !== gridX || state.grid.position.z !== gridZ) {
         state.grid.position.x = gridX;
         state.grid.position.z = gridZ;
@@ -7783,8 +6217,7 @@ export default function Home() {
       if (gpuQuery && gpuTimerExtension)
         gl.beginQuery(gpuTimerExtension.TIME_ELAPSED_EXT, gpuQuery);
       renderer.render(scene, camera);
-      if (gpuQuery && gpuTimerExtension)
-        gl.endQuery(gpuTimerExtension.TIME_ELAPSED_EXT);
+      if (gpuQuery && gpuTimerExtension) gl.endQuery(gpuTimerExtension.TIME_ELAPSED_EXT);
       const renderMs = performance.now() - phaseStarted,
         trace = state.performanceTrace,
         sample: FramePerformanceSample = {
@@ -7828,8 +6261,7 @@ export default function Home() {
     frame = requestAnimationFrame(animate);
     return () => {
       cancelAnimationFrame(frame);
-      if (renderBatchRebuildFrame)
-        cancelAnimationFrame(renderBatchRebuildFrame);
+      if (renderBatchRebuildFrame) cancelAnimationFrame(renderBatchRebuildFrame);
       pendingGpuTimers.forEach(({ query }) => gl.deleteQuery(query));
       window.removeEventListener("resize", resize);
       resizeObserver.disconnect();
@@ -7850,8 +6282,7 @@ export default function Home() {
     const dark = theme === "dark",
       background = new THREE.Color(dark ? 0x202328 : 0xdfe7ed);
     state.scene.background = background;
-    if (state.scene.fog instanceof THREE.Fog)
-      state.scene.fog.color.copy(background);
+    if (state.scene.fog instanceof THREE.Fog) state.scene.fog.color.copy(background);
     (state.floor.material as THREE.MeshStandardMaterial).color.setHex(
       dark ? 0x2b3035 : 0xcbd6dd,
     );
@@ -7878,17 +6309,17 @@ export default function Home() {
     () =>
       category === "imported" && search
         ? results.filter((p) =>
-            (p.part + " " + p.name)
-              .toLowerCase()
-              .includes(search.toLowerCase()),
+            (p.part + " " + p.name).toLowerCase().includes(search.toLowerCase()),
           )
         : results,
     [category, results, search],
   );
+
   const dragPart = (e: React.DragEvent, p: CatalogPart) => {
     e.dataTransfer.setData("application/x-ldraw-part", JSON.stringify(p));
     e.dataTransfer.effectAllowed = "copy";
   };
+
   const addReference = async () => {
     const part = reference.trim().replace(/\.dat$/i, "");
     if (!part) return;
@@ -7923,9 +6354,9 @@ export default function Home() {
         };
     if (!packaged)
       try {
-        const d = (await fetch(
-          `/api/parts?q=${encodeURIComponent(part)}`,
-        ).then((r) => r.json())) as { items?: CatalogPart[] };
+        const d = (await fetch(`/api/parts?q=${encodeURIComponent(part)}`).then((r) =>
+          r.json(),
+        )) as { items?: CatalogPart[] };
         const exact = d.items?.find(
           (x: { part: string }) => x.part.toLowerCase() === normalizedPart,
         );
@@ -7952,18 +6383,14 @@ export default function Home() {
     setCatalogBusy(false);
     void appRef.current?.preloadPart(found);
   };
+
   const rotate = (axis: "x" | "y" | "z", dir = 1) => {
     const s = appRef.current,
       p = s?.selected;
     if (!s || !p || running) return;
     s.recordHistory();
     const radians = THREE.MathUtils.degToRad(rotationAngle * dir);
-    rotatePieceAroundPivotWithGlobalSnap(
-      p,
-      axis,
-      radians,
-      s.rotationSnapStep,
-    );
+    rotatePieceAroundPivotWithGlobalSnap(p, axis, radians, s.rotationSnapStep);
     const disconnected = removeMisalignedForcedConnections(s, p);
     if (p.renderBatched) s.rebuildRenderBatches();
     else s.renderBatchesDirty = true;
@@ -7977,6 +6404,7 @@ export default function Home() {
           : `${disconnected} forced joint disconnected after misalignment`,
       );
   };
+
   const nudge = (axis: "x" | "y" | "z", amount: number) => {
     const s = appRef.current,
       p = s?.selected;
@@ -7988,6 +6416,7 @@ export default function Home() {
     s.refreshDebug();
     setSelectedId(p.id);
   };
+
   const changeSelectedColor = async (color: number) => {
     const s = appRef.current,
       piece = s?.selected;
@@ -7996,13 +6425,12 @@ export default function Home() {
     setMessage(t.changingColor);
     const changed = await s.recolorPart(piece, color);
     setMessage(
-      changed
-        ? `${t.colorChanged} · LDraw ${color}`
-        : `${t.colorError} · LDraw ${color}`,
+      changed ? `${t.colorChanged} · LDraw ${color}` : `${t.colorError} · LDraw ${color}`,
     );
     setSelectedId(piece.id);
     s.scheduleRecoverySave();
   };
+
   const remove = () => {
     const s = appRef.current,
       p = s?.selected;
@@ -8019,6 +6447,7 @@ export default function Home() {
     setSelectedId(null);
     setCount(s.pieces.length);
   };
+
   const reset = () => {
     const s = appRef.current;
     if (!s || physicsTransitionRef.current) return;
@@ -8059,6 +6488,11 @@ export default function Home() {
     setCount(0);
     s.scheduleRecoverySave();
   };
+
+  // --- Physics world lifecycle ---------------------------------------------
+  // Starting builds rigid islands, colliders and joints. Stopping restores the
+  // exact pre-simulation editor snapshot instead of keeping simulated poses.
+
   const physics = async () => {
     const s = appRef.current;
     if (!s || physicsTransitionRef.current) return;
@@ -8076,569 +6510,526 @@ export default function Home() {
       if (!s.running) {
         await RAPIER.init();
         if (appRef.current !== s) return;
-      s.snapshot = s.pieces.map((piece) => ({
-        piece,
-        position: piece.mesh.position.clone(),
-        rotation: piece.mesh.quaternion.clone(),
-      }));
-      s.snapshotConnections = s.connections.map((connection) => ({
-        ...connection,
-        point: connection.point.clone(),
-        axis: connection.axis.clone(),
-        localAxisA: connection.localAxisA.clone(),
-        localPointA: connection.localPointA?.clone(),
-        localPointB: connection.localPointB?.clone(),
-      }));
-      s.simLog = {
-        startedAt: new Date().toISOString(),
-        connections: s.connections.map((c) => ({
-          a: c.a.part,
-          b: c.b.part,
-          type: `${c.profile}:${c.mode}`,
-          point: c.point.toArray(),
-        })),
-        samples: [],
-        maxLinearSpeed: 0,
-        maxAngularSpeed: 0,
-        maxSpringForce: 0,
-        events: [
-          `Inicio con ${s.pieces.length} cuerpos y ${s.connections.length} uniones`,
-          `Estabilización inicial activa durante 0.35 s`,
-        ],
-      };
-      s.nextLogSample = 0;
-      s.simStartedMs = performance.now();
-      const parent = new Map<Piece, Piece>();
-      s.pieces.forEach((piece) => parent.set(piece, piece));
-      const findRoot = (piece: Piece) => {
-          let root = piece;
-          while (parent.get(root) !== root) root = parent.get(root)!;
-          let current = piece;
-          while (parent.get(current) !== root) {
-            const next = parent.get(current)!;
-            parent.set(current, root);
-            current = next;
-          }
-          return root;
-        },
-        mergeRigidPieces = (a: Piece, b: Piece) => {
-          const rootA = findRoot(a),
-            rootB = findRoot(b);
-          if (rootA !== rootB) parent.set(rootB, rootA);
+        s.snapshot = s.pieces.map((piece) => ({
+          piece,
+          position: piece.mesh.position.clone(),
+          rotation: piece.mesh.quaternion.clone(),
+        }));
+        s.snapshotConnections = s.connections.map((connection) => ({
+          ...connection,
+          point: connection.point.clone(),
+          axis: connection.axis.clone(),
+          localAxisA: connection.localAxisA.clone(),
+          localPointA: connection.localPointA?.clone(),
+          localPointB: connection.localPointB?.clone(),
+        }));
+        s.simLog = {
+          startedAt: new Date().toISOString(),
+          connections: s.connections.map((c) => ({
+            a: c.a.part,
+            b: c.b.part,
+            type: `${c.profile}:${c.mode}`,
+            point: c.point.toArray(),
+          })),
+          samples: [],
+          maxLinearSpeed: 0,
+          maxAngularSpeed: 0,
+          maxSpringForce: 0,
+          events: [
+            `Inicio con ${s.pieces.length} cuerpos y ${s.connections.length} uniones`,
+            `Estabilización inicial activa durante 0.35 s`,
+          ],
         };
-      s.connections.forEach((connection) => {
-        if (structuralMode === "rigid" && connection.mode === "fixed")
-          mergeRigidPieces(connection.a, connection.b);
-      });
-      const rigidIslandMap = new Map<Piece, Piece[]>();
-      s.pieces.forEach((piece) => {
-        const root = findRoot(piece),
-          island = rigidIslandMap.get(root) ?? [];
-        island.push(piece);
-        rigidIslandMap.set(root, island);
-      });
-      const rigidIslands = [...rigidIslandMap.values()],
-        rigidIslandByPiece = new Map<Piece, Piece[]>();
-      rigidIslands.forEach((island) =>
-        island.forEach((piece) => rigidIslandByPiece.set(piece, island)),
-      );
-      s.gearAngles.clear();
-      s.gearBodyRotations.clear();
-      s.gearPhases.clear();
-      s.differentialLinks = detectDifferentialLinks(
-        s.pieces,
-        rigidIslandByPiece,
-      );
-      const differentialExclusions = differentialPairKeys(
-        s.differentialLinks,
-      );
-      s.gearLinks = detectGearLinks(
-        s.pieces,
-        rigidIslandByPiece,
-        differentialExclusions,
-      );
-      const fixedConnectionCount = s.connections.filter(
-          (connection) => connection.mode === "fixed",
-        ).length,
-        stiffnessRatio = structuralStiffness / 100,
-        largeSimulation =
-          rigidIslands.length > 250 || s.pieces.length > 800,
-        solverIterations = largeSimulation
-          ? 5 + Math.round(stiffnessRatio * 5)
-          : 4 + Math.round(stiffnessRatio * 12),
-        internalPgsIterations = 1 + Math.round(stiffnessRatio * 3),
-        additionalSolverIterations = largeSimulation
-          ? Math.round(stiffnessRatio * 2)
-          : Math.round(stiffnessRatio * 4),
-        world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
-      s.largeSimulation = largeSimulation;
-      world.integrationParameters.numSolverIterations = solverIterations;
-      world.integrationParameters.numInternalPgsIterations =
-        internalPgsIterations;
-      world.integrationParameters.maxCcdSubsteps = largeSimulation ? 1 : 2;
-      world.integrationParameters.contact_natural_frequency = 18;
-      world.integrationParameters.normalizedAllowedLinearError =
-        THREE.MathUtils.lerp(0.025, 0.002, stiffnessRatio);
-      s.simLog.events[0] =
-        `Inicio con ${s.pieces.length} piezas agrupadas en ${rigidIslands.length} cuerpos rígidos y ${s.connections.length} uniones`;
-      s.simLog.events.push(
-        `Modo estructural ${structuralMode}; rigidez ${structuralStiffness}%`,
-        `Fricción: piezas ${s.physicsSettings.pieceFriction}, goma ${s.physicsSettings.rubberFriction}, pines libres ${s.physicsSettings.frictionlessPinRotation}, ejes lineal ${s.physicsSettings.axleSlidingFriction}, ejes rotación ${s.physicsSettings.axleRotationFriction}; holgura ${s.physicsSettings.axleTolerance} studs`,
-        `Solver: ${solverIterations} iteraciones × ${internalPgsIterations} PGS interno + ${additionalSolverIterations} adicionales`,
-        `Engranajes: relación rígida de velocidad y bloqueo de fase dental en 4 subpasos`,
-        structuralMode === "rigid"
-          ? `${fixedConnectionCount} conexiones fijas fusionadas en islas rígidas compuestas`
-          : `${fixedConnectionCount} conexiones fijas conservadas como joints entre piezas`,
-        `${s.gearLinks.length} pares de engranajes enlazados por solapamiento de malla verde y relación de dientes`,
-        `${s.differentialLinks.length} diferenciales activos (salida izquierda + salida derecha = 2 × carcasa)`,
-      );
-      const colliderOwners = new Map<number, Piece>(),
-        traversedConnectorPairs = detectShaftTraversals(s.pieces),
-      noContactPiecePairs = buildConnectorContactExclusions(
-          s.connections,
-          rigidIslandByPiece,
-          traversedConnectorPairs,
-        );
-      differentialExclusions.forEach((key) => noContactPiecePairs.add(key));
-      s.rigidIslandByPiece = rigidIslandByPiece;
-      s.contactExclusions.clear();
-      noContactPiecePairs.forEach((key) => s.contactExclusions.add(key));
-      s.simLog.events.push(
-        `${traversedConnectorPairs.length} pares eje/pin ↔ pieza atravesada detectados geométricamente`,
-        `${noContactPiecePairs.size} pares pin/eje ↔ grupo excluidos de colisión`,
-      );
-      s.physicsEventQueue = new RAPIER.EventQueue(true);
-      s.contactFilterStats = { tested: 0, rejected: 0 };
-      s.physicsHooks = {
-        filterContactPair(colliderA, colliderB) {
-          const pieceA = colliderOwners.get(colliderA),
-            pieceB = colliderOwners.get(colliderB);
-          if (s.contactFilterStats) s.contactFilterStats.tested++;
-          const pairKey =
-            pieceA && pieceB ? contactPairKey(pieceA, pieceB) : undefined;
-          if (
-            pieceA &&
-            pieceB &&
-            pairKey &&
-            (s.contactExclusions.has(pairKey) ||
-              s.dynamicNoContactPairs.has(pairKey))
-          ) {
-            if (s.contactFilterStats) s.contactFilterStats.rejected++;
-            return null;
-          }
-          if (
-            pieceA &&
-            pieceB &&
-            pairKey &&
-            (pieceA.dynamicAxleConnections ||
-              pieceB.dynamicAxleConnections)
-          )
-            s.contactCandidates.set(pairKey, { a: pieceA, b: pieceB });
-          return RAPIER.SolverFlags.COMPUTE_IMPULSE;
-        },
-        filterIntersectionPair() {
-          return true;
-        },
-      };
-      world.createCollider(
-        RAPIER.ColliderDesc.cuboid(5000, 0.15, 5000)
-          .setTranslation(0, -0.2, 0)
-          .setFriction(CONTACT_FRICTION.floor)
-          .setCollisionGroups(
-            interactionGroups(
-              COLLISION_GROUP_NON_GEAR,
-              COLLISION_GROUP_NON_GEAR | COLLISION_GROUP_GEAR_NORMAL,
-            ),
-          ),
-      );
-      rigidIslands.forEach((island) => {
-        const origin = island.reduce(
-            (sum, piece) => sum.add(piece.mesh.position),
-            new THREE.Vector3(),
-          ).multiplyScalar(1 / island.length),
-          islandFixed = island.some((piece) => piece.fixed),
-          additionalMass = island.reduce(
-            (sum, piece) => sum + (piece.kind === "motor" ? 2 : 0.65),
-            0,
-          ),
-          desc = islandFixed
-          ? RAPIER.RigidBodyDesc.fixed()
-          : RAPIER.RigidBodyDesc.dynamic()
-              .setLinearDamping(0.55)
-              .setAngularDamping(0.95)
-              .setCcdEnabled(!largeSimulation)
-              .setSoftCcdPrediction(largeSimulation ? 0 : 0.1)
-              .setAdditionalSolverIterations(additionalSolverIterations)
-              .setAdditionalMass(additionalMass);
-        desc.setTranslation(origin.x, origin.y, origin.z);
-        const rb = world.createRigidBody(desc);
-        island.forEach((p) => {
-          const physicsOffset = p.mesh.position.clone().sub(origin),
-            physicsBase = p.mesh.quaternion.clone();
-          p.physicsOffset = physicsOffset;
-          p.physicsBase = physicsBase;
-          p.physicsIsland = island;
-          p.physicsIslandFixed = islandFixed;
-          p.body = rb;
-          const finishPieceCollider = (
-            collider: RAPIER.ColliderDesc,
-            gearLayer: boolean,
-            density: number,
-          ) => {
-            if (gearLayer)
-              collider.setFrictionCombineRule(
-                RAPIER.CoefficientCombineRule.Min,
-              );
-            collider
-              .setFriction(
-                gearLayer
-                  ? CONTACT_FRICTION.gearMesh
-                  : p.kind === "wheel" && !p.gear
-                    ? s.physicsSettings.rubberFriction
-                    : s.physicsSettings.pieceFriction,
-              )
-              .setRestitution(0)
-              .setActiveHooks(RAPIER.ActiveHooks.FILTER_CONTACT_PAIRS)
-              .setCollisionGroups(
-                gearLayer
-                  ? interactionGroups(
-                      COLLISION_GROUP_GEAR_MESH,
-                      COLLISION_GROUP_GEAR_MESH,
-                    )
-                  : p.gear
-                    ? interactionGroups(
-                        COLLISION_GROUP_GEAR_NORMAL,
-                        COLLISION_GROUP_NON_GEAR,
-                      )
-                    : interactionGroups(
-                        COLLISION_GROUP_NON_GEAR,
-                        COLLISION_GROUP_NON_GEAR |
-                          COLLISION_GROUP_GEAR_NORMAL,
-                      ),
-              )
-              .setDensity(density);
-            const createdCollider = world.createCollider(collider, rb);
-            colliderOwners.set(createdCollider.handle, p);
+        s.nextLogSample = 0;
+        s.simStartedMs = performance.now();
+        const parent = new Map<Piece, Piece>();
+        s.pieces.forEach((piece) => parent.set(piece, piece));
+        const findRoot = (piece: Piece) => {
+            let root = piece;
+            while (parent.get(root) !== root) root = parent.get(root)!;
+            let current = piece;
+            while (parent.get(current) !== root) {
+              const next = parent.get(current)!;
+              parent.set(current, root);
+              current = next;
+            }
+            return root;
+          },
+          mergeRigidPieces = (a: Piece, b: Piece) => {
+            const rootA = findRoot(a),
+              rootB = findRoot(b);
+            if (rootA !== rootB) parent.set(rootB, rootA);
           };
-          const createPieceCollider = (
-            primitive: CollisionPrimitive,
-            gearLayer: boolean,
-          ) => {
-            // Bushes, axle joiners and gears often sit in an exactly sized
-            // axial gap. Keep the authored/debug maps unchanged, but apply the
-            // configured clearance only to the normal collider. The magenta
-            // layer is exclusively gear-to-gear contact and keeps its authored
-            // thickness unchanged.
-            const axleClearance =
-              !gearLayer && (p.gear || /bush|axle joiner/i.test(p.name))
-                ? s.physicsSettings.axleTolerance
-                : 0;
-            const collider =
-              primitive.shape === "box"
-                ? RAPIER.ColliderDesc.cuboid(
-                    primitive.size!.x / 2,
-                    primitive.size!.y / 2,
-                    primitive.size!.z / 2,
-                  )
-                : RAPIER.ColliderDesc.cylinder(
-                    Math.max(0.01, primitive.halfHeight! - axleClearance / 2),
-                    primitive.radius!,
-                  );
-            const center = physicsOffset
-                .clone()
-                .add(
-                  primitive.center.clone().applyQuaternion(physicsBase),
-                ),
-              rotation = physicsBase.clone().multiply(primitive.rotation);
-            collider
-              .setTranslation(center.x, center.y, center.z)
-              .setRotation(rotation);
-            finishPieceCollider(
-              collider,
-              gearLayer,
-              gearLayer
-                ? 0
-                : (p.kind === "motor" ? 1.7 : 1) /
-                    Math.max(1, p.colliders.length),
-            );
-          };
-          const exactMesh = p.exactCollider
-            ? exactTriangleMeshForPiece(p, physicsOffset, physicsBase)
-            : undefined;
-          if (exactMesh)
-            finishPieceCollider(
-              RAPIER.ColliderDesc.trimesh(
-                exactMesh.vertices,
-                exactMesh.indices,
-                RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES |
-                  RAPIER.TriMeshFlags.MERGE_DUPLICATE_VERTICES |
-                  RAPIER.TriMeshFlags.DELETE_DEGENERATE_TRIANGLES |
-                  RAPIER.TriMeshFlags.DELETE_DUPLICATE_TRIANGLES,
-              ),
-              false,
-              // The rigid body already receives an explicit LEGO-like mass.
-              // LDraw surfaces are not always watertight, so deriving mass
-              // from their enclosed volume would be unstable.
-              0,
-            );
-          else
-            p.colliders.forEach((primitive) =>
-              createPieceCollider(primitive, false),
-            );
-          p.gearColliders.forEach((primitive) =>
-            createPieceCollider(primitive, true),
-          );
+        s.connections.forEach((connection) => {
+          if (structuralMode === "rigid" && connection.mode === "fixed")
+            mergeRigidPieces(connection.a, connection.b);
         });
-      });
-      // Establish the reference orientation before the first physics step.
-      // Otherwise the first movement becomes the target phase and is never
-      // corrected, which creates a small slip every time simulation starts.
-      s.gearLinks.forEach((link) => {
-        s.gearPhases.set(gearLinkKey(link), 0);
-        for (const piece of [link.a.value, link.b.value]) {
-          const body = piece.body;
-          if (!body || s.gearBodyRotations.has(body.handle)) continue;
-          const rotation = body.rotation();
-          s.gearBodyRotations.set(
-            body.handle,
-            new THREE.Quaternion(
-              rotation.x,
-              rotation.y,
-              rotation.z,
-              rotation.w,
-            ).normalize(),
+        const rigidIslandMap = new Map<Piece, Piece[]>();
+        s.pieces.forEach((piece) => {
+          const root = findRoot(piece),
+            island = rigidIslandMap.get(root) ?? [];
+          island.push(piece);
+          rigidIslandMap.set(root, island);
+        });
+        const rigidIslands = [...rigidIslandMap.values()],
+          rigidIslandByPiece = new Map<Piece, Piece[]>();
+        rigidIslands.forEach((island) =>
+          island.forEach((piece) => rigidIslandByPiece.set(piece, island)),
+        );
+        s.gearAngles.clear();
+        s.gearBodyRotations.clear();
+        s.gearPhases.clear();
+        s.differentialLinks = detectDifferentialLinks(s.pieces, rigidIslandByPiece);
+        const differentialExclusions = differentialPairKeys(s.differentialLinks);
+        s.gearLinks = detectGearLinks(
+          s.pieces,
+          rigidIslandByPiece,
+          differentialExclusions,
+        );
+        const fixedConnectionCount = s.connections.filter(
+            (connection) => connection.mode === "fixed",
+          ).length,
+          stiffnessRatio = structuralStiffness / 100,
+          largeSimulation = rigidIslands.length > 250 || s.pieces.length > 800,
+          solverIterations = largeSimulation
+            ? 5 + Math.round(stiffnessRatio * 5)
+            : 4 + Math.round(stiffnessRatio * 12),
+          internalPgsIterations = 1 + Math.round(stiffnessRatio * 3),
+          additionalSolverIterations = largeSimulation
+            ? Math.round(stiffnessRatio * 2)
+            : Math.round(stiffnessRatio * 4),
+          world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+        s.largeSimulation = largeSimulation;
+        world.integrationParameters.numSolverIterations = solverIterations;
+        world.integrationParameters.numInternalPgsIterations = internalPgsIterations;
+        world.integrationParameters.maxCcdSubsteps = largeSimulation ? 1 : 2;
+        world.integrationParameters.contact_natural_frequency = 18;
+        world.integrationParameters.normalizedAllowedLinearError = THREE.MathUtils.lerp(
+          0.025,
+          0.002,
+          stiffnessRatio,
+        );
+        s.simLog.events[0] = `Inicio con ${s.pieces.length} piezas agrupadas en ${rigidIslands.length} cuerpos rígidos y ${s.connections.length} uniones`;
+        s.simLog.events.push(
+          `Modo estructural ${structuralMode}; rigidez ${structuralStiffness}%`,
+          `Fricción: piezas ${s.physicsSettings.pieceFriction}, goma ${s.physicsSettings.rubberFriction}, pines libres ${s.physicsSettings.frictionlessPinRotation}, ejes lineal ${s.physicsSettings.axleSlidingFriction}, ejes rotación ${s.physicsSettings.axleRotationFriction}; holgura ${s.physicsSettings.axleTolerance} studs`,
+          `Solver: ${solverIterations} iteraciones × ${internalPgsIterations} PGS interno + ${additionalSolverIterations} adicionales`,
+          `Engranajes: relación rígida de velocidad y bloqueo de fase dental en 4 subpasos`,
+          structuralMode === "rigid"
+            ? `${fixedConnectionCount} conexiones fijas fusionadas en islas rígidas compuestas`
+            : `${fixedConnectionCount} conexiones fijas conservadas como joints entre piezas`,
+          `${s.gearLinks.length} pares de engranajes enlazados por solapamiento de malla verde y relación de dientes`,
+          `${s.differentialLinks.length} diferenciales activos (salida izquierda + salida derecha = 2 × carcasa)`,
+        );
+        const colliderOwners = new Map<number, Piece>(),
+          traversedConnectorPairs = detectShaftTraversals(s.pieces),
+          noContactPiecePairs = buildConnectorContactExclusions(
+            s.connections,
+            rigidIslandByPiece,
+            traversedConnectorPairs,
           );
-        }
-      });
-      let movingJointCount = 0,
-        redundantMovingJoints = 0;
-      const movingGuideJoints = new Map<string, string>();
-      s.physicsJoints.clear();
-      s.dynamicNoContactPairs.clear();
-      s.contactCandidates.clear();
-      const createPhysicsJoint = (c: Connection) => {
-        if (!c.a.body || !c.b.body) return;
-        if (
-          structuralMode === "rigid" &&
-          c.mode === "fixed" &&
-          c.a.body === c.b.body
-        )
-          return;
-        if (c.a.body === c.b.body) {
-          redundantMovingJoints++;
-          return;
-        }
-        const positionA = c.a.body.translation(),
-          positionB = c.b.body.translation(),
-          rotationA = c.a.body.rotation(),
-          rotationB = c.b.body.rotation(),
-          inverseRotationA = new THREE.Quaternion(
-            rotationA.x,
-            rotationA.y,
-            rotationA.z,
-            rotationA.w,
-          ).invert(),
-          inverseRotationB = new THREE.Quaternion(
-            rotationB.x,
-            rotationB.y,
-            rotationB.z,
-            rotationB.w,
-          ).invert(),
-          forcedPivot =
-            c.forced && c.localPointB
-              ? c.b.mesh.localToWorld(c.localPointB.clone())
-              : undefined,
-          // A forced joint represents a virtual extension between the two red
-          // points. Rapier still needs one common pivot; using the shaft point
-          // for both local anchors preserves the current visual offset instead
-          // of pulling or teleporting the pieces together at simulation start.
-          worldAnchorA = forcedPivot ?? c.point,
-          worldAnchorB = forcedPivot ?? c.point,
-          a = worldAnchorA
-            .clone()
-            .sub(new THREE.Vector3(positionA.x, positionA.y, positionA.z))
-            .applyQuaternion(inverseRotationA),
-          b = worldAnchorB
-            .clone()
-            .sub(new THREE.Vector3(positionB.x, positionB.y, positionB.z))
-            .applyQuaternion(inverseRotationB),
-          worldAxis = c.axis.clone().normalize(),
-          axis = worldAxis.clone().applyQuaternion(inverseRotationA),
-          worldFrame = new THREE.Quaternion().setFromUnitVectors(
-            new THREE.Vector3(1, 0, 0),
-            worldAxis,
-          ),
-          frameA = inverseRotationA.clone().multiply(worldFrame),
-          frameB = inverseRotationB.clone().multiply(worldFrame),
-          dynamicAxle =
-            (c.profile === "axle-cross" || c.profile === "axle-round") &&
-            c.b.dynamicAxleConnections;
-        if (c.mode === "linear" || c.mode === "rotation-linear") {
-          const axisKey = worldAxis.clone();
-          if (
-            axisKey.x < -1e-6 ||
-            (Math.abs(axisKey.x) <= 1e-6 && axisKey.y < -1e-6) ||
-            (Math.abs(axisKey.x) <= 1e-6 &&
-              Math.abs(axisKey.y) <= 1e-6 &&
-              axisKey.z < 0)
-          )
-            axisKey.multiplyScalar(-1);
-          const handles = [c.a.body.handle, c.b.body.handle].sort(
-              (left, right) => left - right,
+        differentialExclusions.forEach((key) => noContactPiecePairs.add(key));
+        s.rigidIslandByPiece = rigidIslandByPiece;
+        s.contactExclusions.clear();
+        noContactPiecePairs.forEach((key) => s.contactExclusions.add(key));
+        s.simLog.events.push(
+          `${traversedConnectorPairs.length} pares eje/pin ↔ pieza atravesada detectados geométricamente`,
+          `${noContactPiecePairs.size} pares pin/eje ↔ grupo excluidos de colisión`,
+        );
+        s.physicsEventQueue = new RAPIER.EventQueue(true);
+        s.contactFilterStats = { tested: 0, rejected: 0 };
+        s.physicsHooks = {
+          filterContactPair(colliderA, colliderB) {
+            const pieceA = colliderOwners.get(colliderA),
+              pieceB = colliderOwners.get(colliderB);
+            if (s.contactFilterStats) s.contactFilterStats.tested++;
+            const pairKey = pieceA && pieceB ? contactPairKey(pieceA, pieceB) : undefined;
+            if (
+              pieceA &&
+              pieceB &&
+              pairKey &&
+              (s.contactExclusions.has(pairKey) || s.dynamicNoContactPairs.has(pairKey))
+            ) {
+              if (s.contactFilterStats) s.contactFilterStats.rejected++;
+              return null;
+            }
+            if (
+              pieceA &&
+              pieceB &&
+              pairKey &&
+              (pieceA.dynamicAxleConnections || pieceB.dynamicAxleConnections)
+            )
+              s.contactCandidates.set(pairKey, { a: pieceA, b: pieceB });
+            return RAPIER.SolverFlags.COMPUTE_IMPULSE;
+          },
+          filterIntersectionPair() {
+            return true;
+          },
+        };
+        world.createCollider(
+          RAPIER.ColliderDesc.cuboid(5000, 0.15, 5000)
+            .setTranslation(0, -0.2, 0)
+            .setFriction(CONTACT_FRICTION.floor)
+            .setCollisionGroups(
+              interactionGroups(
+                COLLISION_GROUP_NON_GEAR,
+                COLLISION_GROUP_NON_GEAR | COLLISION_GROUP_GEAR_NORMAL,
+              ),
             ),
-            guideKey = `${handles[0]}:${handles[1]}:${c.mode}:${axisKey.x.toFixed(3)}:${axisKey.y.toFixed(3)}:${axisKey.z.toFixed(3)}`,
-            existingConnectionId = movingGuideJoints.get(guideKey);
-          if (
-            existingConnectionId &&
-            s.physicsJoints.has(existingConnectionId)
-          ) {
+        );
+        rigidIslands.forEach((island) => {
+          const origin = island
+              .reduce((sum, piece) => sum.add(piece.mesh.position), new THREE.Vector3())
+              .multiplyScalar(1 / island.length),
+            islandFixed = island.some((piece) => piece.fixed),
+            additionalMass = island.reduce(
+              (sum, piece) => sum + (piece.kind === "motor" ? 2 : 0.65),
+              0,
+            ),
+            desc = islandFixed
+              ? RAPIER.RigidBodyDesc.fixed()
+              : RAPIER.RigidBodyDesc.dynamic()
+                  .setLinearDamping(0.55)
+                  .setAngularDamping(0.95)
+                  .setCcdEnabled(!largeSimulation)
+                  .setSoftCcdPrediction(largeSimulation ? 0 : 0.1)
+                  .setAdditionalSolverIterations(additionalSolverIterations)
+                  .setAdditionalMass(additionalMass);
+          desc.setTranslation(origin.x, origin.y, origin.z);
+          const rb = world.createRigidBody(desc);
+          island.forEach((p) => {
+            const physicsOffset = p.mesh.position.clone().sub(origin),
+              physicsBase = p.mesh.quaternion.clone();
+            p.physicsOffset = physicsOffset;
+            p.physicsBase = physicsBase;
+            p.physicsIsland = island;
+            p.physicsIslandFixed = islandFixed;
+            p.body = rb;
+            const finishPieceCollider = (
+              collider: RAPIER.ColliderDesc,
+              gearLayer: boolean,
+              density: number,
+            ) => {
+              if (gearLayer)
+                collider.setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min);
+              collider
+                .setFriction(
+                  gearLayer
+                    ? CONTACT_FRICTION.gearMesh
+                    : p.kind === "wheel" && !p.gear
+                      ? s.physicsSettings.rubberFriction
+                      : s.physicsSettings.pieceFriction,
+                )
+                .setRestitution(0)
+                .setActiveHooks(RAPIER.ActiveHooks.FILTER_CONTACT_PAIRS)
+                .setCollisionGroups(
+                  gearLayer
+                    ? interactionGroups(
+                        COLLISION_GROUP_GEAR_MESH,
+                        COLLISION_GROUP_GEAR_MESH,
+                      )
+                    : p.gear
+                      ? interactionGroups(
+                          COLLISION_GROUP_GEAR_NORMAL,
+                          COLLISION_GROUP_NON_GEAR,
+                        )
+                      : interactionGroups(
+                          COLLISION_GROUP_NON_GEAR,
+                          COLLISION_GROUP_NON_GEAR | COLLISION_GROUP_GEAR_NORMAL,
+                        ),
+                )
+                .setDensity(density);
+              const createdCollider = world.createCollider(collider, rb);
+              colliderOwners.set(createdCollider.handle, p);
+            };
+            const createPieceCollider = (
+              primitive: CollisionPrimitive,
+              gearLayer: boolean,
+            ) => {
+              // Bushes, axle joiners and gears often sit in an exactly sized
+              // axial gap. Keep the authored/debug maps unchanged, but apply the
+              // configured clearance only to the normal collider. The magenta
+              // layer is exclusively gear-to-gear contact and keeps its authored
+              // thickness unchanged.
+              const axleClearance =
+                !gearLayer && (p.gear || /bush|axle joiner/i.test(p.name))
+                  ? s.physicsSettings.axleTolerance
+                  : 0;
+              const collider =
+                primitive.shape === "box"
+                  ? RAPIER.ColliderDesc.cuboid(
+                      primitive.size!.x / 2,
+                      primitive.size!.y / 2,
+                      primitive.size!.z / 2,
+                    )
+                  : RAPIER.ColliderDesc.cylinder(
+                      Math.max(0.01, primitive.halfHeight! - axleClearance / 2),
+                      primitive.radius!,
+                    );
+              const center = physicsOffset
+                  .clone()
+                  .add(primitive.center.clone().applyQuaternion(physicsBase)),
+                rotation = physicsBase.clone().multiply(primitive.rotation);
+              collider.setTranslation(center.x, center.y, center.z).setRotation(rotation);
+              finishPieceCollider(
+                collider,
+                gearLayer,
+                gearLayer
+                  ? 0
+                  : (p.kind === "motor" ? 1.7 : 1) / Math.max(1, p.colliders.length),
+              );
+            };
+            const exactMesh = p.exactCollider
+              ? exactTriangleMeshForPiece(p, physicsOffset, physicsBase)
+              : undefined;
+            if (exactMesh)
+              finishPieceCollider(
+                RAPIER.ColliderDesc.trimesh(
+                  exactMesh.vertices,
+                  exactMesh.indices,
+                  RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES |
+                    RAPIER.TriMeshFlags.MERGE_DUPLICATE_VERTICES |
+                    RAPIER.TriMeshFlags.DELETE_DEGENERATE_TRIANGLES |
+                    RAPIER.TriMeshFlags.DELETE_DUPLICATE_TRIANGLES,
+                ),
+                false,
+                // The rigid body already receives an explicit LEGO-like mass.
+                // LDraw surfaces are not always watertight, so deriving mass
+                // from their enclosed volume would be unstable.
+                0,
+              );
+            else
+              p.colliders.forEach((primitive) => createPieceCollider(primitive, false));
+            p.gearColliders.forEach((primitive) => createPieceCollider(primitive, true));
+          });
+        });
+        // Establish the reference orientation before the first physics step.
+        // Otherwise the first movement becomes the target phase and is never
+        // corrected, which creates a small slip every time simulation starts.
+        s.gearLinks.forEach((link) => {
+          s.gearPhases.set(gearLinkKey(link), 0);
+          for (const piece of [link.a.value, link.b.value]) {
+            const body = piece.body;
+            if (!body || s.gearBodyRotations.has(body.handle)) continue;
+            const rotation = body.rotation();
+            s.gearBodyRotations.set(
+              body.handle,
+              new THREE.Quaternion(
+                rotation.x,
+                rotation.y,
+                rotation.z,
+                rotation.w,
+              ).normalize(),
+            );
+          }
+        });
+        let movingJointCount = 0,
+          redundantMovingJoints = 0;
+        const movingGuideJoints = new Map<string, string>();
+        s.physicsJoints.clear();
+        s.dynamicNoContactPairs.clear();
+        s.contactCandidates.clear();
+        const createPhysicsJoint = (c: Connection) => {
+          if (!c.a.body || !c.b.body) return;
+          if (structuralMode === "rigid" && c.mode === "fixed" && c.a.body === c.b.body)
+            return;
+          if (c.a.body === c.b.body) {
             redundantMovingJoints++;
             return;
           }
-          movingGuideJoints.set(guideKey, c.id);
-        }
-        let joint: RAPIER.JointData;
-        if (c.mode === "rotation" || c.mode === "motor")
-          joint = RAPIER.JointData.revolute(a, b, axis);
-        else if (c.mode === "linear")
-          joint = RAPIER.JointData.prismatic(a, b, axis);
-        else if (c.mode === "rotation-linear")
-          joint = RAPIER.JointData.generic(
-            a,
-            b,
-            axis,
-            RAPIER.JointAxesMask.LinY |
-              RAPIER.JointAxesMask.LinZ |
-              RAPIER.JointAxesMask.AngY |
-              RAPIER.JointAxesMask.AngZ,
-          );
-        else
-          joint = RAPIER.JointData.fixed(
-            a,
-            frameA,
-            b,
-            frameB,
-          );
-        joint.frame1 = frameA;
-        joint.frame2 = frameB;
-        const created = world.createImpulseJoint(
-          joint,
-          c.a.body,
-          c.b.body,
-          true,
-        );
-        movingJointCount++;
-        created.setContactsEnabled(true);
-        if (c.mode === "motor")
-          (created as RAPIER.RevoluteImpulseJoint).configureMotorVelocity(
-            c.motorSpeed,
-            c.motorForce,
-          );
-        else if (c.mode === "rotation" && c.b.frictionPin)
-          (created as RAPIER.RevoluteImpulseJoint).configureMotorVelocity(
-            0,
-            3.5,
-          );
-        else if (
-          c.mode === "rotation" &&
-          frictionlessPinRefs.has(c.b.part) &&
-          s.physicsSettings.frictionlessPinRotation > 0
-        )
-          (created as RAPIER.RevoluteImpulseJoint).configureMotorVelocity(
-            0,
-            s.physicsSettings.frictionlessPinRotation,
-          );
-        if (c.mode === "linear" && !dynamicAxle) {
-          const limit = Math.max(0.15, c.travel / 2);
-          (created as RAPIER.PrismaticImpulseJoint).setLimits(-limit, limit);
-        }
-        s.physicsJoints.set(c.id, created);
-        return created;
-      };
-      s.createPhysicsJoint = createPhysicsJoint;
-      s.connections.forEach(createPhysicsJoint);
-      if (redundantMovingJoints)
-        s.simLog.events.push(
-          `${redundantMovingJoints} uniones móviles internas redundantes omitidas`,
-        );
-      s.world = world;
-      s.running = true;
-      setRunning(true);
-      setMessage(
-        `${rigidIslands.length} cuerpos rígidos · ${movingJointCount} articulaciones móviles · ${
-          largeSimulation ? "modo de rendimiento para ensamblaje grande" : "precisión completa"
-        }`,
-      );
-      } else {
-      s.running = false;
-      s.gearLinks = [];
-      s.differentialLinks = [];
-      s.gearAngles.clear();
-      s.gearBodyRotations.clear();
-      s.gearPhases.clear();
-      s.physicsJoints.clear();
-      s.dynamicNoContactPairs.clear();
-      s.contactExclusions.clear();
-      s.contactCandidates.clear();
-      s.rigidIslandByPiece = undefined;
-      s.createPhysicsJoint = undefined;
-      if (s.simLog) {
-        s.simLog.endedAt = new Date().toISOString();
-        s.simLog.duration =
-          (Date.parse(s.simLog.endedAt) - Date.parse(s.simLog.startedAt)) /
-          1000;
-        s.simLog.events.push(
-          `Fin: velocidad lineal máxima ${s.simLog.maxLinearSpeed.toFixed(3)}, angular ${s.simLog.maxAngularSpeed.toFixed(3)}, fuerza de resorte ${s.simLog.maxSpringForce.toFixed(3)}`,
-        );
-        if (s.contactFilterStats)
+          const positionA = c.a.body.translation(),
+            positionB = c.b.body.translation(),
+            rotationA = c.a.body.rotation(),
+            rotationB = c.b.body.rotation(),
+            inverseRotationA = new THREE.Quaternion(
+              rotationA.x,
+              rotationA.y,
+              rotationA.z,
+              rotationA.w,
+            ).invert(),
+            inverseRotationB = new THREE.Quaternion(
+              rotationB.x,
+              rotationB.y,
+              rotationB.z,
+              rotationB.w,
+            ).invert(),
+            forcedPivot =
+              c.forced && c.localPointB
+                ? c.b.mesh.localToWorld(c.localPointB.clone())
+                : undefined,
+            // A forced joint represents a virtual extension between the two red
+            // points. Rapier still needs one common pivot; using the shaft point
+            // for both local anchors preserves the current visual offset instead
+            // of pulling or teleporting the pieces together at simulation start.
+            worldAnchorA = forcedPivot ?? c.point,
+            worldAnchorB = forcedPivot ?? c.point,
+            a = worldAnchorA
+              .clone()
+              .sub(new THREE.Vector3(positionA.x, positionA.y, positionA.z))
+              .applyQuaternion(inverseRotationA),
+            b = worldAnchorB
+              .clone()
+              .sub(new THREE.Vector3(positionB.x, positionB.y, positionB.z))
+              .applyQuaternion(inverseRotationB),
+            worldAxis = c.axis.clone().normalize(),
+            axis = worldAxis.clone().applyQuaternion(inverseRotationA),
+            worldFrame = new THREE.Quaternion().setFromUnitVectors(
+              new THREE.Vector3(1, 0, 0),
+              worldAxis,
+            ),
+            frameA = inverseRotationA.clone().multiply(worldFrame),
+            frameB = inverseRotationB.clone().multiply(worldFrame),
+            dynamicAxle =
+              (c.profile === "axle-cross" || c.profile === "axle-round") &&
+              c.b.dynamicAxleConnections;
+          if (c.mode === "linear" || c.mode === "rotation-linear") {
+            const axisKey = worldAxis.clone();
+            if (
+              axisKey.x < -1e-6 ||
+              (Math.abs(axisKey.x) <= 1e-6 && axisKey.y < -1e-6) ||
+              (Math.abs(axisKey.x) <= 1e-6 &&
+                Math.abs(axisKey.y) <= 1e-6 &&
+                axisKey.z < 0)
+            )
+              axisKey.multiplyScalar(-1);
+            const handles = [c.a.body.handle, c.b.body.handle].sort(
+                (left, right) => left - right,
+              ),
+              guideKey = `${handles[0]}:${handles[1]}:${c.mode}:${axisKey.x.toFixed(3)}:${axisKey.y.toFixed(3)}:${axisKey.z.toFixed(3)}`,
+              existingConnectionId = movingGuideJoints.get(guideKey);
+            if (existingConnectionId && s.physicsJoints.has(existingConnectionId)) {
+              redundantMovingJoints++;
+              return;
+            }
+            movingGuideJoints.set(guideKey, c.id);
+          }
+          let joint: RAPIER.JointData;
+          if (c.mode === "rotation" || c.mode === "motor")
+            joint = RAPIER.JointData.revolute(a, b, axis);
+          else if (c.mode === "linear") joint = RAPIER.JointData.prismatic(a, b, axis);
+          else if (c.mode === "rotation-linear")
+            joint = RAPIER.JointData.generic(
+              a,
+              b,
+              axis,
+              RAPIER.JointAxesMask.LinY |
+                RAPIER.JointAxesMask.LinZ |
+                RAPIER.JointAxesMask.AngY |
+                RAPIER.JointAxesMask.AngZ,
+            );
+          else joint = RAPIER.JointData.fixed(a, frameA, b, frameB);
+          joint.frame1 = frameA;
+          joint.frame2 = frameB;
+          const created = world.createImpulseJoint(joint, c.a.body, c.b.body, true);
+          movingJointCount++;
+          created.setContactsEnabled(true);
+          if (c.mode === "motor")
+            (created as RAPIER.RevoluteImpulseJoint).configureMotorVelocity(
+              c.motorSpeed,
+              c.motorForce,
+            );
+          else if (c.mode === "rotation" && c.b.frictionPin)
+            (created as RAPIER.RevoluteImpulseJoint).configureMotorVelocity(0, 3.5);
+          else if (
+            c.mode === "rotation" &&
+            frictionlessPinRefs.has(c.b.part) &&
+            s.physicsSettings.frictionlessPinRotation > 0
+          )
+            (created as RAPIER.RevoluteImpulseJoint).configureMotorVelocity(
+              0,
+              s.physicsSettings.frictionlessPinRotation,
+            );
+          if (c.mode === "linear" && !dynamicAxle) {
+            const limit = Math.max(0.15, c.travel / 2);
+            (created as RAPIER.PrismaticImpulseJoint).setLimits(-limit, limit);
+          }
+          s.physicsJoints.set(c.id, created);
+          return created;
+        };
+        s.createPhysicsJoint = createPhysicsJoint;
+        s.connections.forEach(createPhysicsJoint);
+        if (redundantMovingJoints)
           s.simLog.events.push(
-            `Filtro de contactos: ${s.contactFilterStats.tested} pares comprobados; ${s.contactFilterStats.rejected} contactos eje/pin ↔ pieza anulados`,
+            `${redundantMovingJoints} uniones móviles internas redundantes omitidas`,
           );
-        const encoded = JSON.stringify(s.simLog, null, 2);
-        try {
-          localStorage.setItem("sim-studio:physics-log", encoded);
-        } catch {}
-        setLastLog(encoded);
-      }
-      s.snapshot?.forEach((x) => {
-        x.piece.mesh.position.copy(x.position);
-        x.piece.mesh.quaternion.copy(x.rotation);
-        x.piece.body = undefined;
-        x.piece.physicsOffset = undefined;
-        x.piece.physicsBase = undefined;
-        x.piece.physicsIsland = undefined;
-        x.piece.physicsIslandFixed = undefined;
-      });
-      if (s.snapshotConnections) {
-        s.connections = s.snapshotConnections.map((connection) => {
-          const configured = s.connectionModes.get(connection.id);
-          return {
-            ...connection,
-            point: connection.point.clone(),
-            axis: connection.axis.clone(),
-            localAxisA: connection.localAxisA.clone(),
-            localPointA: connection.localPointA?.clone(),
-            localPointB: connection.localPointB?.clone(),
-            mode: configured?.mode ?? connection.mode,
-            motorSpeed: configured?.motorSpeed ?? connection.motorSpeed,
-            motorForce: configured?.motorForce ?? connection.motorForce,
-            userConfigured:
-              configured?.userConfigured ?? connection.userConfigured,
-          };
+        s.world = world;
+        s.running = true;
+        setRunning(true);
+        setMessage(
+          `${rigidIslands.length} cuerpos rígidos · ${movingJointCount} articulaciones móviles · ${
+            largeSimulation
+              ? "modo de rendimiento para ensamblaje grande"
+              : "precisión completa"
+          }`,
+        );
+      } else {
+        s.running = false;
+        s.gearLinks = [];
+        s.differentialLinks = [];
+        s.gearAngles.clear();
+        s.gearBodyRotations.clear();
+        s.gearPhases.clear();
+        s.physicsJoints.clear();
+        s.dynamicNoContactPairs.clear();
+        s.contactExclusions.clear();
+        s.contactCandidates.clear();
+        s.rigidIslandByPiece = undefined;
+        s.createPhysicsJoint = undefined;
+        if (s.simLog) {
+          s.simLog.endedAt = new Date().toISOString();
+          s.simLog.duration =
+            (Date.parse(s.simLog.endedAt) - Date.parse(s.simLog.startedAt)) / 1000;
+          s.simLog.events.push(
+            `Fin: velocidad lineal máxima ${s.simLog.maxLinearSpeed.toFixed(3)}, angular ${s.simLog.maxAngularSpeed.toFixed(3)}, fuerza de resorte ${s.simLog.maxSpringForce.toFixed(3)}`,
+          );
+          if (s.contactFilterStats)
+            s.simLog.events.push(
+              `Filtro de contactos: ${s.contactFilterStats.tested} pares comprobados; ${s.contactFilterStats.rejected} contactos eje/pin ↔ pieza anulados`,
+            );
+          const encoded = JSON.stringify(s.simLog, null, 2);
+          try {
+            localStorage.setItem("sim-studio:physics-log", encoded);
+          } catch {}
+          setLastLog(encoded);
+        }
+        s.snapshot?.forEach((x) => {
+          x.piece.mesh.position.copy(x.position);
+          x.piece.mesh.quaternion.copy(x.rotation);
+          x.piece.body = undefined;
+          x.piece.physicsOffset = undefined;
+          x.piece.physicsBase = undefined;
+          x.piece.physicsIsland = undefined;
+          x.piece.physicsIslandFixed = undefined;
         });
-        setConnectionRevision((value) => value + 1);
-      }
-      s.renderBatchesDirty = true;
-      s.snapshot = undefined;
-      s.snapshotConnections = undefined;
-      s.physicsEventQueue = undefined;
-      s.world = undefined;
-      s.physicsHooks = undefined;
-      s.contactFilterStats = undefined;
-      s.largeSimulation = undefined;
-      s.simStartedMs = undefined;
-      s.refreshDebug();
-      setRunning(false);
+        if (s.snapshotConnections) {
+          s.connections = s.snapshotConnections.map((connection) => {
+            const configured = s.connectionModes.get(connection.id);
+            return {
+              ...connection,
+              point: connection.point.clone(),
+              axis: connection.axis.clone(),
+              localAxisA: connection.localAxisA.clone(),
+              localPointA: connection.localPointA?.clone(),
+              localPointB: connection.localPointB?.clone(),
+              mode: configured?.mode ?? connection.mode,
+              motorSpeed: configured?.motorSpeed ?? connection.motorSpeed,
+              motorForce: configured?.motorForce ?? connection.motorForce,
+              userConfigured: configured?.userConfigured ?? connection.userConfigured,
+            };
+          });
+          setConnectionRevision((value) => value + 1);
+        }
+        s.renderBatchesDirty = true;
+        s.snapshot = undefined;
+        s.snapshotConnections = undefined;
+        s.physicsEventQueue = undefined;
+        s.world = undefined;
+        s.physicsHooks = undefined;
+        s.contactFilterStats = undefined;
+        s.largeSimulation = undefined;
+        s.simStartedMs = undefined;
+        s.refreshDebug();
+        setRunning(false);
         setMessage("Simulación detenida · estado restaurado · log actualizado");
       }
     } finally {
@@ -8646,18 +7037,21 @@ export default function Home() {
       setPhysicsBusy(false);
     }
   };
+
+  // --- LDraw / Studio import and export ------------------------------------
+
   const importModel = async (file: File) => {
     const s = appRef.current;
     if (!s || s.running || physicsTransitionRef.current) return;
     const empty: ImportDraft = {
-      fileName: file.name,
-      status: "reading",
-      progress: 0,
-      total: 0,
-      paletteCount: 0,
-      externalCount: 0,
-      placements: [],
-    },
+        fileName: file.name,
+        status: "reading",
+        progress: 0,
+        total: 0,
+        paletteCount: 0,
+        externalCount: 0,
+        placements: [],
+      },
       token = ++importTokenRef.current,
       stillActive = () => importTokenRef.current === token;
     setImportDraft(empty);
@@ -8668,9 +7062,7 @@ export default function Home() {
         rows = parseLDR(source);
       if (!stillActive()) return;
       if (!rows.length) throw new Error("El archivo no contiene piezas LDraw");
-      const references = [
-          ...new Set(rows.map((row) => row.part.toLowerCase())),
-        ],
+      const references = [...new Set(rows.map((row) => row.part.toLowerCase()))],
         paletteMatches = new Map<string, CatalogPart[]>();
       for (const part of paletteParts) {
         for (const reference of [part.part, part.modelPart].filter(Boolean)) {
@@ -8708,25 +7100,29 @@ export default function Home() {
         (reference) => paletteMatches.get(reference) ?? [],
       );
       await Promise.all(
-        [...new Map(paletteToLoad.map((part) => [`${part.part}:${part.color}`, part])).values()].map(
-          async (part) => {
-            await s.preloadPart(part);
-            if (!stillActive()) return;
-            paletteLoaded++;
-            setImportDraft((draft) =>
-              draft
-                ? {
-                    ...draft,
-                    progress: Math.min(paletteLoaded, paletteReferences.length),
-                  }
-                : draft,
-            );
-          },
-        ),
+        [
+          ...new Map(
+            paletteToLoad.map((part) => [`${part.part}:${part.color}`, part]),
+          ).values(),
+        ].map(async (part) => {
+          await s.preloadPart(part);
+          if (!stillActive()) return;
+          paletteLoaded++;
+          setImportDraft((draft) =>
+            draft
+              ? {
+                  ...draft,
+                  progress: Math.min(paletteLoaded, paletteReferences.length),
+                }
+              : draft,
+          );
+        }),
       );
       if (!stillActive()) return;
       setImportDraft((draft) =>
-        draft ? { ...draft, status: "external", progress: paletteReferences.length } : draft,
+        draft
+          ? { ...draft, status: "external", progress: paletteReferences.length }
+          : draft,
       );
       let externalItems: CatalogPart[] = [];
       if (externalReferences.length)
@@ -8872,6 +7268,7 @@ export default function Home() {
       }));
     }
   };
+
   const placeImportedModel = async () => {
     const draft = importDraft,
       s = appRef.current;
@@ -8891,9 +7288,7 @@ export default function Home() {
           );
         if (piece) pieces.push(piece);
         if (index % 40 === 39)
-          await new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve()),
-          );
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       }
     } finally {
       s.bulkLoading = false;
@@ -8907,12 +7302,8 @@ export default function Home() {
       ).values(),
     ].filter((part) => !belongsToDefaultPalette(part));
     setImported((old) => {
-      const merged = new Map(
-        old.map((part) => [`${part.part}:${part.color}`, part]),
-      );
-      importedCatalog.forEach((part) =>
-        merged.set(`${part.part}:${part.color}`, part),
-      );
+      const merged = new Map(old.map((part) => [`${part.part}:${part.color}`, part]));
+      importedCatalog.forEach((part) => merged.set(`${part.part}:${part.color}`, part));
       return [...merged.values()];
     });
     setCount(s.pieces.length);
@@ -8963,18 +7354,18 @@ export default function Home() {
           : `${pieces.length} parts imported · automatic connections disabled`,
     );
   };
+
   const discardImport = () => {
     importTokenRef.current++;
     setImportDraft(null);
   };
+
   const exportModel = () => {
     const s = appRef.current;
     if (!s) return;
     const ldrawBasis = new THREE.Matrix4().makeScale(1, -1, -1);
     const lines = s.pieces.map((p) => {
-      const r = new THREE.Matrix4().makeRotationFromQuaternion(
-        p.mesh.quaternion,
-      );
+      const r = new THREE.Matrix4().makeRotationFromQuaternion(p.mesh.quaternion);
       r.premultiply(ldrawBasis).multiply(ldrawBasis);
       const e = r.elements,
         n = (v: number) => (Math.abs(v) < 1e-8 ? 0 : +v.toFixed(5));
@@ -8985,6 +7376,7 @@ export default function Home() {
     a.download = "sim-studio-model.ldr";
     a.click();
   };
+
   const refreshProjectList = async () => {
     try {
       const nextProjects = await listBrowserProjects();
@@ -8994,6 +7386,7 @@ export default function Home() {
       );
     } catch {}
   };
+
   const downloadProjectDocument = (document: SimStudioProjectDocument) => {
     const url = URL.createObjectURL(
         new Blob([encodeProjectFile(document)], { type: PROJECT_MIME }),
@@ -9004,13 +7397,17 @@ export default function Home() {
     anchor.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
+
+  // --- Project manager actions ---------------------------------------------
+
   const saveCurrentProject = async () => {
     const state = appRef.current;
     if (!state || running || projectBusy) return;
     setProjectBusy(true);
     const previousSavedRevision = savedProjectRevisionRef.current;
     try {
-      projectNameRef.current = projectName.trim() ||
+      projectNameRef.current =
+        projectName.trim() ||
         (language === "es" ? "Mecanismo sin título" : "Untitled mechanism");
       savedProjectRevisionRef.current = projectRevisionRef.current;
       const document = state.createProjectDocument();
@@ -9032,8 +7429,11 @@ export default function Home() {
       setMessage(
         `${language === "es" ? "No se pudo guardar" : "Could not save"}: ${error instanceof Error ? error.message : "IndexedDB"}`,
       );
-    } finally { setProjectBusy(false); }
+    } finally {
+      setProjectBusy(false);
+    }
   };
+
   const requestProjectSave = () => {
     if (running || projectBusy) return;
     if (currentProjectSaved) {
@@ -9049,6 +7449,7 @@ export default function Home() {
     }, 0);
   };
   saveShortcutRef.current = requestProjectSave;
+
   const performOpenSavedProject = async (id: string) => {
     const state = appRef.current;
     if (!state || running || projectBusy) return;
@@ -9069,12 +7470,16 @@ export default function Home() {
       );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not open project");
-    } finally { setProjectBusy(false); }
+    } finally {
+      setProjectBusy(false);
+    }
   };
+
   const performCreateNewProject = () => {
     if (running || projectBusy) return;
     reset();
-    const id = createProjectId(), createdAt = new Date().toISOString(),
+    const id = createProjectId(),
+      createdAt = new Date().toISOString(),
       name = language === "es" ? "Mecanismo sin título" : "Untitled mechanism";
     activeProjectIdRef.current = id;
     projectCreatedAtRef.current = createdAt;
@@ -9092,20 +7497,24 @@ export default function Home() {
     setProjectMenuOpen(false);
     setMessage(language === "es" ? "Proyecto nuevo" : "New project");
   };
+
   const requestCreateNewProject = () => {
     if (projectDirty) setProjectConfirmation({ kind: "new" });
     else performCreateNewProject();
   };
+
   const requestOpenSavedProject = (project: ProjectSummary) => {
     if (projectDirty) setProjectConfirmation({ kind: "open", project });
     else void performOpenSavedProject(project.id);
   };
+
   const exportCurrentProject = () => {
     const state = appRef.current;
     if (!state || running) return;
     projectNameRef.current = projectName.trim() || "Untitled mechanism";
     downloadProjectDocument(state.createProjectDocument());
   };
+
   const performImportProject = async (document: SimStudioProjectDocument) => {
     const state = appRef.current;
     if (!state || running || projectBusy) return;
@@ -9142,8 +7551,11 @@ export default function Home() {
       setMessage(
         `${language === "es" ? "Archivo de proyecto no válido" : "Invalid project file"}: ${error instanceof Error ? error.message : "error"}`,
       );
-    } finally { setProjectBusy(false); }
+    } finally {
+      setProjectBusy(false);
+    }
   };
+
   const importProjectFile = async (file: File) => {
     try {
       const document = decodeProjectFile(await file.arrayBuffer());
@@ -9155,6 +7567,7 @@ export default function Home() {
       );
     }
   };
+
   const performRemoveSavedProject = async (id: string) => {
     if (projectBusy) return;
     setProjectBusy(true);
@@ -9167,9 +7580,11 @@ export default function Home() {
         setProjectDirty(true);
         appRef.current?.scheduleRecoverySave(true, false);
       }
+    } finally {
+      setProjectBusy(false);
     }
-    finally { setProjectBusy(false); }
   };
+
   const resolveProjectConfirmation = () => {
     const confirmation = projectConfirmation;
     setProjectConfirmation(null);
@@ -9182,6 +7597,7 @@ export default function Home() {
     else if (confirmation.kind === "import")
       void performImportProject(confirmation.document);
   };
+
   const beginProjectRename = () => {
     if (!currentProjectSaved || projectBusy || running) return;
     setProjectNameDraft(projectName);
@@ -9191,10 +7607,12 @@ export default function Home() {
       projectNameInputRef.current?.select();
     }, 0);
   };
+
   const cancelProjectRename = () => {
     setProjectNameDraft("");
     setProjectNameEditing(false);
   };
+
   const confirmProjectRename = async () => {
     const name = projectNameDraft.trim().slice(0, 20);
     if (!name || !currentProjectSaved || projectBusy || running) return;
@@ -9223,8 +7641,11 @@ export default function Home() {
       );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not rename project");
-    } finally { setProjectBusy(false); }
+    } finally {
+      setProjectBusy(false);
+    }
   };
+
   const beginDuplicateProject = async () => {
     if (!currentProjectSaved || projectBusy || running) return;
     setProjectBusy(true);
@@ -9238,8 +7659,11 @@ export default function Home() {
       );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not duplicate project");
-    } finally { setProjectBusy(false); }
+    } finally {
+      setProjectBusy(false);
+    }
   };
+
   const confirmDuplicateProject = async () => {
     const name = duplicateProjectName.trim().slice(0, 20),
       source = duplicateProjectDocument;
@@ -9271,8 +7695,11 @@ export default function Home() {
       );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not duplicate project");
-    } finally { setProjectBusy(false); }
+    } finally {
+      setProjectBusy(false);
+    }
   };
+
   const selected = appRef.current?.selected;
   const selectedCollisionLayer = selected?.gear ? collisionLayer : "normal",
     selectedCollisionPrimitives = selected
@@ -9282,8 +7709,7 @@ export default function Home() {
       : [];
   const selectedConnections = selected
     ? (appRef.current?.connections.filter(
-        (connection) =>
-          connection.a === selected || connection.b === selected,
+        (connection) => connection.a === selected || connection.b === selected,
       ) ?? [])
     : [];
   const selectedGearSpec = selected
@@ -9299,38 +7725,32 @@ export default function Home() {
         ...new Map(
           (appRef.current?.connections ?? [])
             .filter(
-              (connection) =>
-                connection.a === selected || connection.b === selected,
+              (connection) => connection.a === selected || connection.b === selected,
             )
             .map((connection) => {
               const connector =
-                  connection.a === selected
-                    ? connection.socket
-                    : connection.shaft,
+                  connection.a === selected ? connection.socket : connection.shaft,
                 connectorIndex = selected.connectors.indexOf(connector),
-                other =
-                  connection.a === selected ? connection.b : connection.a,
+                other = connection.a === selected ? connection.b : connection.a,
                 local = selected.mesh.worldToLocal(
-                  connection.a.mesh.localToWorld(
-                    connection.socket.local.clone(),
-                  ),
+                  connection.a.mesh.localToWorld(connection.socket.local.clone()),
                 );
-        const typeName =
-          connector.kind === "axle"
-            ? connector.role === "shaft"
-              ? language === "es"
-                ? "eje morado"
-                : "purple axle"
-              : language === "es"
-                ? "hueco verde"
-                : "green socket"
-            : connector.role === "shaft"
-              ? language === "es"
-                ? "pin naranja"
-                : "orange pin"
-              : language === "es"
-                ? "hueco azul"
-                : "blue socket";
+              const typeName =
+                connector.kind === "axle"
+                  ? connector.role === "shaft"
+                    ? language === "es"
+                      ? "eje morado"
+                      : "purple axle"
+                    : language === "es"
+                      ? "hueco verde"
+                      : "green socket"
+                  : connector.role === "shaft"
+                    ? language === "es"
+                      ? "pin naranja"
+                      : "orange pin"
+                    : language === "es"
+                      ? "hueco azul"
+                      : "blue socket";
               const key = jointPivotKey(connection);
               return [
                 key,
@@ -9349,6 +7769,7 @@ export default function Home() {
   )
     ? selected!.rotationPivotKey!
     : "center";
+
   const toggleDebug = (key: keyof DebugFlags) =>
     setDebugViews((current) => {
       const next = { ...current, [key]: !current[key] },
@@ -9359,6 +7780,7 @@ export default function Home() {
       }
       return next;
     });
+
   const setConnectionMode = (id: string, mode: JointMode) => {
     const state = appRef.current,
       connection = state?.connections.find((item) => item.id === id);
@@ -9383,6 +7805,7 @@ export default function Home() {
     setConnectionRevision((value) => value + 1);
     setMessage(`${profileLabels[connection.profile]} · ${modeLabels[mode]}`);
   };
+
   const setMotorSpeed = (id: string, motorSpeed: number) => {
     const state = appRef.current,
       connection = state?.connections.find((item) => item.id === id);
@@ -9404,6 +7827,7 @@ export default function Home() {
     setConnectionRevision((value) => value + 1);
     setMessage(`Motor ${motorSpeed.toFixed(1)} rad/s`);
   };
+
   const setMotorForce = (id: string, motorForce: number) => {
     const state = appRef.current,
       connection = state?.connections.find((item) => item.id === id);
@@ -9425,6 +7849,9 @@ export default function Home() {
     setConnectionRevision((value) => value + 1);
     setMessage(`Fuerza del motor ${motorForce.toFixed(0)}`);
   };
+
+  // --- Connection-map editor -----------------------------------------------
+
   const connectorData = (piece: Piece) =>
     piece.connectors.map((connector) => ({
       local: connector.local.toArray(),
@@ -9434,6 +7861,7 @@ export default function Home() {
       diameter: connector.diameter,
       length: connector.length,
     }));
+
   const commitConnectorMap = (
     piece: Piece,
     connectors: MeshConnector[],
@@ -9450,17 +7878,13 @@ export default function Home() {
           ? connector.axis.clone().normalize()
           : new THREE.Vector3(1, 0, 0),
     }));
-    for (const instance of state.pieces.filter(
-      (item) => item.part === piece.part,
-    )) {
+    for (const instance of state.pieces.filter((item) => item.part === piece.part)) {
       instance.connectors = normalized.map((connector) => ({
         ...connector,
         local: connector.local.clone(),
         axis: connector.axis.clone(),
       }));
-      instance.mesh.userData.connectorReach = connectorMapReach(
-        instance.connectors,
-      );
+      instance.mesh.userData.connectorReach = connectorMapReach(instance.connectors);
       instance.colliders = approximateCollisionPrimitives(
         instance.mesh,
         instance.name,
@@ -9492,6 +7916,7 @@ export default function Home() {
     setConnectionRevision((value) => value + 1);
     setMessage(notice);
   };
+
   const updateConnector = (
     index: number,
     field: "kind" | "role" | "diameter" | "length" | "local" | "axis",
@@ -9507,10 +7932,8 @@ export default function Home() {
       connector = next[index];
     if (field === "kind") connector.kind = value as MeshConnector["kind"];
     else if (field === "role") connector.role = value as MeshConnector["role"];
-    else if (field === "diameter")
-      connector.diameter = Math.max(0.01, +value || 0.01);
-    else if (field === "length")
-      connector.length = Math.max(0.01, +value || 0.01);
+    else if (field === "diameter") connector.diameter = Math.max(0.01, +value || 0.01);
+    else if (field === "length") connector.length = Math.max(0.01, +value || 0.01);
     else connector[field].setComponent(component, +value || 0);
     commitConnectorMap(
       selected,
@@ -9518,6 +7941,7 @@ export default function Home() {
       `Mapa ${selected.part}: punto ${index + 1} actualizado`,
     );
   };
+
   const addConnector = () => {
     if (!selected || running) return;
     const next = selected.connectors.map((connector) => ({
@@ -9533,12 +7957,9 @@ export default function Home() {
       diameter: 0.8,
       length: 1,
     });
-    commitConnectorMap(
-      selected,
-      next,
-      `Mapa ${selected.part}: conector añadido`,
-    );
+    commitConnectorMap(selected, next, `Mapa ${selected.part}: conector añadido`);
   };
+
   const regenerateConnectorMap = () => {
     if (!selected || running) return;
     const sockets = detectConnectorHoles(selected.mesh);
@@ -9551,9 +7972,7 @@ export default function Home() {
         ...shafts,
         ...sockets.filter(
           (socket) =>
-            !shafts.some(
-              (shaft) => shaft.local.distanceTo(socket.local) < 0.12,
-            ),
+            !shafts.some((shaft) => shaft.local.distanceTo(socket.local) < 0.12),
         ),
       ];
     } else if (isAxlePart(selected)) {
@@ -9562,9 +7981,7 @@ export default function Home() {
         ...shafts,
         ...sockets.filter(
           (socket) =>
-            !shafts.some(
-              (shaft) => shaft.local.distanceTo(socket.local) < 0.12,
-            ),
+            !shafts.some((shaft) => shaft.local.distanceTo(socket.local) < 0.12),
         ),
       ];
     } else
@@ -9577,6 +7994,7 @@ export default function Home() {
       `Mapa ${selected.part}: ${connectors.length} conectores regenerados`,
     );
   };
+
   const removeConnector = (index: number) => {
     if (!selected || running) return;
     commitConnectorMap(
@@ -9585,6 +8003,7 @@ export default function Home() {
       `Mapa ${selected.part}: conector eliminado`,
     );
   };
+
   const duplicateConnector = (index: number) => {
     if (!selected || running) return;
     const next = selected.connectors.map((connector) => ({
@@ -9605,6 +8024,7 @@ export default function Home() {
       `Mapa ${selected.part}: conector ${index + 1} duplicado`,
     );
   };
+
   const exportConnectorMap = () => {
     if (!selected) return;
     const payload = {
@@ -9624,6 +8044,7 @@ export default function Home() {
     a.click();
     URL.revokeObjectURL(a.href);
   };
+
   const importConnectorMap = async (file: File) => {
     if (!selected || running) return;
     try {
@@ -9669,6 +8090,7 @@ export default function Home() {
       if (connectorFileRef.current) connectorFileRef.current.value = "";
     }
   };
+
   const cloneCollider = (primitive: CollisionPrimitive): CollisionPrimitive => ({
       ...primitive,
       center: primitive.center.clone(),
@@ -9684,6 +8106,8 @@ export default function Home() {
         halfHeight: primitive.halfHeight,
         rotation: primitive.rotation.toArray(),
       }));
+  // --- Collision-map editor ------------------------------------------------
+
   const commitCollisionMap = (
     piece: Piece,
     colliders: CollisionPrimitive[],
@@ -9697,8 +8121,7 @@ export default function Home() {
     state.pieces
       .filter((instance) => instance.part === piece.part)
       .forEach((instance) => {
-        if (layer === "gear")
-          instance.gearColliders = normalized.map(cloneCollider);
+        if (layer === "gear") instance.gearColliders = normalized.map(cloneCollider);
         else instance.colliders = normalized.map(cloneCollider);
       });
     try {
@@ -9720,6 +8143,7 @@ export default function Home() {
     setColliderRevision((value) => value + 1);
     setMessage(notice);
   };
+
   const addCollider = (shape: CollisionPrimitive["shape"]) => {
     if (!selected || running) return;
     const next = selectedCollisionPrimitives.map(cloneCollider);
@@ -9745,6 +8169,7 @@ export default function Home() {
       `Mapa ${selected.part}: ${shape === "box" ? "caja" : "cilindro"} añadido`,
     );
   };
+
   const updateCollider = (
     index: number,
     field: "shape" | "center" | "size" | "rotation" | "radius" | "halfHeight",
@@ -9766,22 +8191,16 @@ export default function Home() {
         primitive.radius ??= 0.5;
         primitive.halfHeight ??= 0.5;
       }
-    } else if (field === "center")
-      primitive.center.setComponent(component, +value || 0);
+    } else if (field === "center") primitive.center.setComponent(component, +value || 0);
     else if (field === "size")
       primitive.size?.setComponent(component, Math.max(0.01, +value || 0.01));
-    else if (field === "radius")
-      primitive.radius = Math.max(0.01, +value || 0.01);
+    else if (field === "radius") primitive.radius = Math.max(0.01, +value || 0.01);
     else if (field === "halfHeight")
       primitive.halfHeight = Math.max(0.01, +value || 0.01);
     else {
-      const rotation = new THREE.Euler().setFromQuaternion(
-        primitive.rotation,
-        "XYZ",
-      );
+      const rotation = new THREE.Euler().setFromQuaternion(primitive.rotation, "XYZ");
       if (component === 0) rotation.x = THREE.MathUtils.degToRad(+value || 0);
-      else if (component === 1)
-        rotation.y = THREE.MathUtils.degToRad(+value || 0);
+      else if (component === 1) rotation.y = THREE.MathUtils.degToRad(+value || 0);
       else rotation.z = THREE.MathUtils.degToRad(+value || 0);
       primitive.rotation.setFromEuler(rotation).normalize();
     }
@@ -9791,6 +8210,7 @@ export default function Home() {
       `Mapa ${selected.part}: collider ${index + 1} actualizado`,
     );
   };
+
   const removeCollider = (index: number) => {
     if (!selected || running) return;
     commitCollisionMap(
@@ -9799,6 +8219,7 @@ export default function Home() {
       `Mapa ${selected.part}: collider eliminado`,
     );
   };
+
   const exportCollisionMap = () => {
     if (!selected) return;
     const payload = {
@@ -9820,6 +8241,7 @@ export default function Home() {
     a.click();
     URL.revokeObjectURL(a.href);
   };
+
   const collisionPrimitiveFromData = (row: {
     shape: string;
     center: number[];
@@ -9842,31 +8264,27 @@ export default function Home() {
       center: new THREE.Vector3().fromArray(row.center),
       size:
         shape === "box"
-          ? new THREE.Vector3().fromArray(row.size!).max(
-              new THREE.Vector3(0.01, 0.01, 0.01),
-            )
+          ? new THREE.Vector3()
+              .fromArray(row.size!)
+              .max(new THREE.Vector3(0.01, 0.01, 0.01))
           : undefined,
-      radius:
-        shape === "cylinder" ? Math.max(0.01, row.radius ?? 0.5) : undefined,
+      radius: shape === "cylinder" ? Math.max(0.01, row.radius ?? 0.5) : undefined,
       halfHeight:
-        shape === "cylinder"
-          ? Math.max(0.01, row.halfHeight ?? 0.5)
-          : undefined,
+        shape === "cylinder" ? Math.max(0.01, row.halfHeight ?? 0.5) : undefined,
       rotation:
         Array.isArray(row.rotation) && row.rotation.length >= 4
           ? new THREE.Quaternion().fromArray(row.rotation).normalize()
           : new THREE.Quaternion(),
     };
   };
+
   const importCollisionMap = async (file: File) => {
     if (!selected || running) return;
     try {
       const payload = JSON.parse(await file.text()),
         rows = Array.isArray(payload) ? payload : payload.colliders;
       if (!Array.isArray(rows)) throw new Error("Formato incorrecto");
-      const colliders: CollisionPrimitive[] = rows.map(
-        collisionPrimitiveFromData,
-      );
+      const colliders: CollisionPrimitive[] = rows.map(collisionPrimitiveFromData);
       commitCollisionMap(
         selected,
         colliders,
@@ -9874,9 +8292,7 @@ export default function Home() {
         "normal",
       );
       if (selected.gear && Array.isArray(payload.gearColliders)) {
-        const gearColliders = payload.gearColliders.map(
-          collisionPrimitiveFromData,
-        );
+        const gearColliders = payload.gearColliders.map(collisionPrimitiveFromData);
         commitCollisionMap(
           selected,
           gearColliders,
@@ -9892,16 +8308,16 @@ export default function Home() {
       if (colliderFileRef.current) colliderFileRef.current.value = "";
     }
   };
+
   const downloadPhysicsLog = () => {
     if (!lastLog) return;
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(
-      new Blob([lastLog], { type: "application/json" }),
-    );
+    a.href = URL.createObjectURL(new Blob([lastLog], { type: "application/json" }));
     a.download = "sim-studio-physics-log.json";
     a.click();
     URL.revokeObjectURL(a.href);
   };
+
   const downloadPerformanceLog = () => {
     const state = appRef.current;
     if (!state?.performanceTrace.samples.length) return;
@@ -10012,15 +8428,11 @@ export default function Home() {
         },
         diagnosis: {
           dominantPhaseByP95: dominantPhase,
-          framesOver16_7ms: samples.filter(
-            (sample) => sample.frameIntervalMs > 16.7,
-          ).length,
-          framesOver33_3ms: samples.filter(
-            (sample) => sample.frameIntervalMs > 33.3,
-          ).length,
-          framesOver50ms: samples.filter(
-            (sample) => sample.frameIntervalMs > 50,
-          ).length,
+          framesOver16_7ms: samples.filter((sample) => sample.frameIntervalMs > 16.7)
+            .length,
+          framesOver33_3ms: samples.filter((sample) => sample.frameIntervalMs > 33.3)
+            .length,
+          framesOver50ms: samples.filter((sample) => sample.frameIntervalMs > 50).length,
         },
         summary,
         slowestFrames: samples
@@ -10037,6 +8449,7 @@ export default function Home() {
     anchor.click();
     URL.revokeObjectURL(anchor.href);
   };
+
   const importStatusText = importDraft
       ? {
           reading: t.importReading,
@@ -10064,12 +8477,12 @@ export default function Home() {
       maximum: Math.max(270, Math.min(680, studioWidth - 300 - 360)),
     };
   };
+
   const resizeInspectorBy = (change: number) => {
     const { minimum, maximum } = inspectorWidthBounds();
-    setInspectorWidth((width) =>
-      Math.min(maximum, Math.max(minimum, width + change)),
-    );
+    setInspectorWidth((width) => Math.min(maximum, Math.max(minimum, width + change)));
   };
+
   const beginInspectorResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (window.innerWidth <= 950) return;
     event.preventDefault();
@@ -10082,24 +8495,22 @@ export default function Home() {
     const move = (moveEvent: PointerEvent) => {
       const { minimum, maximum } = inspectorWidthBounds();
       setInspectorWidth(
-        Math.min(
-          maximum,
-          Math.max(minimum, startWidth + startX - moveEvent.clientX),
-        ),
+        Math.min(maximum, Math.max(minimum, startWidth + startX - moveEvent.clientX)),
       );
     };
+
     const finish = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", finish);
       window.removeEventListener("pointercancel", finish);
       document.body.classList.remove("resizing-inspector");
-      if (handle.hasPointerCapture(pointerId))
-        handle.releasePointerCapture(pointerId);
+      if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", finish);
     window.addEventListener("pointercancel", finish);
   };
+
   const projectSaveState =
       recoveryStatus === "saving"
         ? "saving"
@@ -10147,9 +8558,7 @@ export default function Home() {
         </div>
         <button
           className="theme-toggle"
-          onClick={() =>
-            setTheme((value) => (value === "dark" ? "light" : "dark"))
-          }
+          onClick={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
           aria-label={t.switchTheme}
           title={theme === "dark" ? t.light : t.dark}
         >
@@ -10163,11 +8572,12 @@ export default function Home() {
         >
           <span>{t.project}</span>
           <b>{projectName.slice(0, 20)}</b>
-          <small
-            className={`recovery-dot ${projectSaveState}`}
-            title={projectSaveLabel}
-          >
-            {projectSaveState === "clean" ? "✓" : projectSaveState === "saving" ? "…" : "!"}
+          <small className={`recovery-dot ${projectSaveState}`} title={projectSaveLabel}>
+            {projectSaveState === "clean"
+              ? "✓"
+              : projectSaveState === "saving"
+                ? "…"
+                : "!"}
           </small>
         </button>
         <div className="header-actions">
@@ -10281,9 +8691,13 @@ export default function Home() {
               <div className="project-name-row">
                 <input
                   ref={projectNameInputRef}
-                  value={currentProjectSaved
-                    ? projectNameEditing ? projectNameDraft : projectName
-                    : projectName}
+                  value={
+                    currentProjectSaved
+                      ? projectNameEditing
+                        ? projectNameDraft
+                        : projectName
+                      : projectName
+                  }
                   onChange={(event) => {
                     const name = event.target.value.slice(0, 20);
                     if (currentProjectSaved) setProjectNameDraft(name);
@@ -10344,17 +8758,22 @@ export default function Home() {
                   </div>
                 )}
               </div>
-              {saveNamePrompt && (
-                <p className="save-name-prompt">{t.nameBeforeSave}</p>
-              )}
+              {saveNamePrompt && <p className="save-name-prompt">{t.nameBeforeSave}</p>}
               <p>
                 <span className={`recovery-dot ${projectSaveState}`}>
-                  {projectSaveState === "clean" ? "✓" : projectSaveState === "saving" ? "…" : "!"}
+                  {projectSaveState === "clean"
+                    ? "✓"
+                    : projectSaveState === "saving"
+                      ? "…"
+                      : "!"}
                 </span>
                 {projectSaveLabel}
               </p>
               <div className="project-primary-actions">
-                <button onClick={requestCreateNewProject} disabled={projectBusy || running}>
+                <button
+                  onClick={requestCreateNewProject}
+                  disabled={projectBusy || running}
+                >
                   ＋ {t.newProject}
                 </button>
                 <button
@@ -10383,40 +8802,40 @@ export default function Home() {
               <span>{projects.length}</span>
             </div>
             <div className="project-list">
-              {projects.length ? projects
-                .slice(projectPage * 9, projectPage * 9 + 9)
-                .map((project) => (
-                <article
-                  key={project.id}
-                  className={
-                    project.id === activeProjectIdRef.current ? "active" : ""
-                  }
-                >
-                  <button
-                    className="project-open"
-                    onClick={() => requestOpenSavedProject(project)}
-                    disabled={projectBusy || running}
+              {projects.length ? (
+                projects.slice(projectPage * 9, projectPage * 9 + 9).map((project) => (
+                  <article
+                    key={project.id}
+                    className={project.id === activeProjectIdRef.current ? "active" : ""}
                   >
-                    <span className="project-file-icon">S</span>
-                    <span>
-                      <b>{project.name}</b>
-                      <small>
-                        {project.pieceCount} {t.pieces} ·{" "}
-                        {new Date(project.updatedAt).toLocaleString(language)}
-                      </small>
-                    </span>
-                  </button>
-                  <button
-                    className="project-delete"
-                    title={t.deleteProject}
-                    aria-label={`${t.deleteProject}: ${project.name}`}
-                    onClick={() => setProjectConfirmation({ kind: "delete", project })}
-                    disabled={projectBusy}
-                  >
-                    ×
-                  </button>
-                </article>
-              )) : <p className="empty-projects">{t.noProjects}</p>}
+                    <button
+                      className="project-open"
+                      onClick={() => requestOpenSavedProject(project)}
+                      disabled={projectBusy || running}
+                    >
+                      <span className="project-file-icon">S</span>
+                      <span>
+                        <b>{project.name}</b>
+                        <small>
+                          {project.pieceCount} {t.pieces} ·{" "}
+                          {new Date(project.updatedAt).toLocaleString(language)}
+                        </small>
+                      </span>
+                    </button>
+                    <button
+                      className="project-delete"
+                      title={t.deleteProject}
+                      aria-label={`${t.deleteProject}: ${project.name}`}
+                      onClick={() => setProjectConfirmation({ kind: "delete", project })}
+                      disabled={projectBusy}
+                    >
+                      ×
+                    </button>
+                  </article>
+                ))
+              ) : (
+                <p className="empty-projects">{t.noProjects}</p>
+              )}
             </div>
             {projects.length > 9 && (
               <nav className="project-pagination" aria-label={t.localProjects}>
@@ -10432,9 +8851,11 @@ export default function Home() {
                   {projectPage + 1} / {Math.ceil(projects.length / 9)}
                 </span>
                 <button
-                  onClick={() => setProjectPage((page) =>
-                    Math.min(Math.ceil(projects.length / 9) - 1, page + 1)
-                  )}
+                  onClick={() =>
+                    setProjectPage((page) =>
+                      Math.min(Math.ceil(projects.length / 9) - 1, page + 1),
+                    )
+                  }
                   disabled={projectPage >= Math.ceil(projects.length / 9) - 1}
                   title={t.nextPage}
                   aria-label={t.nextPage}
@@ -10466,7 +8887,9 @@ export default function Home() {
               id="duplicate-project-name"
               autoFocus
               value={duplicateProjectName}
-              onChange={(event) => setDuplicateProjectName(event.target.value.slice(0, 20))}
+              onChange={(event) =>
+                setDuplicateProjectName(event.target.value.slice(0, 20))
+              }
               maxLength={20}
               onFocus={(event) => event.currentTarget.select()}
             />
@@ -10502,9 +8925,7 @@ export default function Home() {
           >
             <span className="project-confirm-icon">!</span>
             <h2 id="project-confirm-title">
-              {projectConfirmation.kind === "delete"
-                ? t.deleteTitle
-                : t.unsavedTitle}
+              {projectConfirmation.kind === "delete" ? t.deleteTitle : t.unsavedTitle}
             </h2>
             <p>
               {projectConfirmation.kind === "delete"
@@ -10512,10 +8933,7 @@ export default function Home() {
                 : t.unsavedWarning}
             </p>
             <div>
-              <button
-                className="ghost"
-                onClick={() => setProjectConfirmation(null)}
-              >
+              <button className="ghost" onClick={() => setProjectConfirmation(null)}>
                 {t.cancel}
               </button>
               <button className="danger-confirm" onClick={resolveProjectConfirmation}>
@@ -10626,11 +9044,7 @@ export default function Home() {
           </div>
         </div>
         <div className="catalog-head">
-          <b>{
-            t.categories[
-              categories.find((c) => c.id === category)?.id ?? "beams"
-            ]
-          }</b>
+          <b>{t.categories[categories.find((c) => c.id === category)?.id ?? "beams"]}</b>
           <span>{`${visible.length} ${t.pieces}`}</span>
         </div>
         <div className="parts-grid">
@@ -10673,14 +9087,8 @@ export default function Home() {
             </article>
           ))}
         </div>
-        {!visible.length && (
-          <div className="no-results">
-            {t.noResults}
-          </div>
-        )}
-        <div className="drag-help">
-          {t.dragHelp}
-        </div>
+        {!visible.length && <div className="no-results">{t.noResults}</div>}
+        <div className="drag-help">{t.dragHelp}</div>
       </aside>
       <section className="viewport" ref={mountRef}>
         <div className="fps-counter" ref={fpsRef} data-level="high">
@@ -10688,11 +9096,7 @@ export default function Home() {
         </div>
         <div className="view-label">
           <span className={running ? "live" : ""} />
-          {running
-            ? t.running
-            : message === "catalog-ready"
-              ? t.ready
-              : message}
+          {running ? t.running : message === "catalog-ready" ? t.ready : message}
         </div>
         {controlsHelpVisible ? (
           <div className="camera-help">
@@ -10764,7 +9168,9 @@ export default function Home() {
             <div className="selected-card">
               <div className="cube">◆</div>
               <div>
-                <small>{t.piece} {selected.part}</small>
+                <small>
+                  {t.piece} {selected.part}
+                </small>
                 <b>{selected.name}</b>
               </div>
             </div>
@@ -10776,10 +9182,16 @@ export default function Home() {
                 <span>{language === "es" ? "Procedencia" : "Origin"}</span>
                 <b>
                   {selected.origin === "model-import"
-                    ? language === "es" ? "Modelo importado" : "Imported model"
+                    ? language === "es"
+                      ? "Modelo importado"
+                      : "Imported model"
                     : selected.origin === "catalog-search"
-                      ? language === "es" ? "Catálogo / referencia" : "Catalog / reference"
-                      : language === "es" ? "Paleta predeterminada" : "Default palette"}
+                      ? language === "es"
+                        ? "Catálogo / referencia"
+                        : "Catalog / reference"
+                      : language === "es"
+                        ? "Paleta predeterminada"
+                        : "Default palette"}
                 </b>
               </div>
               {selected.importFile && (
@@ -10791,13 +9203,19 @@ export default function Home() {
               <div className="data-row">
                 <span>
                   {selected.origin === "model-import"
-                    ? language === "es" ? "Referencia en el archivo" : "Reference in file"
-                    : language === "es" ? "Referencia solicitada" : "Requested reference"}
+                    ? language === "es"
+                      ? "Referencia en el archivo"
+                      : "Reference in file"
+                    : language === "es"
+                      ? "Referencia solicitada"
+                      : "Requested reference"}
                 </span>
                 <b>{selected.requestedPart ?? selected.part}</b>
               </div>
               <div className="data-row">
-                <span>{language === "es" ? "Devuelto por catálogo" : "Catalog result"}</span>
+                <span>
+                  {language === "es" ? "Devuelto por catálogo" : "Catalog result"}
+                </span>
                 <b>
                   {selected.catalogReturnedPart ??
                     (selected.origin === "default-palette" ? selected.part : "—")}
@@ -10805,17 +9223,21 @@ export default function Home() {
               </div>
               <div className="data-row">
                 <span>{language === "es" ? "Modelo cargado" : "Loaded model"}</span>
-                <b>
-                  {selected.resolvedPart ?? selected.modelPart ?? selected.part}.dat
-                </b>
+                <b>{selected.resolvedPart ?? selected.modelPart ?? selected.part}.dat</b>
               </div>
               <div className="data-row">
-                <span>{language === "es" ? "Fuente de geometría" : "Geometry source"}</span>
+                <span>
+                  {language === "es" ? "Fuente de geometría" : "Geometry source"}
+                </span>
                 <b>
                   {selected.sourceKind === "packaged-cache" || selected.geometry
-                    ? language === "es" ? "Precargada localmente" : "Local preloaded cache"
+                    ? language === "es"
+                      ? "Precargada localmente"
+                      : "Local preloaded cache"
                     : selected.sourceKind === "external-catalog"
-                      ? language === "es" ? "Catálogo externo" : "External catalog"
+                      ? language === "es"
+                        ? "Catálogo externo"
+                        : "External catalog"
                       : "LDraw"}
                 </b>
               </div>
@@ -10823,15 +9245,25 @@ export default function Home() {
                 <div className="data-row">
                   <span>
                     {selected.origin === "model-import"
-                      ? language === "es" ? "Referencia pedida al catálogo" : "Reference requested from catalog"
-                      : language === "es" ? "Consulta enviada" : "Catalog query"}
+                      ? language === "es"
+                        ? "Referencia pedida al catálogo"
+                        : "Reference requested from catalog"
+                      : language === "es"
+                        ? "Consulta enviada"
+                        : "Catalog query"}
                   </span>
                   <b>{selected.catalogQuery}</b>
                 </div>
               )}
               <div className="data-row">
-                <span>{language === "es" ? "Color solicitado / fuente" : "Requested / source color"}</span>
-                <b>{selected.color} / {selected.sourceColor ?? selected.color}</b>
+                <span>
+                  {language === "es"
+                    ? "Color solicitado / fuente"
+                    : "Requested / source color"}
+                </span>
+                <b>
+                  {selected.color} / {selected.sourceColor ?? selected.color}
+                </b>
               </div>
               {selected.geometry && (
                 <div className="data-row">
@@ -10852,10 +9284,16 @@ export default function Home() {
                     title={selected.downloadUrl}
                   >
                     {selected.downloadSource === "local"
-                      ? language === "es" ? "Recurso local ↗" : "Local asset ↗"
+                      ? language === "es"
+                        ? "Recurso local ↗"
+                        : "Local asset ↗"
                       : selected.downloadSource === "legacy"
-                        ? language === "es" ? "CDN de respaldo ↗" : "Fallback CDN ↗"
-                        : language === "es" ? "CDN principal ↗" : "Primary CDN ↗"}
+                        ? language === "es"
+                          ? "CDN de respaldo ↗"
+                          : "Fallback CDN ↗"
+                        : language === "es"
+                          ? "CDN principal ↗"
+                          : "Primary CDN ↗"}
                   </a>
                 </div>
               )}
@@ -10871,14 +9309,10 @@ export default function Home() {
                 aria-label={t.color}
                 value={selected.color}
                 disabled={running}
-                onChange={(event) =>
-                  void changeSelectedColor(+event.target.value)
-                }
+                onChange={(event) => void changeSelectedColor(+event.target.value)}
               >
                 {!ldrawColorOptions.includes(selected.color) && (
-                  <option value={selected.color}>
-                    LDraw {selected.color}
-                  </option>
+                  <option value={selected.color}>LDraw {selected.color}</option>
                 )}
                 {ldrawColorOptions.map((color) => (
                   <option value={color} key={color}>
@@ -10982,8 +9416,7 @@ export default function Home() {
             </div>
             {(isAxlePart(selected) ||
               selected.connectors.some(
-                (connector) =>
-                  connector.role === "shaft" && connector.kind === "axle",
+                (connector) => connector.role === "shaft" && connector.kind === "axle",
               )) && (
               <label className="property-check dynamic-axle-check">
                 <input
@@ -11014,17 +9447,13 @@ export default function Home() {
             )}
             {selected.gear && selectedGearSpec && (
               <div className="connection-editor gear-link-editor">
-                <label>
-                  {language === "es" ? "Engranaje" : "Gear coupling"}
-                </label>
+                <label>{language === "es" ? "Engranaje" : "Gear coupling"}</label>
                 <div className="data-row">
                   <span>{language === "es" ? "Dientes" : "Teeth"}</span>
                   <b>{selectedGearSpec.teeth}</b>
                 </div>
                 <div className="data-row">
-                  <span>
-                    {language === "es" ? "Radio primitivo" : "Pitch radius"}
-                  </span>
+                  <span>{language === "es" ? "Radio primitivo" : "Pitch radius"}</span>
                   <b>{selectedGearSpec.pitchRadius.toFixed(3)} studs</b>
                 </div>
                 {selectedGearLinks.length ? (
@@ -11043,7 +9472,8 @@ export default function Home() {
                             {other.value.part}
                           </b>
                           <span>
-                            {selectedGearSpec.teeth}:{other.spec.teeth} · {ratio.toFixed(3)}× ·{" "}
+                            {selectedGearSpec.teeth}:{other.spec.teeth} ·{" "}
+                            {ratio.toFixed(3)}× ·{" "}
                             {link.perpendicular
                               ? language === "es"
                                 ? "engrane cónico a 90°"
@@ -11074,8 +9504,7 @@ export default function Home() {
                 <label>{t.pieceJoints}</label>
                 {selectedConnections.length ? (
                   selectedConnections.map((connection, index) => {
-                    const other =
-                      connection.a === selected ? connection.b : connection.a;
+                    const other = connection.a === selected ? connection.b : connection.a;
                     return (
                       <div className="connection-card" key={connection.id}>
                         <div>
@@ -11083,7 +9512,8 @@ export default function Home() {
                             {t.joint} {index + 1} · {other.part}
                           </b>
                           <span>
-                            {profileLabels[connection.profile]} · {modeLabels[connection.mode]}
+                            {profileLabels[connection.profile]} ·{" "}
+                            {modeLabels[connection.mode]}
                             {connection.forced
                               ? ` (${t.forcedJoint} ${(connection.forcedOffset ?? 0).toFixed(2)} u)`
                               : ""}
@@ -11117,10 +9547,7 @@ export default function Home() {
                                 step=".5"
                                 value={connection.motorSpeed}
                                 onChange={(event) =>
-                                  setMotorSpeed(
-                                    connection.id,
-                                    +event.target.value,
-                                  )
+                                  setMotorSpeed(connection.id, +event.target.value)
                                 }
                               />
                               <b>{connection.motorSpeed.toFixed(1)} rad/s</b>
@@ -11135,10 +9562,7 @@ export default function Home() {
                                 step="5"
                                 value={connection.motorForce}
                                 onChange={(event) =>
-                                  setMotorForce(
-                                    connection.id,
-                                    +event.target.value,
-                                  )
+                                  setMotorForce(connection.id, +event.target.value)
                                 }
                               />
                               <b>{connection.motorForce.toFixed(0)}</b>
@@ -11149,34 +9573,28 @@ export default function Home() {
                     );
                   })
                 ) : (
-                  <p className="no-connections">
-                    {t.noJoints}
-                  </p>
+                  <p className="no-connections">{t.noJoints}</p>
                 )}
               </div>
             )}
             <div className="data-row">
               <span>{t.connectMap}</span>
-              <b>{selected.connectors.length} {t.points}</b>
+              <b>
+                {selected.connectors.length} {t.points}
+              </b>
             </div>
             <button
               className="map-toggle"
               onClick={() => setConnectionMapOpen((value) => !value)}
             >
-              {connectionMapOpen
-                ? t.closeMap
-                : t.editMap}
+              {connectionMapOpen ? t.closeMap : t.editMap}
             </button>
             {connectionMapOpen && (
               <div className="map-editor">
-                <p>
-                  {t.mapHelp}
-                </p>
+                <p>{t.mapHelp}</p>
                 <div className="map-actions">
                   <button onClick={addConnector}>{t.addPoint}</button>
-                  <button onClick={regenerateConnectorMap}>
-                    {t.regenerateMap}
-                  </button>
+                  <button onClick={regenerateConnectorMap}>{t.regenerateMap}</button>
                   <button onClick={exportConnectorMap}>{t.exportJson}</button>
                   <button onClick={() => connectorFileRef.current?.click()}>
                     {t.importJson}
@@ -11198,8 +9616,8 @@ export default function Home() {
                     key={`${index}-${connector.role}-${connector.kind}`}
                   >
                     <summary>
-                      <b>#{index + 1}</b>{" "}
-                      {connector.role === "socket" ? t.hole : t.shaft} ·{" "}
+                      <b>#{index + 1}</b> {connector.role === "socket" ? t.hole : t.shaft}{" "}
+                      ·{" "}
                       {connector.kind === "round"
                         ? t.round
                         : connector.kind === "axle"
@@ -11259,12 +9677,7 @@ export default function Home() {
                           key={component}
                           value={+value.toFixed(4)}
                           onCommit={(nextValue) =>
-                            updateConnector(
-                              index,
-                              "local",
-                              String(nextValue),
-                              component,
-                            )
+                            updateConnector(index, "local", String(nextValue), component)
                           }
                         />
                       ))}
@@ -11276,12 +9689,7 @@ export default function Home() {
                           key={component}
                           value={+value.toFixed(4)}
                           onCommit={(nextValue) =>
-                            updateConnector(
-                              index,
-                              "axis",
-                              String(nextValue),
-                              component,
-                            )
+                            updateConnector(index, "axis", String(nextValue), component)
                           }
                         />
                       ))}
@@ -11293,11 +9701,7 @@ export default function Home() {
                           min={0.01}
                           value={connector.diameter}
                           onCommit={(nextValue) =>
-                            updateConnector(
-                              index,
-                              "diameter",
-                              String(nextValue),
-                            )
+                            updateConnector(index, "diameter", String(nextValue))
                           }
                         />
                       </label>
@@ -11320,8 +9724,7 @@ export default function Home() {
               <span>{t.collisionMapEditor}</span>
               <b>
                 {selected.colliders.length}
-                {selected.gear ? ` + ${selected.gearColliders.length}` : ""}{" "}
-                formas
+                {selected.gear ? ` + ${selected.gearColliders.length}` : ""} formas
               </b>
             </div>
             <button
@@ -11342,9 +9745,7 @@ export default function Home() {
                 }
               }}
             >
-              {collisionMapOpen
-                ? t.closeCollisionMap
-                : t.editCollisionMap}
+              {collisionMapOpen ? t.closeCollisionMap : t.editCollisionMap}
             </button>
             {collisionMapOpen && (
               <div className="map-editor collision-map-editor">
@@ -11370,9 +9771,7 @@ export default function Home() {
                 )}
                 <div className="map-actions collision-map-actions">
                   <button onClick={() => addCollider("box")}>{t.addBox}</button>
-                  <button onClick={() => addCollider("cylinder")}>
-                    {t.addCylinder}
-                  </button>
+                  <button onClick={() => addCollider("cylinder")}>{t.addCylinder}</button>
                   <button onClick={exportCollisionMap}>{t.exportJson}</button>
                   <button onClick={() => colliderFileRef.current?.click()}>
                     {t.importJson}
@@ -11440,23 +9839,21 @@ export default function Home() {
                       </div>
                       <label>{t.rotation}</label>
                       <div className="vector-fields">
-                        {[rotation.x, rotation.y, rotation.z].map(
-                          (value, component) => (
-                            <DeferredNumberInput
-                              key={component}
-                              step={1}
-                              value={THREE.MathUtils.radToDeg(value)}
-                              onCommit={(nextValue) =>
-                                updateCollider(
-                                  index,
-                                  "rotation",
-                                  String(nextValue),
-                                  component,
-                                )
-                              }
-                            />
-                          ),
-                        )}
+                        {[rotation.x, rotation.y, rotation.z].map((value, component) => (
+                          <DeferredNumberInput
+                            key={component}
+                            step={1}
+                            value={THREE.MathUtils.radToDeg(value)}
+                            onCommit={(nextValue) =>
+                              updateCollider(
+                                index,
+                                "rotation",
+                                String(nextValue),
+                                component,
+                              )
+                            }
+                          />
+                        ))}
                       </div>
                       {primitive.shape === "box" ? (
                         <>
@@ -11489,11 +9886,7 @@ export default function Home() {
                               min={0.01}
                               value={primitive.radius ?? 0.5}
                               onCommit={(nextValue) =>
-                                updateCollider(
-                                  index,
-                                  "radius",
-                                  String(nextValue),
-                                )
+                                updateCollider(index, "radius", String(nextValue))
                               }
                             />
                           </label>
@@ -11503,11 +9896,7 @@ export default function Home() {
                               min={0.01}
                               value={primitive.halfHeight ?? 0.5}
                               onCommit={(nextValue) =>
-                                updateCollider(
-                                  index,
-                                  "halfHeight",
-                                  String(nextValue),
-                                )
+                                updateCollider(index, "halfHeight", String(nextValue))
                               }
                             />
                           </label>
@@ -11595,9 +9984,7 @@ export default function Home() {
         <div className="log-tools">
           <label>{t.physicsLog}</label>
           <button disabled={!lastLog} onClick={downloadPhysicsLog}>
-            {lastLog
-              ? t.downloadLog
-              : t.stopForLog}
+            {lastLog ? t.downloadLog : t.stopForLog}
           </button>
           {lastLog && (
             <details>
@@ -11609,9 +9996,7 @@ export default function Home() {
         <div className="log-tools">
           <label>{t.performanceLog}</label>
           <p>{t.performanceHelp}</p>
-          <button onClick={downloadPerformanceLog}>
-            {t.downloadPerformance}
-          </button>
+          <button onClick={downloadPerformanceLog}>{t.downloadPerformance}</button>
         </div>
         <div className="physics">
           <label className="grid-setting-title">{t.gridSize}</label>
@@ -11685,13 +10070,9 @@ export default function Home() {
             onChange={(event) => setStructuralStiffness(+event.target.value)}
           />
           <p className="structural-help">
-            {structuralMode === "rigid"
-              ? t.rigidStructureHelp
-              : t.flexibleStructureHelp}
+            {structuralMode === "rigid" ? t.rigidStructureHelp : t.flexibleStructureHelp}
           </p>
-          <label className="physics-parameters-title">
-            {t.globalPhysicsParameters}
-          </label>
+          <label className="physics-parameters-title">{t.globalPhysicsParameters}</label>
           {(
             [
               ["pieceFriction", t.pieceFriction, 0, 2, 0.01, ""],
@@ -11742,18 +10123,20 @@ export default function Home() {
           <span>
             <i /> Rapier + LDraw Connect
           </span>
-          <p>
-            {t.physicsHelp}
-          </p>
+          <p>{t.physicsHelp}</p>
         </div>
       </aside>
       <footer>
-        <span>● {t.grid}: {gridStep ? `${gridStep} u` : t.noGridSnap}</span>
+        <span>
+          ● {t.grid}: {gridStep ? `${gridStep} u` : t.noGridSnap}
+        </span>
         <a href="https://www.ldraw.org/" target="_blank" rel="noreferrer">
           {t.ldrawCredit}
         </a>
         <span>Y ↑</span>
-        <span>{count} {t.pieces} · {t.cache}</span>
+        <span>
+          {count} {t.pieces} · {t.cache}
+        </span>
       </footer>
     </main>
   );

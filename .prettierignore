@@ -1,0 +1,11 @@
+node_modules
+.next
+.vinext
+dist
+pages-dist
+public/ldraw
+public/catalog
+app/vendor
+app/preloaded-catalog.json
+app/connection-maps.ts
+app/collision-maps.ts
