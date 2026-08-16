@@ -5400,9 +5400,9 @@ export default function Home() {
               body: spring.piece.body.handle,
               worldPoint: anchor,
               target: spring.target,
-              stiffness: 72,
-              damping: 9,
-              maxForce: 180 * Math.max(0.25, spring.piece.body.mass()),
+              stiffness: 42,
+              damping: 13,
+              maxForce: 90 * Math.max(0.25, spring.piece.body.mass()),
             });
           }
           springMs = performance.now() - phaseStarted;

@@ -34,10 +34,9 @@ pub fn create_joint(
     let anchor_b = rigid_b
         .position()
         .inverse_transform_point(vector(config.world_anchor_b));
-    let world_axis_a = normalized(config.world_axis_a);
-    let world_axis_b = normalized(config.world_axis_b);
-    let axis_a = rigid_a.position().inverse_transform_vector(world_axis_a);
-    let axis_b = rigid_b.position().inverse_transform_vector(world_axis_b);
+    let world_axis = normalized(config.world_axis);
+    let axis_a = rigid_a.position().inverse_transform_vector(world_axis);
+    let axis_b = rigid_b.position().inverse_transform_vector(world_axis);
 
     let mut data = match config.mode {
         JointMode::Rotation | JointMode::Motor => {
@@ -99,10 +98,9 @@ pub fn create_joint(
         JointMode::Fixed => {
             // Both frames use the current world orientation. This keeps forced
             // connections at their visual offset instead of teleporting them.
-            let world_frame_a = Rotation::from_rotation_arc(Vector::X, world_axis_a);
-            let world_frame_b = Rotation::from_rotation_arc(Vector::X, world_axis_b);
-            let frame_a = Pose::from_parts(anchor_a, rigid_a.rotation().inverse() * world_frame_a);
-            let frame_b = Pose::from_parts(anchor_b, rigid_b.rotation().inverse() * world_frame_b);
+            let world_frame = Rotation::from_rotation_arc(Vector::X, world_axis);
+            let frame_a = Pose::from_parts(anchor_a, rigid_a.rotation().inverse() * world_frame);
+            let frame_b = Pose::from_parts(anchor_b, rigid_b.rotation().inverse() * world_frame);
             FixedJointBuilder::new()
                 .local_frame1(frame_a)
                 .local_frame2(frame_b)

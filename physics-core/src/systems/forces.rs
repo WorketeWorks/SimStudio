@@ -38,13 +38,11 @@ pub fn apply_commands(
 
                 let delta = clamp_length(vector(*target) - vector(*world_point), 3.5);
                 let acceleration =
-                    clamp_length(delta * *stiffness - rigid_body.linvel() * *damping, 180.0);
-                // The editor only knows the nominal LEGO-piece mass, while
-                // Rapier also includes every compound collider. Scale the cap
-                // with Rapier's real mass so large mechanisms remain draggable.
-                let mass = rigid_body.mass().max(0.25);
-                let effective_max_force = (*max_force).max(mass * 180.0);
-                let force = clamp_length(acceleration * mass, effective_max_force.max(0.0));
+                    clamp_length(delta * *stiffness - rigid_body.linvel() * *damping, 90.0);
+                let force = clamp_length(
+                    acceleration * rigid_body.mass().max(0.25),
+                    (*max_force).max(0.0),
+                );
                 max_spring_force = max_spring_force.max(force.length());
                 rigid_body.apply_impulse_at_point(force * timestep, vector(*world_point), true);
             }
