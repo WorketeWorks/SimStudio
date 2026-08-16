@@ -44,7 +44,8 @@ export type RustJointConfig = {
   mode: "fixed" | "rotation" | "linear" | "rotation-linear" | "motor";
   worldAnchorA: RustVec3;
   worldAnchorB: RustVec3;
-  worldAxis: RustVec3;
+  worldAxisA: RustVec3;
+  worldAxisB: RustVec3;
   travel: number;
   motorSpeed: number;
   motorForce: number;

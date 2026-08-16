@@ -114,7 +114,8 @@ test("gear ratios and motor joints are solved inside Rust", () => {
         mode: "motor",
         worldAnchorA: [6, 3, 0],
         worldAnchorB: [6, 3, 0],
-        worldAxis: [0, 1, 0],
+        worldAxisA: [0, 1, 0],
+        worldAxisB: [0, 1, 0],
         travel: 0,
         motorSpeed: 4,
         motorForce: 100,
@@ -155,5 +156,123 @@ test("gear ratios and motor joints are solved inside Rust", () => {
     Math.abs(motor) > 0.1,
     `the native motor should rotate its body: ${JSON.stringify(Array.from(transforms))}`,
   );
+  engine.free();
+});
+
+test("dynamic axle joints correct radial and angular capture error", () => {
+  const axleTilt = Math.PI / 10;
+  const body = (id, fixed, position) => ({
+    id,
+    fixed,
+    position,
+    rotation: [0, 0, 0, 1],
+    mass: 1,
+    linearDamping: 0.05,
+    angularDamping: 0.05,
+    additionalSolverIterations: 4,
+    ccd: false,
+    colliders: [
+      {
+        ownerId: id + 300,
+        center: [0, 0, 0],
+        rotation: [0, 0, 0, 1],
+        friction: 0,
+        density: 1,
+        collisionGroup: 1,
+        collisionMask: 0,
+        shape: { kind: "box", halfExtents: [0.1, 0.4, 0.1] },
+      },
+    ],
+  });
+  const engine = new PhysicsEngine({
+    gravity: [0, 0, 0],
+    settings,
+    bodies: [body(1, true, [0, 0, 0]), body(2, false, [0.15, 0, 0])],
+    joints: [
+      {
+        id: "dynamic-axle",
+        bodyA: 1,
+        bodyB: 2,
+        mode: "rotation-linear",
+        worldAnchorA: [0, 0, 0],
+        worldAnchorB: [0.15, 0, 0],
+        worldAxisA: [0, 1, 0],
+        worldAxisB: [Math.sin(axleTilt), Math.cos(axleTilt), 0],
+        travel: 2,
+        motorSpeed: 0,
+        motorForce: 0,
+        passiveMotorForce: 0,
+        dynamicAxle: true,
+      },
+    ],
+    gears: [],
+    differentials: [],
+    excludedColliderPairs: [],
+  });
+
+  let transforms;
+  for (let frame = 0; frame < 90; frame++) transforms = engine.step(1 / 60, []);
+  const stride = engine.transform_stride();
+  const bodyB = Array.from(transforms.slice(stride, stride * 2));
+  assert.ok(Math.abs(bodyB[1]) < 0.025, `axle should be centred radially: ${bodyB[1]}`);
+  assert.ok(
+    Math.abs(bodyB[6]) > 0.05,
+    `axle body should rotate to remove its captured tilt: ${JSON.stringify(bodyB)}`,
+  );
+  engine.free();
+});
+
+test("spring dragging scales to Rapier's real compound-body mass", () => {
+  const engine = new PhysicsEngine({
+    gravity: [0, 0, 0],
+    settings,
+    bodies: [
+      {
+        id: 1,
+        fixed: false,
+        position: [0, 0, 0],
+        rotation: [0, 0, 0, 1],
+        mass: 1,
+        linearDamping: 0,
+        angularDamping: 0,
+        additionalSolverIterations: 1,
+        ccd: false,
+        colliders: [
+          {
+            ownerId: 401,
+            center: [0, 0, 0],
+            rotation: [0, 0, 0, 1],
+            friction: 0,
+            density: 100,
+            collisionGroup: 1,
+            collisionMask: 0,
+            shape: { kind: "box", halfExtents: [1, 1, 1] },
+          },
+        ],
+      },
+    ],
+    joints: [],
+    gears: [],
+    differentials: [],
+    excludedColliderPairs: [],
+  });
+
+  let transforms;
+  for (let frame = 0; frame < 12; frame++) {
+    const x = transforms?.[1] ?? 0;
+    transforms = engine.step(1 / 60, [
+      {
+        kind: "spring",
+        body: 1,
+        worldPoint: [x, 0, 0],
+        target: [1, 0, 0],
+        stiffness: 72,
+        damping: 9,
+        // Deliberately tiny: Rust must raise this using the body's real mass.
+        maxForce: 1,
+      },
+    ]);
+  }
+  assert.ok(transforms[1] > 0.2, `heavy body should remain draggable: ${transforms[1]}`);
   engine.free();
 });
