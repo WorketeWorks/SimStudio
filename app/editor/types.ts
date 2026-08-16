@@ -103,6 +103,12 @@ export type RenderBatchItem = {
   localMatrix: THREE.Matrix4;
 };
 
+export type RenderLineBatchItem = {
+  line: THREE.LineSegments;
+  pieces: Piece[];
+  matrixAttribute: THREE.InstancedBufferAttribute;
+};
+
 export type RenderBatchStats = {
   lineBatches: number;
   meshBatches: number;
@@ -341,6 +347,7 @@ export type AppState = {
   renderBatchRoot?: THREE.Group;
   renderLineBatchRoot?: THREE.Group;
   renderBatchItems: RenderBatchItem[];
+  renderLineBatchItems: RenderLineBatchItem[];
   renderBatchStats: RenderBatchStats;
   renderBatchesDirty: boolean;
   bulkLoading?: boolean;
