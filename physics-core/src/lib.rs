@@ -105,6 +105,14 @@ impl PhysicsEngine {
             config.settings.internal_pgs_iterations.max(1);
         world.integration_parameters.normalized_allowed_linear_error =
             config.settings.allowed_linear_error.max(1.0e-5);
+        // LEGO mechanisms often contain several almost-coplanar colliders and
+        // joint chains. Reusing the full previous impulse can feed numerical
+        // correction back into the next frame and create motion without an
+        // external force. A partial warm start keeps convergence fast without
+        // preserving those spikes indefinitely.
+        world.integration_parameters.warmstart_coefficient = 0.65;
+        world.integration_parameters.normalized_max_corrective_velocity = 1.0;
+        world.integration_parameters.num_internal_stabilization_iterations = 2;
         world.integration_parameters.max_ccd_substeps = config.settings.max_ccd_substeps;
 
         // Infinite-looking editor floor. Its collider remains finite but much
@@ -228,7 +236,9 @@ impl PhysicsEngine {
         joints::update_motors(&commands, &self.joint_ids, &self.joints, &mut self.world);
         joints::apply_axle_friction(&self.joints, &mut self.world, self.settings, timestep);
 
+        let startup = self.elapsed_seconds < 0.35;
         self.world.integration_parameters.dt = timestep / substeps as f32;
+        self.world.integration_parameters.warmstart_coefficient = if startup { 0.0 } else { 0.65 };
         for _ in 0..substeps {
             gears::project_velocities(&self.gears, &self.differentials, &mut self.world);
             self.world.step_with_events(&self.contact_filter, &());
@@ -242,7 +252,15 @@ impl PhysicsEngine {
         gears::enforce_phase(&mut self.gears, &mut self.world);
         stops::enforce(&self.axial_stops, &mut self.world);
         self.elapsed_seconds += timestep;
-        self.clamp_motion(self.elapsed_seconds < 0.35);
+        if startup {
+            // The startup speed limiter must not leave cached joint impulses
+            // behind. Otherwise they are released on the first unrestricted
+            // frame, exactly like the spontaneous burst visible in log 20.
+            for (_, joint) in self.world.impulse_joints.iter_mut() {
+                joint.impulses.fill(0.0);
+            }
+        }
+        self.clamp_motion(self.elapsed_seconds);
         self.collect_transforms();
 
         self.stats.substeps = substeps;
@@ -342,7 +360,7 @@ impl PhysicsEngine {
 }
 
 impl PhysicsEngine {
-    fn clamp_motion(&mut self, startup: bool) {
+    fn clamp_motion(&mut self, elapsed_seconds: f32) {
         let geared: HashSet<_> = self
             .gears
             .iter()
@@ -353,13 +371,15 @@ impl PhysicsEngine {
             if body.is_fixed() {
                 continue;
             }
-            let linear_limit = if startup { 2.0 } else { 12.0 };
+            // Release startup limits gradually instead of jumping from 2 to
+            // 12 units/s in one frame. A discontinuous limit lets any residual
+            // solver correction appear as an instantaneous acceleration.
+            let release = ((elapsed_seconds - 0.35) / 0.65).clamp(0.0, 1.0);
+            let linear_limit = 2.0 + 10.0 * release;
             let angular_limit = if geared.contains(handle) {
-                if startup { 20.0 } else { 80.0 }
-            } else if startup {
-                3.0
+                20.0 + 60.0 * release
             } else {
-                14.0
+                3.0 + 11.0 * release
             };
             body.set_linvel(clamp_length(body.linvel(), linear_limit), true);
             body.set_angvel(clamp_length(body.angvel(), angular_limit), true);
