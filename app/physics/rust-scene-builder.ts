@@ -11,7 +11,6 @@ import type {
   Connection,
   PhysicsSettings,
   Piece,
-  RuntimeDifferentialLink,
   RuntimeGearLink,
   StructuralMode,
 } from "../editor/types";
@@ -19,7 +18,6 @@ import type {
   RustBodyConfig,
   RustAxialStopConfig,
   RustColliderConfig,
-  RustDifferentialConfig,
   RustGearConfig,
   RustJointConfig,
   RustPhysicsScene,
@@ -85,7 +83,6 @@ type RustSceneBuildOptions = {
   pieces: Piece[];
   connections: Connection[];
   gearLinks: RuntimeGearLink[];
-  differentialLinks: RuntimeDifferentialLink[];
   structuralMode: StructuralMode;
   structuralStiffness: number;
   physicsSettings: PhysicsSettings;
@@ -198,7 +195,6 @@ export function buildRustPhysicsScene(options: RustSceneBuildOptions): RustScene
     pieces,
     connections,
     gearLinks,
-    differentialLinks,
     structuralMode,
     structuralStiffness,
     physicsSettings,
@@ -244,6 +240,19 @@ export function buildRustPhysicsScene(options: RustSceneBuildOptions): RustScene
       rigidIslandByPiece.set(piece, island);
       bodyIdByPiece.set(piece, bodyId);
     });
+  });
+
+  // Keep collision enabled between articulated rigid groups, but give their
+  // beam envelopes the same small axial clearance used by axle parts. This
+  // lets adjacent liftarms rotate past one another without making the whole
+  // pair non-colliding (remote parts of both groups can still make contact).
+  const articulatedBodyIds = new Set<number>();
+  connections.forEach((connection) => {
+    const bodyA = bodyIdByPiece.get(connection.a);
+    const bodyB = bodyIdByPiece.get(connection.b);
+    if (!bodyA || !bodyB || bodyA === bodyB) return;
+    articulatedBodyIds.add(bodyA);
+    articulatedBodyIds.add(bodyB);
   });
 
   const stiffnessRatio = structuralStiffness / 100;
@@ -325,9 +334,14 @@ export function buildRustPhysicsScene(options: RustSceneBuildOptions): RustScene
         );
       } else {
         piece.colliders.forEach((primitive) => {
-          const clearance =
+          const axialClearance =
             piece.gear || /bush|axle joiner/i.test(piece.name)
               ? physicsSettings.axleTolerance
+              : 0;
+          const beamClearance =
+            articulatedBodyIds.has(bodyId) &&
+            /^Technic (Beam|Panel)/i.test(piece.name)
+              ? physicsSettings.beamClearance
               : 0;
           const shape: RustColliderConfig["shape"] =
             primitive.shape === "box"
@@ -335,7 +349,10 @@ export function buildRustPhysicsScene(options: RustSceneBuildOptions): RustScene
                   kind: "box",
                   halfExtents: [
                     primitive.size!.x / 2,
-                    primitive.size!.y / 2,
+                    Math.max(
+                      0.01,
+                      primitive.size!.y / 2 - beamClearance / 2,
+                    ),
                     primitive.size!.z / 2,
                   ],
                 }
@@ -343,7 +360,8 @@ export function buildRustPhysicsScene(options: RustSceneBuildOptions): RustScene
                   kind: "cylinder",
                   halfHeight: Math.max(
                     0.01,
-                    primitive.halfHeight! - clearance / 2,
+                    primitive.halfHeight! -
+                      Math.max(axialClearance, beamClearance) / 2,
                   ),
                   radius: primitive.radius!,
                 };
@@ -443,24 +461,6 @@ export function buildRustPhysicsScene(options: RustSceneBuildOptions): RustScene
 
   const gears = buildRustGearConfigs(gearLinks, bodyIdByPiece);
 
-  const differentials: RustDifferentialConfig[] = differentialLinks.flatMap((link) => {
-    const carrier = bodyIdByPiece.get(link.carrier);
-    const left = bodyIdByPiece.get(link.left);
-    const right = bodyIdByPiece.get(link.right);
-    if (!carrier || !left || !right || new Set([carrier, left, right]).size !== 3)
-      return [];
-    return [
-      {
-        carrier,
-        left,
-        right,
-        axisCarrier: vec3(link.axisCarrier),
-        axisLeft: vec3(link.axisLeft),
-        axisRight: vec3(link.axisRight),
-      },
-    ];
-  });
-
   // Bushes/nuts touching a socket act as axial hard stops. Their correction
   // is encoded once here and enforced every frame by Rust, avoiding a second
   // TypeScript pose solver after Rapier.
@@ -546,7 +546,6 @@ export function buildRustPhysicsScene(options: RustSceneBuildOptions): RustScene
       bodies,
       joints,
       gears,
-      differentials,
       axialStops,
       excludedColliderPairs,
     },

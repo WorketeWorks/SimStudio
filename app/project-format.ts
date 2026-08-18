@@ -21,6 +21,7 @@ export type SavedConnector = {
   role: "socket" | "shaft";
   diameter: number;
   length?: number;
+  rotationOnly?: boolean;
 };
 
 export type SavedCollisionPrimitive = {
@@ -214,6 +215,7 @@ const sanitizeProjectDocument = (
               connector.length === undefined
                 ? undefined
                 : positiveNumber(connector.length, 0.5, 0.01),
+            rotationOnly: connector.rotationOnly === true || undefined,
           } satisfies SavedConnector;
         }),
         sanitizeCollider = (

@@ -80,7 +80,6 @@ pub struct PhysicsEngine {
     joints: Vec<joints::JointRuntime>,
     joint_ids: HashMap<String, usize>,
     gears: Vec<gears::GearRuntime>,
-    differentials: Vec<gears::DifferentialRuntime>,
     axial_stops: Vec<stops::AxialStopRuntime>,
     previous_gear_rotations: HashMap<RigidBodyHandle, Rotation>,
     contact_filter: ContactFilter,
@@ -185,7 +184,6 @@ impl PhysicsEngine {
         }
 
         let runtime_gears = gears::build_gears(&config.gears, &body_ids, &world);
-        let differentials = gears::build_differentials(&config.differentials, &body_ids, &world);
         let axial_stops = stops::build(&config.axial_stops, &body_ids, &world);
         let previous_gear_rotations = ordered_bodies
             .iter()
@@ -211,7 +209,6 @@ impl PhysicsEngine {
             joints: runtime_joints,
             joint_ids,
             gears: runtime_gears,
-            differentials,
             axial_stops,
             previous_gear_rotations,
             contact_filter,
@@ -240,9 +237,9 @@ impl PhysicsEngine {
         self.world.integration_parameters.dt = timestep / substeps as f32;
         self.world.integration_parameters.warmstart_coefficient = if startup { 0.0 } else { 0.65 };
         for _ in 0..substeps {
-            gears::project_velocities(&self.gears, &self.differentials, &mut self.world);
+            gears::project_velocities(&self.gears, &mut self.world);
             self.world.step_with_events(&self.contact_filter, &());
-            gears::project_velocities(&self.gears, &self.differentials, &mut self.world);
+            gears::project_velocities(&self.gears, &mut self.world);
         }
         gears::accumulate_angles(
             &mut self.gears,

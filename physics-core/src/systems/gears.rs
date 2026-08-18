@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use rapier3d::prelude::*;
 
 use crate::math::{normalized, vector};
-use crate::model::{DifferentialConfig, GearConfig};
+use crate::model::GearConfig;
 
 #[derive(Clone)]
 pub struct GearRuntime {
@@ -18,16 +18,6 @@ pub struct GearRuntime {
     pub angle_a: Real,
     pub angle_b: Real,
     pub target_phase: Real,
-}
-
-#[derive(Clone)]
-pub struct DifferentialRuntime {
-    pub carrier: RigidBodyHandle,
-    pub left: RigidBodyHandle,
-    pub right: RigidBodyHandle,
-    pub local_axis_carrier: Vector,
-    pub local_axis_left: Vector,
-    pub local_axis_right: Vector,
 }
 
 pub fn build_gears(
@@ -70,54 +60,15 @@ pub fn build_gears(
         .collect()
 }
 
-pub fn build_differentials(
-    configs: &[DifferentialConfig],
-    bodies: &HashMap<u32, RigidBodyHandle>,
-    world: &PhysicsWorld,
-) -> Vec<DifferentialRuntime> {
-    configs
-        .iter()
-        .filter_map(|config| {
-            let carrier = *bodies.get(&config.carrier)?;
-            let left = *bodies.get(&config.left)?;
-            let right = *bodies.get(&config.right)?;
-            if carrier == left || carrier == right || left == right {
-                return None;
-            }
-            Some(DifferentialRuntime {
-                carrier,
-                left,
-                right,
-                local_axis_carrier: world.bodies[carrier]
-                    .position()
-                    .inverse_transform_vector(normalized(config.axis_carrier)),
-                local_axis_left: world.bodies[left]
-                    .position()
-                    .inverse_transform_vector(normalized(config.axis_left)),
-                local_axis_right: world.bodies[right]
-                    .position()
-                    .inverse_transform_vector(normalized(config.axis_right)),
-            })
-        })
-        .collect()
-}
-
 /// Projects angular velocity onto the exact tooth ratios. Forward and reverse
 /// sweeps remove array-order bias so a long train transmits from either end.
-pub fn project_velocities(
-    gears: &[GearRuntime],
-    differentials: &[DifferentialRuntime],
-    world: &mut PhysicsWorld,
-) {
+pub fn project_velocities(gears: &[GearRuntime], world: &mut PhysicsWorld) {
     for _ in 0..16 {
         for gear in gears {
             solve_gear_velocity(gear, world);
         }
         for gear in gears.iter().rev() {
             solve_gear_velocity(gear, world);
-        }
-        for differential in differentials {
-            solve_differential_velocity(differential, world);
         }
     }
 }
@@ -163,41 +114,6 @@ fn solve_gear_velocity(gear: &GearRuntime, world: &mut PhysicsWorld) {
     }
     if !fixed_b {
         world.bodies[gear.body_b].set_angvel(angular_b + axis_b * delta_b, true);
-    }
-}
-
-fn solve_differential_velocity(differential: &DifferentialRuntime, world: &mut PhysicsWorld) {
-    let samples = [
-        (differential.carrier, differential.local_axis_carrier, -2.0),
-        (differential.left, differential.local_axis_left, 1.0),
-        (differential.right, differential.local_axis_right, 1.0),
-    ]
-    .map(|(handle, local_axis, gradient)| {
-        let body = &world.bodies[handle];
-        let axis = body.rotation() * local_axis;
-        (
-            handle,
-            axis,
-            body.angvel(),
-            body.angvel().dot(axis),
-            gradient,
-            body.is_fixed(),
-        )
-    });
-    let error: Real = samples.iter().map(|sample| sample.3 * sample.4).sum();
-    let denominator: Real = samples
-        .iter()
-        .filter(|sample| !sample.5)
-        .map(|sample| sample.4 * sample.4)
-        .sum();
-    if error.abs() < 1.0e-6 || denominator < 1.0e-9 {
-        return;
-    }
-    for (handle, axis, angular, _, gradient, fixed) in samples {
-        if !fixed {
-            let correction = -error * gradient / denominator;
-            world.bodies[handle].set_angvel(angular + axis * correction, true);
-        }
     }
 }
 

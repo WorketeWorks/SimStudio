@@ -68,15 +68,6 @@ export type RustGearConfig = {
   signB: number;
 };
 
-export type RustDifferentialConfig = {
-  carrier: number;
-  left: number;
-  right: number;
-  axisCarrier: RustVec3;
-  axisLeft: RustVec3;
-  axisRight: RustVec3;
-};
-
 export type RustAxialStopConfig = {
   bodyA: number;
   bodyB: number;
@@ -101,7 +92,6 @@ export type RustPhysicsScene = {
   bodies: RustBodyConfig[];
   joints: RustJointConfig[];
   gears: RustGearConfig[];
-  differentials: RustDifferentialConfig[];
   axialStops: RustAxialStopConfig[];
   excludedColliderPairs: [number, number][];
 };

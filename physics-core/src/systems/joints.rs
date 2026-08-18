@@ -48,7 +48,6 @@ pub fn create_joint(
                 .local_anchor2(anchor_b)
                 .contacts_enabled(true)
                 .build();
-            data.set_contacts_enabled(true);
             let force = if config.mode == JointMode::Motor {
                 config.motor_force
             } else {
@@ -112,6 +111,9 @@ pub fn create_joint(
         }
     };
 
+    // Connected groups still need self-collision away from their joint. Beam
+    // clearance is handled by their collider dimensions in the scene builder,
+    // rather than disabling contacts for the complete rigid-body pair.
     data.set_contacts_enabled(true);
     let handle = world.impulse_joints.insert(body_a, body_b, data, true);
 
@@ -210,5 +212,38 @@ pub fn apply_axle_friction(
                 world.bodies[joint.body_b].apply_torque_impulse(-torque, true);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_joint_keeps_contacts_between_its_two_bodies() {
+        let mut world = PhysicsWorld::new();
+        let body_a = world.bodies.insert(RigidBodyBuilder::dynamic().build());
+        let body_b = world.bodies.insert(RigidBodyBuilder::dynamic().build());
+        let body_ids = HashMap::from([(1, body_a), (2, body_b)]);
+        let config = JointConfig {
+            id: "beam-pin-beam".into(),
+            body_a: 1,
+            body_b: 2,
+            mode: JointMode::Rotation,
+            world_anchor_a: [0.0, 0.0, 0.0],
+            world_anchor_b: [0.0, 0.0, 0.0],
+            world_axis_a: [1.0, 0.0, 0.0],
+            world_axis_b: [1.0, 0.0, 0.0],
+            travel: 0.0,
+            motor_speed: 0.0,
+            motor_force: 0.0,
+            passive_motor_force: 0.0,
+            dynamic_axle: false,
+        };
+
+        let runtime = create_joint(&config, &body_ids, &mut world).unwrap();
+        let joint = world.impulse_joints.get(runtime.handle).unwrap();
+
+        assert!(joint.data.contacts_enabled());
     }
 }

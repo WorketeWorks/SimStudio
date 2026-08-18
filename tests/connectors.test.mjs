@@ -10,7 +10,10 @@ import {
   straightAxleConnectors,
 } from "../app/connectors.ts";
 import { preloadedConnectionMaps } from "../app/connection-maps.ts";
-import { preloadedCollisionMaps } from "../app/collision-maps.ts";
+import {
+  preloadedCollisionMaps,
+  preloadedGearCollisionMaps,
+} from "../app/collision-maps.ts";
 import {
   buildConnectorContactExclusions,
   contactPairKey,
@@ -191,6 +194,21 @@ test("keeps every restored correction map preloaded", () => {
     "60484", "64179", "99773",
   ])
     assert.ok(preloadedCollisionMaps[part]?.length, `${part} collision map`);
+});
+
+test("the 6573 differential exposes lateral sockets, a rotation-only axle stud and two gear volumes", () => {
+  const sockets = preloadedConnectionMaps["6573"];
+  assert.equal(sockets.length, 3);
+  assert.deepEqual(sockets.slice(0, 2).map((socket) => socket.kind), ["round", "round"]);
+  assert.deepEqual(sockets.slice(0, 2).map((socket) => socket.local[2]), [-1.5, 1.5]);
+  assert.equal(sockets[2].kind, "axle");
+  assert.equal(sockets[2].role, "shaft");
+  assert.equal(sockets[2].rotationOnly, true);
+  assert.equal(sockets[2].length, undefined);
+  assert.deepEqual(sockets[2].local, [0, -0.8, 0]);
+  const gearVolumes = preloadedGearCollisionMaps["6573"];
+  assert.equal(gearVolumes.length, 2);
+  assert.deepEqual(gearVolumes.map((volume) => volume.center[2]), [-1.5, 1.5]);
 });
 
 test("a shaft ignores the full rigid host islands but not adjacent mobile islands", () => {

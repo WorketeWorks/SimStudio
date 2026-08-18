@@ -9,6 +9,9 @@ export const DEFAULT_PHYSICS_SETTINGS: PhysicsSettings = {
   axleSlidingFriction: 0.08,
   axleRotationFriction: 0.02,
   axleTolerance: 0.02,
+  // Articulated liftarms need their own clearance. It starts at the legacy
+  // value that was previously (and incorrectly) shared with axle tolerance.
+  beamClearance: 0.02,
 };
 
 /**

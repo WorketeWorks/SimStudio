@@ -176,15 +176,6 @@ export type RuntimeGearLink = GearPair<Piece> & {
   perpendicular: boolean;
 };
 
-export type RuntimeDifferentialLink = {
-  carrier: Piece;
-  left: Piece;
-  right: Piece;
-  axisCarrier: THREE.Vector3;
-  axisLeft: THREE.Vector3;
-  axisRight: THREE.Vector3;
-};
-
 export type ManualConnectDraft = {
   piece: Piece;
   connector: MeshConnector;
@@ -265,6 +256,7 @@ export type PhysicsSettings = {
   axleSlidingFriction: number;
   axleRotationFriction: number;
   axleTolerance: number;
+  beamClearance: number;
 };
 
 export type GridStep = 0 | 0.25 | 0.5 | 1;
@@ -291,7 +283,6 @@ export type AppState = {
   contactFilterStats?: { tested: number; rejected: number };
   connections: Connection[];
   gearLinks: RuntimeGearLink[];
-  differentialLinks: RuntimeDifferentialLink[];
   gearAngles: Map<string, number>;
   gearBodyRotations: Map<number, THREE.Quaternion>;
   gearPhases: Map<string, number>;

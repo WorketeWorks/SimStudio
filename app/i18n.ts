@@ -178,6 +178,7 @@ export const translations = {
     axleSlidingFriction: "Deslizamiento de ejes",
     axleRotationFriction: "Rotación de ejes",
     axleTolerance: "Holgura de ejes",
+    beamClearance: "Separación de vigas articuladas",
     globalPhysicsHelp: "Los cambios se aplican al iniciar la simulación.",
     resetPhysicsParameters: "Restablecer parámetros",
     rigidStructureHelp:
@@ -374,6 +375,7 @@ export const translations = {
     axleSlidingFriction: "Axle sliding friction",
     axleRotationFriction: "Axle rotation friction",
     axleTolerance: "Axle clearance",
+    beamClearance: "Articulated beam clearance",
     globalPhysicsHelp: "Changes are applied when the simulation starts.",
     resetPhysicsParameters: "Reset parameters",
     rigidStructureHelp:

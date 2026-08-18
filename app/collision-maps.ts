@@ -1225,6 +1225,24 @@ export const preloadedCollisionMaps: Record<string, StoredCollisionPrimitive[]> 
 
 // Optional second layer used exclusively for gear-to-gear contacts.
 export const preloadedGearCollisionMaps: Record<string, StoredCollisionPrimitive[]> = {
+  // The 6573 carrier has one internal 12T bevel engagement on each lateral
+  // output. These magenta volumes only collide with other gear volumes.
+  "6573": [
+    {
+      "shape": "cylinder",
+      "center": [0, 0, -1.5],
+      "radius": 0.75,
+      "halfHeight": 0.25,
+      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865476]
+    },
+    {
+      "shape": "cylinder",
+      "center": [0, 0, 1.5],
+      "radius": 0.75,
+      "halfHeight": 0.25,
+      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865476]
+    }
+  ],
   "6589": [
     {
       "shape": "cylinder",

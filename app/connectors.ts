@@ -7,6 +7,8 @@ export type MeshConnector = {
   role: "socket" | "shaft";
   diameter: number;
   length?: number;
+  /** Axle stud that snaps at one point and permits rotation but no travel. */
+  rotationOnly?: boolean;
 };
 type Loop = {
   axisIndex: number;

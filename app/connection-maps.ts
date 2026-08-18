@@ -5,10 +5,23 @@ export type StoredConnector = {
   role: "socket" | "shaft";
   diameter: number;
   length?: number;
+  rotationOnly?: boolean;
 };
 
 // Generated from the reviewed maps exported by Sim Studio's map editor.
 export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
+  // Differential side outputs are pin sockets. Its central axle stud is a
+  // point-mounted rotating output: it cannot slide along its axis.
+  "6573": [
+    { local: [0, 0, -1.5], axis: [0, 0, 1], kind: "round", role: "socket", diameter: 0.8, length: 0.5 },
+    { local: [0, 0, 1.5], axis: [0, 0, 1], kind: "round", role: "socket", diameter: 0.8, length: 0.5 },
+    // Central axle stud: exact-point snap with rotation and no linear travel.
+    { local: [0, -0.8, 0], axis: [0, 1, 0], kind: "axle", role: "shaft", diameter: 0.6, rotationOnly: true }
+  ],
+  "62821": [
+    { local: [0, 0, -1.25], axis: [0, 0, 1], kind: "round", role: "socket", diameter: 0.8, length: 0.5 },
+    { local: [0, 0, 1.25], axis: [0, 0, 1], kind: "round", role: "socket", diameter: 0.8, length: 0.5 }
+  ],
   "32198": [
     {
       "local": [0, 0, 0.1],

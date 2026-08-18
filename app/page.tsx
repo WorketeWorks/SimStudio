@@ -62,11 +62,9 @@ import {
   buildRustPhysicsScene,
 } from "./physics/rust-scene-builder";
 import {
-  detectDifferentialLinks,
   detectGearLinks,
-  differentialPairKeys,
+  differentialCarrierGearExclusions,
   gearLinkKey,
-  isDifferentialPart,
 } from "./physics/gear-topology";
 import { DEFAULT_PHYSICS_SETTINGS } from "./physics/settings";
 import { createProjectId, uniqueProjectName } from "./projects/naming";
@@ -137,6 +135,7 @@ const packagedParts = preloadedCatalog.parts as Record<
       role: "socket" | "shaft";
       diameter: number;
       length?: number;
+      rotationOnly?: boolean;
     }[];
     colliders: {
       shape: "box" | "cylinder";
@@ -256,6 +255,8 @@ const axleSnapPoints = (
   includeSecondary = true,
 ): AxleSnapPoint[] => {
   if (connector.role !== "shaft" || connector.kind !== "axle") return [];
+  if (connector.rotationOnly)
+    return [{ local: connector.local.clone(), important: true }];
   const sections = Math.max(1, Math.ceil(connector.length ?? 0.5)),
     half = sections / 2,
     axis = connector.axis.clone().normalize(),
@@ -513,12 +514,21 @@ const pairProfile = (a: MeshConnector, b: MeshConnector) =>
       ? connectorProfile(b, a)
       : undefined;
 
+const isRotationOnlyConnector = (connector: MeshConnector) =>
+  connector.rotationOnly === true;
+
 const allowedModes = (profile: ConnectionProfile): JointMode[] =>
   profile === "pin-round"
     ? ["fixed", "rotation", "motor"]
     : profile === "axle-cross"
       ? ["fixed", "linear"]
       : ["rotation", "linear", "rotation-linear", "motor"];
+
+const allowedModesForConnection = (connection: Connection): JointMode[] =>
+  isRotationOnlyConnector(connection.socket) ||
+  isRotationOnlyConnector(connection.shaft)
+    ? ["rotation"]
+    : allowedModes(connection.profile);
 
 const defaultMode = (profile: ConnectionProfile): JointMode =>
   profile === "pin-round"
@@ -540,15 +550,24 @@ const rebalanceSmartDefaults = (state: AppState, shaftPiece: Piece) => {
   );
   if (!connections.length) return;
   connections.forEach((connection) => {
-    if (!allowedModes(connection.profile).includes(connection.mode)) {
-      connection.mode = defaultMode(connection.profile);
+    if (!allowedModesForConnection(connection).includes(connection.mode)) {
+      connection.mode =
+        isRotationOnlyConnector(connection.socket) ||
+        isRotationOnlyConnector(connection.shaft)
+        ? "rotation"
+        : defaultMode(connection.profile);
       connection.userConfigured = false;
       state.connectionModes.delete(connection.id);
     }
   });
   connections.forEach((connection) => {
     if (connection.userConfigured) return;
-    if (connection.profile === "axle-cross") connection.mode = "fixed";
+    if (
+      isRotationOnlyConnector(connection.socket) ||
+      isRotationOnlyConnector(connection.shaft)
+    )
+      connection.mode = "rotation";
+    else if (connection.profile === "axle-cross") connection.mode = "fixed";
     else if (connection.profile === "axle-round") connection.mode = "rotation-linear";
     else if (shaftPiece.frictionPin) connection.mode = "fixed";
   });
@@ -560,6 +579,8 @@ const rebalanceSmartDefaults = (state: AppState, shaftPiece: Piece) => {
   connections.forEach((connection) => {
     if (
       connection.userConfigured ||
+      isRotationOnlyConnector(connection.socket) ||
+      isRotationOnlyConnector(connection.shaft) ||
       connection.profile === "axle-cross" ||
       connection.profile === "axle-round" ||
       shaftPiece.frictionPin
@@ -1249,6 +1270,7 @@ export default function Home() {
                 role?: "socket" | "shaft";
                 diameter: number;
                 length?: number;
+                rotationOnly?: boolean;
               }[]
             ).map((connector) => ({
               ...connector,
@@ -1654,6 +1676,11 @@ export default function Home() {
           object.quaternion.copy(
             worldRotation.multiply((data.localRotation as THREE.Quaternion).clone()),
           );
+        } else if (data.debugKind === "exact-collider" && piece) {
+          piece.mesh.updateMatrixWorld(true);
+          object.matrixAutoUpdate = false;
+          object.matrix.copy(piece.mesh.matrixWorld);
+          object.matrixWorldNeedsUpdate = true;
         } else if (data.debugKind === "connector-point" && piece)
           object.position.copy(
             piece.mesh.localToWorld((data.local as THREE.Vector3).clone()),
@@ -1742,8 +1769,32 @@ export default function Home() {
       for (const piece of state.pieces) {
         piece.mesh.updateMatrixWorld(true);
         if (state.debug.colliders) {
+          if (piece.exactCollider) {
+            // The complex-collider option sends the actual triangle mesh to
+            // Rapier. Mirror that same mesh here instead of leaving stale
+            // compound boxes visible in the technical view.
+            const rootInverse = piece.mesh.matrixWorld.clone().invert(),
+              exactHelper = new THREE.Group();
+            piece.mesh.traverse((object) => {
+              if (!(object instanceof THREE.Mesh) || object instanceof THREE.InstancedMesh)
+                return;
+              const wireframe = new THREE.LineSegments(
+                new THREE.WireframeGeometry(object.geometry),
+                new THREE.LineBasicMaterial({
+                  color: piece.fixed ? 0xffc928 : 0x3dff78,
+                  transparent: true,
+                  opacity: 0.72,
+                  depthTest: false,
+                }),
+              );
+              wireframe.applyMatrix4(rootInverse.clone().multiply(object.matrixWorld));
+              exactHelper.add(wireframe);
+            });
+            exactHelper.userData = { debugKind: "exact-collider", piece };
+            debugRoot.add(exactHelper);
+          }
           const debugColliders = [
-            ...piece.colliders.map((primitive) => ({
+            ...(piece.exactCollider ? [] : piece.colliders).map((primitive) => ({
               primitive,
               gearLayer: false,
             })),
@@ -1810,7 +1861,11 @@ export default function Home() {
                   : connector.kind === "axle"
                     ? 0x35d36f
                     : 0x26a7ff;
-            if (connector.role === "shaft" && connector.kind === "axle") {
+            if (
+              connector.role === "shaft" &&
+              connector.kind === "axle" &&
+              !connector.rotationOnly
+            ) {
               const localRotation = new THREE.Quaternion().setFromUnitVectors(
                   new THREE.Vector3(0, 1, 0),
                   connector.axis,
@@ -2531,7 +2586,7 @@ export default function Home() {
             colliders,
             gearColliders,
             gear: isGearPart(p),
-            exactCollider: isDifferentialPart(p),
+            exactCollider: false,
             fixed: false,
             pin: isPinPart(p),
             frictionPin: hasPinFriction(p),
@@ -2573,7 +2628,6 @@ export default function Home() {
       pieces: [],
       connections: [],
       gearLinks: [],
-      differentialLinks: [],
       gearAngles: new Map(),
       gearBodyRotations: new Map(),
       gearPhases: new Map(),
@@ -2716,10 +2770,17 @@ export default function Home() {
         shaftIndex = rod.connectors.indexOf(shaft),
         id = `${host.id}:${socketIndex}:${rod.id}:${shaftIndex}:${profile}`,
         saved = state.connectionModes.get(id),
+        rotationOnlyConnection =
+          isRotationOnlyConnector(socket) || isRotationOnlyConnector(shaft),
+        validModes = rotationOnlyConnection
+          ? (["rotation"] as JointMode[])
+          : allowedModes(profile),
         mode =
-          saved && allowedModes(profile).includes(saved.mode)
+          saved && validModes.includes(saved.mode)
             ? saved.mode
-            : defaultMode(profile),
+            : rotationOnlyConnection
+              ? "rotation"
+              : defaultMode(profile),
         motorSpeed = saved?.motorSpeed ?? 3,
         motorForce = saved?.motorForce ?? 80,
         userConfigured = saved?.userConfigured ?? false;
@@ -3155,42 +3216,14 @@ export default function Home() {
 
     const updateDynamicMechanisms = () => {
       const dynamicScanStarted = performance.now();
-      state.differentialLinks = detectDifferentialLinks(
-        state.pieces,
-        state.rigidIslandByPiece,
-      );
-      // Dynamic detection observes the meshes in their current world pose.
-      // Store the axes in the body's reference frame, matching gear links,
-      // otherwise the body's rotation would be applied twice on the next step.
-      state.differentialLinks.forEach((link) => {
-        for (const [piece, axis] of [
-          [link.carrier, link.axisCarrier],
-          [link.left, link.axisLeft],
-          [link.right, link.axisRight],
-        ] as [Piece, THREE.Vector3][]) {
-          const rotation = piece.body?.rotation();
-          if (!rotation) continue;
-          axis
-            .applyQuaternion(
-              new THREE.Quaternion(
-                rotation.x,
-                rotation.y,
-                rotation.z,
-                rotation.w,
-              ).invert(),
-            )
-            .normalize();
-        }
-      });
-      const differentialExclusions = differentialPairKeys(state.differentialLinks),
-        previousGearLinks = state.gearLinks.length,
+      const previousGearLinks = state.gearLinks.length,
         previousLinksByKey = new Map(
           state.gearLinks.map((link) => [gearLinkKey(link), link]),
         ),
         detectedGearLinks = detectGearLinks(
           state.pieces,
           state.rigidIslandByPiece,
-          differentialExclusions,
+          differentialCarrierGearExclusions(state.pieces, state.connections),
         );
       // Dynamic overlap scans must not redefine the reference axes or the
       // transmission direction of a pair that is already engaged. On bevel
@@ -3410,7 +3443,6 @@ export default function Home() {
         );
         state.contactExclusions.clear();
         refreshed.forEach((key) => state.contactExclusions.add(key));
-        differentialExclusions.forEach((key) => state.contactExclusions.add(key));
         const allExclusions = new Set([
           ...state.contactExclusions,
           ...state.dynamicNoContactPairs,
@@ -4167,11 +4199,10 @@ export default function Home() {
         state.connectionModes = new Map(
           [...snapshot.connectionModes].map(([id, mode]) => [id, { ...mode }]),
         );
-        state.differentialLinks = detectDifferentialLinks(state.pieces);
         state.gearLinks = detectGearLinks(
           state.pieces,
           undefined,
-          differentialPairKeys(state.differentialLinks),
+          differentialCarrierGearExclusions(state.pieces, state.connections),
         );
         state.selected =
           snapshot.selected && restoredPieces.has(snapshot.selected)
@@ -4262,6 +4293,7 @@ export default function Home() {
         role: connector.role,
         diameter: connector.diameter,
         length: connector.length,
+        rotationOnly: connector.rotationOnly,
       }),
       saveCollider = (collider: CollisionPrimitive): SavedCollisionPrimitive => ({
         shape: collider.shape,
@@ -4472,7 +4504,6 @@ export default function Home() {
       state.connections = [];
       state.connectionModes.clear();
       state.gearLinks = [];
-      state.differentialLinks = [];
       state.selected = undefined;
       const piecesById = new Map<string, Piece>();
       try {
@@ -4496,7 +4527,7 @@ export default function Home() {
           piece.colliders = saved.colliders.map(loadCollider);
           piece.gearColliders = saved.gearColliders.map(loadCollider);
           piece.fixed = saved.fixed;
-          piece.exactCollider = saved.exactCollider ?? isDifferentialPart(piece);
+          piece.exactCollider = saved.exactCollider ?? false;
           piece.dynamicAxleConnections = saved.dynamicAxleConnections;
           piece.rotationPivotLocal = saved.rotationPivotLocal
             ? new THREE.Vector3().fromArray(saved.rotationPivotLocal)
@@ -6129,7 +6160,6 @@ export default function Home() {
     s.pieces = [];
     s.connections = [];
     s.gearLinks = [];
-    s.differentialLinks = [];
     s.gearAngles.clear();
     s.gearBodyRotations.clear();
     s.gearPhases.clear();
@@ -6244,15 +6274,10 @@ export default function Home() {
         s.gearAngles.clear();
         s.gearBodyRotations.clear();
         s.gearPhases.clear();
-        s.differentialLinks = detectDifferentialLinks(
-          s.pieces,
-          detectionIslandByPiece,
-        );
-        const differentialExclusions = differentialPairKeys(s.differentialLinks);
         s.gearLinks = detectGearLinks(
           s.pieces,
           detectionIslandByPiece,
-          differentialExclusions,
+          differentialCarrierGearExclusions(s.pieces, s.connections),
         );
 
         const traversedConnectorPairs = detectShaftTraversals(s.pieces);
@@ -6261,7 +6286,6 @@ export default function Home() {
           detectionIslandByPiece,
           traversedConnectorPairs,
         );
-        differentialExclusions.forEach((key) => excludedPairs.add(key));
         s.contactExclusions.clear();
         excludedPairs.forEach((key) => s.contactExclusions.add(key));
 
@@ -6269,7 +6293,6 @@ export default function Home() {
           pieces: s.pieces,
           connections: s.connections,
           gearLinks: s.gearLinks,
-          differentialLinks: s.differentialLinks,
           structuralMode,
           structuralStiffness,
           physicsSettings: s.physicsSettings,
@@ -6314,7 +6337,7 @@ export default function Home() {
           `Modo estructural ${structuralMode}; rigidez ${structuralStiffness}%`,
           `Rust Rapier SIMD: ${built.scene.settings.solverIterations} iteraciones × ${built.scene.settings.internalPgsIterations} PGS interno`,
           `${fixedConnectionCount} conexiones fijas; ${built.movingJointCount} articulaciones móviles`,
-          `${s.gearLinks.length} pares de engranajes y ${s.differentialLinks.length} diferenciales nativos`,
+          `${s.gearLinks.length} pares de engranajes activos`,
           `${traversedConnectorPairs.length} cruces eje/pin detectados; ${excludedPairs.size} pares sin colisión`,
         );
         if (built.redundantMovingJoints)
@@ -6333,7 +6356,6 @@ export default function Home() {
       } else {
         s.running = false;
         s.gearLinks = [];
-        s.differentialLinks = [];
         s.gearAngles.clear();
         s.gearBodyRotations.clear();
         s.gearPhases.clear();
@@ -7156,7 +7178,7 @@ export default function Home() {
       !state ||
       !connection ||
       running ||
-      !allowedModes(connection.profile).includes(mode)
+      !allowedModesForConnection(connection).includes(mode)
     )
       return;
     state.recordHistory();
@@ -7222,6 +7244,7 @@ export default function Home() {
       role: connector.role,
       diameter: connector.diameter,
       length: connector.length,
+      rotationOnly: connector.rotationOnly,
     }));
 
   const commitConnectorMap = (
@@ -7421,6 +7444,7 @@ export default function Home() {
           role: string;
           diameter?: number;
           length?: number;
+          rotationOnly?: boolean;
         }) => {
           if (
             !Array.isArray(row.local) ||
@@ -7436,6 +7460,7 @@ export default function Home() {
             role: row.role as MeshConnector["role"],
             diameter: row.diameter ?? 0.24,
             length: row.length,
+            rotationOnly: row.rotationOnly === true || undefined,
           };
         },
       );
@@ -8693,6 +8718,9 @@ export default function Home() {
                   if (!state) return;
                   state.recordHistory();
                   selected.exactCollider = event.target.checked;
+                  // Rebuild the diagnostics immediately so the visual mesh
+                  // always matches the collider selected for simulation.
+                  state.refreshDebug();
                   setConnectorRevision((value) => value + 1);
                   state.scheduleRecoverySave();
                   setMessage(
@@ -8891,7 +8919,7 @@ export default function Home() {
                             )
                           }
                         >
-                          {allowedModes(connection.profile).map((mode) => (
+                          {allowedModesForConnection(connection).map((mode) => (
                             <option value={mode} key={mode}>
                               {modeLabels[mode]}
                             </option>
@@ -9517,6 +9545,7 @@ export default function Home() {
               ["axleSlidingFriction", t.axleSlidingFriction, 0, 1, 0.01, ""],
               ["axleRotationFriction", t.axleRotationFriction, 0, 1, 0.01, ""],
               ["axleTolerance", t.axleTolerance, 0, 0.1, 0.005, " studs"],
+              ["beamClearance", t.beamClearance, 0, 0.1, 0.005, " studs"],
             ] as [keyof PhysicsSettings, string, number, number, number, string][]
           ).map(([key, label, min, max, step, unit]) => (
             <div className="physics-parameter" key={key}>

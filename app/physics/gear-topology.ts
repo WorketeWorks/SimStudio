@@ -1,5 +1,5 @@
 /**
- * Gear and differential topology detection.
+ * Gear topology detection.
  *
  * This module only determines which parts participate in a mechanical graph.
  * The per-frame Rapier velocity and tooth-phase solver remains in the physics
@@ -10,14 +10,14 @@ import { gearSpecFor, type GearPair, type GearPose } from "../gears";
 import { contactPairKey } from "../physics-contact-filter";
 import type {
   CatalogPart,
+  Connection,
   Piece,
-  RuntimeDifferentialLink,
   RuntimeGearLink,
 } from "../editor/types";
 
 const differentialRefs = new Set(["6573", "62821"]);
 
-export const isDifferentialPart = (p: CatalogPart) =>
+const isDifferentialCarrier = (p: CatalogPart) =>
   [p.part, p.modelPart, p.resolvedPart]
     .filter(Boolean)
     .some((reference) => differentialRefs.has(reference!.toLowerCase()));
@@ -107,9 +107,9 @@ const gearVolumesOverlap = (a: WorldGearVolume, b: WorldGearVolume) => {
   );
 };
 
-// --- Gear and differential topology ----------------------------------------
-// Detection is separate from the Rapier solver: it builds the graph that the
-// per-frame velocity/phase constraints consume later.
+// --- Gear topology ----------------------------------------------------------
+// Detection is separate from the Rapier solver: it builds the ordinary gear
+// graph consumed later by the velocity and tooth-phase constraints.
 
 export const detectGearLinks = (
   pieces: Piece[],
@@ -185,95 +185,38 @@ export const detectGearLinks = (
   });
 };
 
-export const differentialPairKeys = (links: RuntimeDifferentialLink[]) =>
-  new Set(
-    links.flatMap((link) => [
-      contactPairKey(link.carrier, link.left),
-      contactPairKey(link.carrier, link.right),
-      contactPairKey(link.left, link.right),
-    ]),
-  );
-
-export const detectDifferentialLinks = (
+/**
+ * Gears mounted through a differential's own sockets are internal outputs,
+ * not teeth meshing with the carrier ring. Excluding only carrier/output pairs
+ * leaves the ordinary overlap detector free to connect the internal 6589
+ * gears to one another when their real gear volumes touch.
+ */
+export const differentialCarrierGearExclusions = (
   pieces: Piece[],
-  rigidIslandByPiece?: Map<Piece, Piece[]>,
-): RuntimeDifferentialLink[] => {
-  const poses = pieces.flatMap((piece) => {
-      const pose = gearPoseForPiece(piece);
-      return pose ? [pose] : [];
-    }),
-    usedOutputs = new Set<Piece>(),
-    links: RuntimeDifferentialLink[] = [];
-  for (const carrierPose of poses.filter((pose) => isDifferentialPart(pose.value))) {
-    const carrier = carrierPose.value,
-      center = new THREE.Vector3(...carrierPose.center),
-      carrierAxis = new THREE.Vector3(...carrierPose.axis).normalize(),
-      candidates = poses
-        .filter((pose) => {
-          if (
-            pose.value === carrier ||
-            isDifferentialPart(pose.value) ||
-            usedOutputs.has(pose.value) ||
-            pose.spec.kind === "spur" ||
-            pose.spec.teeth > 20 ||
-            (rigidIslandByPiece &&
-              rigidIslandByPiece.get(pose.value) === rigidIslandByPiece.get(carrier))
-          )
-            return false;
-          const axis = new THREE.Vector3(...pose.axis).normalize(),
-            delta = new THREE.Vector3(...pose.center).sub(center),
-            axial = delta.dot(carrierAxis),
-            radial = delta.clone().addScaledVector(carrierAxis, -axial).length();
-          return (
-            Math.abs(axis.dot(carrierAxis)) >= 0.96 &&
-            radial <= 0.48 &&
-            Math.abs(axial) <= 1.35
-          );
-        })
-        .map((pose) => {
-          const delta = new THREE.Vector3(...pose.center).sub(center),
-            axial = delta.dot(carrierAxis),
-            radial = delta.clone().addScaledVector(carrierAxis, -axial).length();
-          return { pose, axial, radial };
-        });
-    let best:
-      | {
-          left: (typeof candidates)[number];
-          right: (typeof candidates)[number];
-          score: number;
-        }
-      | undefined;
-    for (let leftIndex = 0; leftIndex < candidates.length; leftIndex++)
-      for (let rightIndex = leftIndex + 1; rightIndex < candidates.length; rightIndex++) {
-        const left = candidates[leftIndex],
-          right = candidates[rightIndex],
-          separation = Math.abs(left.axial - right.axial);
-        if (separation < 0.22 || left.axial * right.axial > 0.08) continue;
-        const score =
-          left.radial +
-          right.radial +
-          Math.abs(left.axial + right.axial) -
-          separation * 0.15;
-        if (!best || score < best.score) best = { left, right, score };
+  connections: Connection[],
+): Set<string> => {
+  const excluded = new Set<string>();
+  for (const carrier of pieces.filter(isDifferentialCarrier)) {
+    const visited = new Set<Piece>([carrier]), queue = [carrier];
+    while (queue.length) {
+      const current = queue.shift()!;
+      for (const connection of connections) {
+        const next = connection.a === current
+          ? connection.b
+          : connection.b === current
+            ? connection.a
+            : undefined;
+        if (!next || visited.has(next)) continue;
+        visited.add(next);
+        queue.push(next);
       }
-    if (!best) continue;
-    const orientAxis = (pose: GearPose<Piece>) => {
-      const axis = new THREE.Vector3(...pose.axis).normalize();
-      if (axis.dot(carrierAxis) < 0) axis.negate();
-      return axis;
-    };
-    links.push({
-      carrier,
-      left: best.left.pose.value,
-      right: best.right.pose.value,
-      axisCarrier: carrierAxis,
-      axisLeft: orientAxis(best.left.pose),
-      axisRight: orientAxis(best.right.pose),
+    }
+    visited.forEach((piece) => {
+      if (piece !== carrier && piece.gear)
+        excluded.add(contactPairKey(carrier, piece));
     });
-    usedOutputs.add(best.left.pose.value);
-    usedOutputs.add(best.right.pose.value);
   }
-  return links;
+  return excluded;
 };
 
 export const gearLinkKey = (link: RuntimeGearLink) =>
