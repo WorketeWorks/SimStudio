@@ -13,6 +13,7 @@ import { preloadedConnectionMaps } from "../app/connection-maps.ts";
 import {
   preloadedCollisionMaps,
   preloadedGearCollisionMaps,
+  preloadedSpecialGearParts,
 } from "../app/collision-maps.ts";
 import {
   buildConnectorContactExclusions,
@@ -209,6 +210,15 @@ test("the 6573 differential exposes lateral sockets, a rotation-only axle stud a
   const gearVolumes = preloadedGearCollisionMaps["6573"];
   assert.equal(gearVolumes.length, 2);
   assert.deepEqual(gearVolumes.map((volume) => volume.center[2]), [-1.5, 1.5]);
+  assert.deepEqual(gearVolumes.map((volume) => volume.radius), [1.3, 0.8]);
+  assert.ok(preloadedSpecialGearParts.has("6573"));
+  const normalVolumes = preloadedCollisionMaps["6573"];
+  assert.equal(normalVolumes.length, 8);
+  assert.deepEqual(
+    normalVolumes.filter((volume) => volume.gearRatio).map((volume) => volume.gearRatio),
+    [1.5, 1],
+  );
+  assert.equal(normalVolumes.filter((volume) => volume.gearCollision).length, 6);
 });
 
 test("a shaft ignores the full rigid host islands but not adjacent mobile islands", () => {

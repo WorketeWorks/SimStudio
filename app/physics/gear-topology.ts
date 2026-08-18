@@ -55,16 +55,23 @@ type WorldGearVolume = {
   axis: THREE.Vector3;
   radius: number;
   halfHeight: number;
+  ratio?: number;
 };
 
 const worldGearVolumes = (piece: Piece): WorldGearVolume[] => {
   piece.mesh.updateMatrixWorld(true);
   const scale = piece.mesh.getWorldScale(new THREE.Vector3()),
     scaleFactor = Math.max(Math.abs(scale.x), Math.abs(scale.y), Math.abs(scale.z));
-  // The regular green collision envelope determines whether two gears are
-  // close enough to engage. The magenta gear collider remains a real physical
-  // tooth-contact layer and is not used as the link trigger.
-  return piece.colliders.flatMap((primitive) => {
+  // Ordinary gears use their green collision envelope as the engagement
+  // trigger. A special multi-ratio gear exposes only explicitly tagged zones;
+  // its magenta layer remains the real physical tooth-contact surface.
+  const primitives = piece.specialGear
+    ? piece.colliders.filter(
+        (primitive) =>
+          Number.isFinite(primitive.gearRatio) && primitive.gearRatio! > 0,
+      )
+    : piece.colliders;
+  return primitives.flatMap((primitive) => {
     if (primitive.shape !== "cylinder") return [];
     const localAxis = new THREE.Vector3(0, 1, 0)
       .applyQuaternion(primitive.rotation)
@@ -76,6 +83,7 @@ const worldGearVolumes = (piece: Piece): WorldGearVolume[] => {
         axis: localAxis.transformDirection(piece.mesh.matrixWorld).normalize(),
         radius: (primitive.radius ?? 0) * scaleFactor,
         halfHeight: (primitive.halfHeight ?? 0) * scaleFactor,
+        ratio: primitive.gearRatio,
       },
     ];
   });
@@ -121,21 +129,33 @@ export const detectGearLinks = (
       return pose ? [pose] : [];
     }),
     volumes = new Map(poses.map((pose) => [pose.value, worldGearVolumes(pose.value)])),
-    pairs: GearPair<Piece>[] = [];
+    pairs: (GearPair<Piece> & { ratioMagnitude?: number })[] = [];
   for (let left = 0; left < poses.length; left++)
     for (let right = left + 1; right < poses.length; right++) {
       const a = poses[left],
         b = poses[right];
       if (excludedPairs.has(contactPairKey(a.value, b.value))) continue;
-      const overlaps = (volumes.get(a.value) ?? []).some((volumeA) =>
-        (volumes.get(b.value) ?? []).some((volumeB) =>
-          gearVolumesOverlap(volumeA, volumeB),
-        ),
-      );
-      if (!overlaps) continue;
+      let matchingVolumes:
+        | { a: WorldGearVolume; b: WorldGearVolume }
+        | undefined;
+      for (const volumeA of volumes.get(a.value) ?? []) {
+        const volumeB = (volumes.get(b.value) ?? []).find((candidate) =>
+          gearVolumesOverlap(volumeA, candidate),
+        );
+        if (volumeB) {
+          matchingVolumes = { a: volumeA, b: volumeB };
+          break;
+        }
+      }
+      if (!matchingVolumes) continue;
       const centerDistance = new THREE.Vector3(...a.center).distanceTo(
         new THREE.Vector3(...b.center),
-      );
+        ),
+        ratioMagnitude = a.value.specialGear
+          ? matchingVolumes.a.ratio
+          : b.value.specialGear && matchingVolumes.b.ratio
+            ? 1 / matchingVolumes.b.ratio
+            : undefined;
       pairs.push({
         a,
         b,
@@ -143,6 +163,7 @@ export const detectGearLinks = (
         centerDistance,
         expectedDistance: a.spec.pitchRadius + b.spec.pitchRadius,
         distanceError: 0,
+        ratioMagnitude,
       });
     }
   return pairs.flatMap((pair) => {
@@ -175,11 +196,15 @@ export const detectGearLinks = (
     return [
       {
         ...pair,
-        ratio: -pair.a.spec.teeth / (signB * pair.b.spec.teeth),
+        ratio:
+          pair.ratioMagnitude !== undefined
+            ? -pair.ratioMagnitude / signB
+            : -pair.a.spec.teeth / (signB * pair.b.spec.teeth),
         axisA,
         axisB,
         signB,
         perpendicular,
+        ratioOverride: pair.ratioMagnitude,
       },
     ];
   });
@@ -196,7 +221,9 @@ export const differentialCarrierGearExclusions = (
   connections: Connection[],
 ): Set<string> => {
   const excluded = new Set<string>();
-  for (const carrier of pieces.filter(isDifferentialCarrier)) {
+  for (const carrier of pieces.filter(
+    (piece) => isDifferentialCarrier(piece) && !piece.specialGear,
+  )) {
     const visited = new Set<Piece>([carrier]), queue = [carrier];
     while (queue.length) {
       const current = queue.shift()!;

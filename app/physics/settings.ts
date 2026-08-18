@@ -31,6 +31,9 @@ export const COLLISION_GROUP_GEAR_NORMAL = 0x0002;
 
 export const COLLISION_GROUP_GEAR_MESH = 0x0004;
 
+/** Green colliders explicitly allowed to contact ordinary green gear bodies. */
+export const COLLISION_GROUP_SPECIAL_GEAR_CONTACT = 0x0008;
+
 /** Packs Rapier's 16-bit membership and filter masks into one value. */
 
 export const interactionGroups = (membership: number, filter: number) =>

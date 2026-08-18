@@ -33,6 +33,8 @@ export type CatalogPart = {
   geometry?: string;
   sourceColor?: number;
   gear?: boolean;
+  /** Uses ratio-tagged normal colliders to expose multiple gear engagements. */
+  specialGear?: boolean;
   origin?: PartOrigin;
   sourceKind?: PartSource;
   requestedPart?: string;
@@ -54,6 +56,7 @@ export type Piece = CatalogPart & {
   colliders: CollisionPrimitive[];
   gearColliders: CollisionPrimitive[];
   gear: boolean;
+  specialGear: boolean;
   /** Use the rendered triangle surface as the normal physics collider. */
   exactCollider: boolean;
   fixed: boolean;
@@ -88,6 +91,7 @@ export type EditorPieceSnapshot = {
   connectors: MeshConnector[];
   colliders: CollisionPrimitive[];
   gearColliders: CollisionPrimitive[];
+  specialGear: boolean;
 };
 
 export type EditorSnapshot = {
@@ -174,6 +178,8 @@ export type RuntimeGearLink = GearPair<Piece> & {
   axisB: THREE.Vector3;
   signB: number;
   perpendicular: boolean;
+  /** Positive ratio magnitude supplied by a tagged special-gear zone. */
+  ratioOverride?: number;
 };
 
 export type ManualConnectDraft = {

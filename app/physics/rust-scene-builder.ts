@@ -5,6 +5,7 @@ import {
   COLLISION_GROUP_GEAR_MESH,
   COLLISION_GROUP_GEAR_NORMAL,
   COLLISION_GROUP_NON_GEAR,
+  COLLISION_GROUP_SPECIAL_GEAR_CONTACT,
   CONTACT_FRICTION,
 } from "./settings";
 import type {
@@ -177,8 +178,11 @@ export function buildRustGearConfigs(
         axisB: vec3(link.axisB),
         centerA: [...link.a.center] as RustVec3,
         centerB: [...link.b.center] as RustVec3,
-        teethA: link.a.spec.teeth,
-        teethB: link.b.spec.teeth,
+        // Rust solves the ratio as -teethA / (signB * teethB). A tagged
+        // special zone supplies that magnitude directly instead of relying on
+        // the catalog's single tooth count for the whole carrier.
+        teethA: link.ratioOverride ?? link.a.spec.teeth,
+        teethB: link.ratioOverride ? 1 : link.b.spec.teeth,
         signB: link.signB,
       },
     ];
@@ -292,7 +296,10 @@ export function buildRustPhysicsScene(options: RustSceneBuildOptions): RustScene
         rotation: THREE.Quaternion,
         gearLayer: boolean,
         density: number,
+        gearCollision = false,
       ) => {
+        const specialGearContact =
+          !gearLayer && piece.specialGear && gearCollision;
         colliders.push({
           ownerId: piece.id,
           center: vec3(center),
@@ -305,14 +312,20 @@ export function buildRustPhysicsScene(options: RustSceneBuildOptions): RustScene
           density,
           collisionGroup: gearLayer
             ? COLLISION_GROUP_GEAR_MESH
+            : specialGearContact
+              ? COLLISION_GROUP_SPECIAL_GEAR_CONTACT
             : piece.gear
               ? COLLISION_GROUP_GEAR_NORMAL
               : COLLISION_GROUP_NON_GEAR,
           collisionMask: gearLayer
             ? COLLISION_GROUP_GEAR_MESH
+            : specialGearContact
+              ? COLLISION_GROUP_NON_GEAR | COLLISION_GROUP_GEAR_NORMAL
             : piece.gear
-              ? COLLISION_GROUP_NON_GEAR
-              : COLLISION_GROUP_NON_GEAR | COLLISION_GROUP_GEAR_NORMAL,
+              ? COLLISION_GROUP_NON_GEAR | COLLISION_GROUP_SPECIAL_GEAR_CONTACT
+              : COLLISION_GROUP_NON_GEAR |
+                COLLISION_GROUP_GEAR_NORMAL |
+                COLLISION_GROUP_SPECIAL_GEAR_CONTACT,
           shape,
         });
       };
@@ -374,6 +387,7 @@ export function buildRustPhysicsScene(options: RustSceneBuildOptions): RustScene
             false,
             (piece.kind === "motor" ? 1.7 : 1) /
               Math.max(1, piece.colliders.length),
+            primitive.gearCollision === true,
           );
         });
       }

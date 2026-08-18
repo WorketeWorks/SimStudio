@@ -427,6 +427,10 @@ export type CollisionPrimitive = {
   radius?: number;
   halfHeight?: number;
   rotation: THREE.Quaternion;
+  /** Allows this normal (green) collider to hit another gear's green layer. */
+  gearCollision?: boolean;
+  /** Engagement ratio exposed by one zone of a multi-ratio special gear. */
+  gearRatio?: number;
 };
 
 /**

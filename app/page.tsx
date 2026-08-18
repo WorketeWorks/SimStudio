@@ -28,7 +28,11 @@ import {
 } from "./connectors";
 import { paletteParts, paletteRequestAliases } from "./palette";
 import { preloadedConnectionMaps } from "./connection-maps";
-import { preloadedCollisionMaps, preloadedGearCollisionMaps } from "./collision-maps";
+import {
+  preloadedCollisionMaps,
+  preloadedGearCollisionMaps,
+  preloadedSpecialGearParts,
+} from "./collision-maps";
 import {
   buildConnectorContactExclusions,
   contactPairKey,
@@ -123,6 +127,11 @@ const AUTO_CONNECTIONS_ENABLED = true;
 
 const CORRECTION_MAP_REVISION = "2026-08-10-corrections-1";
 
+const collisionMapRevision = (part: string) =>
+  part.toLowerCase() === "6573"
+    ? "2026-08-18-6573-special-gear-1"
+    : CORRECTION_MAP_REVISION;
+
 const invalidPackagedGeometry = new Set<string>();
 
 const packagedParts = preloadedCatalog.parts as Record<
@@ -144,6 +153,8 @@ const packagedParts = preloadedCatalog.parts as Record<
       radius?: number;
       halfHeight?: number;
       rotation: number[];
+      gearCollision?: boolean;
+      gearRatio?: number;
     }[];
     gearColliders?: {
       shape: "box" | "cylinder";
@@ -152,6 +163,8 @@ const packagedParts = preloadedCatalog.parts as Record<
       radius?: number;
       halfHeight?: number;
       rotation: number[];
+      gearCollision?: boolean;
+      gearRatio?: number;
     }[];
   }
 >;
@@ -1253,7 +1266,11 @@ export default function Home() {
       }));
     const analyzePart = (wrapper: THREE.Object3D, p: CatalogPart) => {
       let connectors: MeshConnector[] | undefined = straightAxleConnectors(p.name),
-        hasSavedConnectorMap = false;
+        hasSavedConnectorMap = false,
+        specialGear =
+          p.specialGear === true ||
+          preloadedSpecialGearParts.has(p.part.toLowerCase()) ||
+          localStorage.getItem(`sim-special-gear-v1:${p.part}`) === "true";
       if (!connectors)
         try {
           const saved = localStorage.getItem(`sim-connectors-v4:${p.part}`),
@@ -1353,7 +1370,7 @@ export default function Home() {
           const saved = localStorage.getItem(`sim-colliders-v1:${p.part}`),
             savedIsCurrent =
               localStorage.getItem(`sim-colliders-revision:${p.part}`) ===
-              CORRECTION_MAP_REVISION;
+              collisionMapRevision(p.part);
           if (saved && (!preloadedCollisionMaps[p.part] || savedIsCurrent)) {
             const stored = JSON.parse(saved) as {
               shape: "box" | "cylinder";
@@ -1362,6 +1379,9 @@ export default function Home() {
               radius?: number;
               halfHeight?: number;
               rotation: number[];
+              gearCollision?: boolean;
+              gearColision?: boolean;
+              gearRatio?: number;
             }[];
             if (Array.isArray(stored))
               colliders = stored
@@ -1387,6 +1407,12 @@ export default function Home() {
                       ? Math.max(0.01, primitive.halfHeight ?? 0.5)
                       : undefined,
                   rotation: new THREE.Quaternion().fromArray(primitive.rotation),
+                  gearCollision:
+                    primitive.gearCollision === true || primitive.gearColision === true,
+                  gearRatio:
+                    Number.isFinite(primitive.gearRatio) && primitive.gearRatio! > 0
+                      ? primitive.gearRatio
+                      : undefined,
                 }));
           }
         } catch {}
@@ -1501,7 +1527,7 @@ export default function Home() {
           );
         }
       }
-      return { connectors, colliders, gearColliders };
+      return { connectors, colliders, gearColliders, specialGear };
     };
 
     const preloadPart = async (p: CatalogPart) => {
@@ -2577,7 +2603,7 @@ export default function Home() {
         wrapper.position.copy(position);
         if (rotation) wrapper.quaternion.copy(rotation);
         wrapper.updateMatrixWorld(true);
-        const { connectors, colliders, gearColliders } = analyzePart(wrapper, p),
+        const { connectors, colliders, gearColliders, specialGear } = analyzePart(wrapper, p),
           piece: Piece = {
             ...p,
             id: Date.now() + Math.random(),
@@ -2586,6 +2612,7 @@ export default function Home() {
             colliders,
             gearColliders,
             gear: isGearPart(p),
+            specialGear,
             exactCollider: false,
             fixed: false,
             pin: isPinPart(p),
@@ -3257,7 +3284,9 @@ export default function Home() {
         link.axisB.copy(sameOrder ? previous.axisB : previous.axisA);
         link.signB = previous.signB;
         link.perpendicular = previous.perpendicular;
-        link.ratio = -link.a.spec.teeth / (link.signB * link.b.spec.teeth);
+        link.ratio = link.ratioOverride
+          ? -link.ratioOverride / link.signB
+          : -link.a.spec.teeth / (link.signB * link.b.spec.teeth);
       });
       state.gearLinks = detectedGearLinks;
       if (state.world) {
@@ -4126,6 +4155,7 @@ export default function Home() {
         connectors: piece.connectors.map(cloneConnector),
         colliders: piece.colliders.map(cloneCollider),
         gearColliders: piece.gearColliders.map(cloneCollider),
+        specialGear: piece.specialGear,
       })),
       connections: state.connections.map(cloneConnection),
       connectionModes: new Map(
@@ -4146,6 +4176,7 @@ export default function Home() {
             connectors: MeshConnector[];
             colliders: CollisionPrimitive[];
             gearColliders: CollisionPrimitive[];
+            specialGear: boolean;
             fixed: boolean;
             exactCollider: boolean;
             dynamicAxleConnections: boolean;
@@ -4190,6 +4221,7 @@ export default function Home() {
           piece.connectors = item.connectors.map(cloneConnector);
           piece.colliders = item.colliders.map(cloneCollider);
           piece.gearColliders = item.gearColliders.map(cloneCollider);
+          piece.specialGear = item.specialGear;
           if (piece.fixed && !piece.lockSprite) {
             piece.lockSprite = makeLock();
             scene.add(piece.lockSprite);
@@ -4272,6 +4304,7 @@ export default function Home() {
       geometry: piece.geometry,
       sourceColor: piece.sourceColor,
       gear: piece.gear,
+      specialGear: piece.specialGear,
       origin: piece.origin,
       sourceKind: piece.sourceKind,
       requestedPart: piece.requestedPart,
@@ -4302,6 +4335,8 @@ export default function Home() {
         radius: collider.radius,
         halfHeight: collider.halfHeight,
         rotation: tuple4(collider.rotation),
+        gearCollision: collider.gearCollision,
+        gearRatio: collider.gearRatio,
       }),
       loadConnector = (connector: SavedConnector): MeshConnector => ({
         ...connector,
@@ -4421,6 +4456,7 @@ export default function Home() {
                   distanceError: link.distanceError,
                   signB: link.signB,
                   perpendicular: link.perpendicular,
+                  ratioOverride: link.ratioOverride,
                 },
               ];
         }),
@@ -4607,6 +4643,7 @@ export default function Home() {
                   axisB: new THREE.Vector3().fromArray(saved.axisB),
                   signB: saved.signB,
                   perpendicular: saved.perpendicular,
+                  ratioOverride: saved.ratioOverride,
                 },
               ];
         });
@@ -4662,6 +4699,7 @@ export default function Home() {
         connectors: piece.connectors.map(cloneConnector),
         colliders: piece.colliders.map(cloneCollider),
         gearColliders: piece.gearColliders.map(cloneCollider),
+        specialGear: piece.specialGear,
         fixed: piece.fixed,
         exactCollider: piece.exactCollider,
         dynamicAxleConnections: piece.dynamicAxleConnections,
@@ -4696,6 +4734,7 @@ export default function Home() {
       piece.connectors = clipboard.connectors.map(cloneConnector);
       piece.colliders = clipboard.colliders.map(cloneCollider);
       piece.gearColliders = clipboard.gearColliders.map(cloneCollider);
+      piece.specialGear = clipboard.specialGear;
       piece.fixed = clipboard.fixed;
       piece.exactCollider = clipboard.exactCollider;
       piece.dynamicAxleConnections = clipboard.dynamicAxleConnections;
@@ -7492,6 +7531,8 @@ export default function Home() {
         radius: primitive.radius,
         halfHeight: primitive.halfHeight,
         rotation: primitive.rotation.toArray(),
+        gearCollision: primitive.gearCollision,
+        gearRatio: primitive.gearRatio,
       }));
   // --- Collision-map editor ------------------------------------------------
 
@@ -7521,7 +7562,7 @@ export default function Home() {
       if (layer === "normal")
         localStorage.setItem(
           `sim-colliders-revision:${piece.part}`,
-          CORRECTION_MAP_REVISION,
+          collisionMapRevision(piece.part),
         );
     } catch {}
     state.debug.colliders = true;
@@ -7554,6 +7595,40 @@ export default function Home() {
       selected,
       next,
       `Mapa ${selected.part}: ${shape === "box" ? "caja" : "cilindro"} añadido`,
+    );
+  };
+
+  const setSpecialGear = (enabled: boolean) => {
+    const state = appRef.current;
+    if (!selected || !state || running) return;
+    state.recordHistory();
+    state.pieces
+      .filter((instance) => instance.part === selected.part)
+      .forEach((instance) => {
+        instance.specialGear = enabled;
+      });
+    if (enabled)
+      localStorage.setItem(`sim-special-gear-v1:${selected.part}`, "true");
+    else localStorage.removeItem(`sim-special-gear-v1:${selected.part}`);
+    setColliderRevision((value) => value + 1);
+  };
+
+  const updateColliderGearMetadata = (
+    index: number,
+    values: Pick<CollisionPrimitive, "gearCollision" | "gearRatio">,
+  ) => {
+    if (!selected || running || selectedCollisionLayer !== "normal") return;
+    const next = selectedCollisionPrimitives.map(cloneCollider),
+      primitive = next[index];
+    if (!primitive) return;
+    if (values.gearCollision !== undefined)
+      primitive.gearCollision = values.gearCollision;
+    if ("gearRatio" in values) primitive.gearRatio = values.gearRatio;
+    commitCollisionMap(
+      selected,
+      next,
+      `Mapa ${selected.part}: metadatos de engranaje actualizados`,
+      "normal",
     );
   };
 
@@ -7616,6 +7691,7 @@ export default function Home() {
         name: selected.name,
         colliders: colliderData(selected.colliders),
         gear: selected.gear,
+        specialGear: selected.specialGear,
         gearColliders: colliderData(selected.gearColliders),
       },
       a = document.createElement("a");
@@ -7636,6 +7712,9 @@ export default function Home() {
     radius?: number;
     halfHeight?: number;
     rotation?: number[];
+    gearCollision?: boolean;
+    gearColision?: boolean;
+    gearRatio?: number;
   }): CollisionPrimitive => {
     if (
       !["box", "cylinder"].includes(row.shape) ||
@@ -7662,6 +7741,11 @@ export default function Home() {
         Array.isArray(row.rotation) && row.rotation.length >= 4
           ? new THREE.Quaternion().fromArray(row.rotation).normalize()
           : new THREE.Quaternion(),
+      gearCollision: row.gearCollision === true || row.gearColision === true,
+      gearRatio:
+        Number.isFinite(row.gearRatio) && row.gearRatio! > 0
+          ? row.gearRatio
+          : undefined,
     };
   };
 
@@ -7672,6 +7756,18 @@ export default function Home() {
         rows = Array.isArray(payload) ? payload : payload.colliders;
       if (!Array.isArray(rows)) throw new Error("Formato incorrecto");
       const colliders: CollisionPrimitive[] = rows.map(collisionPrimitiveFromData);
+      const importedSpecialGear =
+        !Array.isArray(payload) &&
+        (payload.specialGear === true || payload.especialGear === true);
+      if (importedSpecialGear) {
+        const state = appRef.current;
+        state?.pieces
+          .filter((instance) => instance.part === selected.part)
+          .forEach((instance) => {
+            instance.specialGear = true;
+          });
+        localStorage.setItem(`sim-special-gear-v1:${selected.part}`, "true");
+      }
       commitCollisionMap(
         selected,
         colliders,
@@ -9157,6 +9253,14 @@ export default function Home() {
                       </button>
                     </div>
                     <p className="gear-collision-help">{t.gearCollisionHelp}</p>
+                    <label className="property-check">
+                      <input
+                        type="checkbox"
+                        checked={selected.specialGear}
+                        onChange={(event) => setSpecialGear(event.target.checked)}
+                      />
+                      {t.specialGear}
+                    </label>
                   </>
                 )}
                 <div className="map-actions collision-map-actions">
@@ -9210,6 +9314,48 @@ export default function Home() {
                           <option value="cylinder">{t.cylinder}</option>
                         </select>
                       </div>
+                      {selected.specialGear && collisionLayer === "normal" && (
+                        <div className="measure-fields">
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={primitive.gearCollision === true}
+                              onChange={(event) =>
+                                updateColliderGearMetadata(index, {
+                                  gearCollision: event.target.checked,
+                                })
+                              }
+                            />
+                            {t.greenGearCollision}
+                          </label>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={primitive.gearRatio !== undefined}
+                              onChange={(event) =>
+                                updateColliderGearMetadata(index, {
+                                  gearRatio: event.target.checked ? 1 : undefined,
+                                })
+                              }
+                            />
+                            {t.ratioZone}
+                          </label>
+                          {primitive.gearRatio !== undefined && (
+                            <label>
+                              {t.gearRatio}
+                              <DeferredNumberInput
+                                min={0.001}
+                                value={primitive.gearRatio}
+                                onCommit={(value) =>
+                                  updateColliderGearMetadata(index, {
+                                    gearRatio: Math.max(0.001, value),
+                                  })
+                                }
+                              />
+                            </label>
+                          )}
+                        </div>
+                      )}
                       <label>{t.position}</label>
                       <div className="vector-fields">
                         {primitive.center.toArray().map((value, component) => (

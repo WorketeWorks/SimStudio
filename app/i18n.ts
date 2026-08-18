@@ -115,6 +115,10 @@ export const translations = {
     gearCollision: "Colisión entre engranajes",
     gearCollisionHelp:
       "La capa especial solo choca con la capa especial de otros engranajes.",
+    specialGear: "Engranaje con varias relaciones",
+    greenGearCollision: "Este collider verde choca con engranajes",
+    ratioZone: "Zona de relación",
+    gearRatio: "RELACIÓN",
     addBox: "+ Caja",
     addCylinder: "+ Cilindro",
     box: "Caja",
@@ -312,6 +316,10 @@ export const translations = {
     gearCollision: "Gear-to-gear collision",
     gearCollisionHelp:
       "The special layer collides only with the special layer of other gears.",
+    specialGear: "Multi-ratio special gear",
+    greenGearCollision: "This green collider hits gears",
+    ratioZone: "Ratio engagement zone",
+    gearRatio: "RATIO",
     addBox: "+ Box",
     addCylinder: "+ Cylinder",
     box: "Box",

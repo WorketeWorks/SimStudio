@@ -5,10 +5,25 @@ export type StoredCollisionPrimitive = {
   radius?: number;
   halfHeight?: number;
   rotation: [number, number, number, number];
+  gearCollision?: boolean;
+  gearRatio?: number;
 };
+
+/** Parts whose engagement must be selected by ratio-tagged collision zones. */
+export const preloadedSpecialGearParts = new Set(["6573"]);
 
 // Generated from the reviewed maps exported by Sim Studio's collider editor.
 export const preloadedCollisionMaps: Record<string, StoredCollisionPrimitive[]> = {
+  "6573": [
+    { shape: "cylinder", center: [0, 0, -1.25], radius: 1.25, halfHeight: 0.25, rotation: [0.7071067811865475, 0, 0, 0.7071067811865476], gearCollision: true },
+    { shape: "cylinder", center: [0, 0, -1.75], radius: 0.85, halfHeight: 0.25, rotation: [0.7071067811865475, 0, 0, 0.7071067811865476], gearCollision: true },
+    { shape: "cylinder", center: [0, 0, -1.5], radius: 1.6, halfHeight: 0.25, rotation: [0.7071067811865475, 0, 0, 0.7071067811865476], gearCollision: false, gearRatio: 1.5 },
+    { shape: "box", center: [0, 1.075, 0], size: [1, 0.15, 2], rotation: [0, 0, 0, 1], gearCollision: true },
+    { shape: "box", center: [0, -1.075, 0], size: [1, 0.15, 2], rotation: [0, 0, 0, 1], gearCollision: true },
+    { shape: "cylinder", center: [0, 0, 1.5], radius: 1.1, halfHeight: 0.25, rotation: [0.7071067811865475, 0, 0, 0.7071067811865476], gearCollision: false, gearRatio: 1 },
+    { shape: "cylinder", center: [0, 0, 1.12], radius: 1.25, halfHeight: 0.12, rotation: [0.7071067811865475, 0, 0, 0.7071067811865476], gearCollision: true },
+    { shape: "cylinder", center: [0, 0, 1.875], radius: 0.85, halfHeight: 0.125, rotation: [0.7071067811865475, 0, 0, 0.7071067811865476], gearCollision: true }
+  ],
   "6589": [
     {
       "shape": "cylinder",
@@ -1225,20 +1240,20 @@ export const preloadedCollisionMaps: Record<string, StoredCollisionPrimitive[]> 
 
 // Optional second layer used exclusively for gear-to-gear contacts.
 export const preloadedGearCollisionMaps: Record<string, StoredCollisionPrimitive[]> = {
-  // The 6573 carrier has one internal 12T bevel engagement on each lateral
-  // output. These magenta volumes only collide with other gear volumes.
+  // Physical tooth-contact envelopes. Ratio selection uses the green tagged
+  // zones above; these magenta volumes continue to prevent tooth overlap.
   "6573": [
     {
       "shape": "cylinder",
       "center": [0, 0, -1.5],
-      "radius": 0.75,
+      "radius": 1.3,
       "halfHeight": 0.25,
       "rotation": [0.7071067811865475, 0, 0, 0.7071067811865476]
     },
     {
       "shape": "cylinder",
       "center": [0, 0, 1.5],
-      "radius": 0.75,
+      "radius": 0.8,
       "halfHeight": 0.25,
       "rotation": [0.7071067811865475, 0, 0, 0.7071067811865476]
     }

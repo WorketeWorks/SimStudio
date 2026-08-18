@@ -31,6 +31,8 @@ export type SavedCollisionPrimitive = {
   radius?: number;
   halfHeight?: number;
   rotation: [number, number, number, number];
+  gearCollision?: boolean;
+  gearRatio?: number;
 };
 
 export type SavedPiece = {
@@ -89,6 +91,7 @@ export type SavedGearLink = {
   distanceError: number;
   signB: number;
   perpendicular: boolean;
+  ratioOverride?: number;
 };
 
 export type SimStudioProjectDocument = {
@@ -241,6 +244,13 @@ const sanitizeProjectDocument = (
                 ? positiveNumber(collider.halfHeight, 0.25, 0.01)
                 : undefined,
             rotation: unitQuaternion(collider.rotation),
+            gearCollision: collider.gearCollision === true || undefined,
+            gearRatio:
+              typeof collider.gearRatio === "number" &&
+              Number.isFinite(collider.gearRatio) &&
+              collider.gearRatio > 0
+                ? collider.gearRatio
+                : undefined,
           };
         },
         scale = finiteTuple3(piece.scale, [1, 1, 1]).map((component) =>
@@ -382,6 +392,12 @@ const sanitizeProjectDocument = (
           distanceError: Math.max(0, finiteNumber(link.distanceError, 0)),
           signB: finiteNumber(link.signB, 1) < 0 ? -1 : 1,
           perpendicular: link.perpendicular === true,
+          ratioOverride:
+            typeof link.ratioOverride === "number" &&
+            Number.isFinite(link.ratioOverride) &&
+            link.ratioOverride > 0
+              ? link.ratioOverride
+              : undefined,
         } satisfies SavedGearLink,
       ];
     }),
