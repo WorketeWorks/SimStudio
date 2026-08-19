@@ -234,12 +234,13 @@ impl PhysicsEngine {
         joints::apply_axle_friction(&self.joints, &mut self.world, self.settings, timestep);
 
         let startup = self.elapsed_seconds < 0.35;
-        self.world.integration_parameters.dt = timestep / substeps as f32;
+        let substep_dt = timestep / substeps as f32;
+        self.world.integration_parameters.dt = substep_dt;
         self.world.integration_parameters.warmstart_coefficient = if startup { 0.0 } else { 0.65 };
         for _ in 0..substeps {
-            gears::project_velocities(&self.gears, &mut self.world);
+            gears::project_velocities(&self.gears, &mut self.world, substep_dt);
             self.world.step_with_events(&self.contact_filter, &());
-            gears::project_velocities(&self.gears, &mut self.world);
+            gears::project_velocities(&self.gears, &mut self.world, substep_dt);
         }
         gears::accumulate_angles(
             &mut self.gears,

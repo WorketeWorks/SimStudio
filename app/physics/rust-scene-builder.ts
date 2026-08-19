@@ -182,6 +182,39 @@ export function buildRustGearConfigs(
     const bodyA = bodyIdByPiece.get(link.a.value);
     const bodyB = bodyIdByPiece.get(link.b.value);
     if (!bodyA || !bodyB || bodyA === bodyB) return [];
+
+    const referenceFor = (piece: Piece, axis: THREE.Vector3): RustVec3 => {
+      piece.mesh.updateMatrixWorld(true);
+      const center = piece.mesh.localToWorld(new THREE.Vector3());
+
+      // Even-tooth Technic gears expose a tooth ray every 90 degrees, so any
+      // local model axis lying in the gear plane is a valid tooth reference.
+      for (const local of [
+        new THREE.Vector3(1, 0, 0),
+        new THREE.Vector3(0, 1, 0),
+        new THREE.Vector3(0, 0, 1),
+      ]) {
+        const reference = piece.mesh.localToWorld(local).sub(center);
+        reference.addScaledVector(axis, -reference.dot(axis));
+        if (reference.lengthSq() > 1.0e-8)
+          return vec3(reference.normalize());
+      }
+
+      const fallback =
+        Math.abs(axis.x) < 0.8
+          ? new THREE.Vector3(1, 0, 0)
+          : new THREE.Vector3(0, 0, 1);
+      fallback.addScaledVector(axis, -fallback.dot(axis)).normalize();
+      return vec3(fallback);
+    };
+
+    const phaseLock =
+      link.ratioOverride === undefined &&
+      Number.isInteger(link.a.spec.teeth) &&
+      Number.isInteger(link.b.spec.teeth) &&
+      link.a.spec.teeth % 2 === 0 &&
+      link.b.spec.teeth % 2 === 0;
+
     return [
       {
         id: [link.a.value.id, link.b.value.id].sort().join(":"),
@@ -193,12 +226,15 @@ export function buildRustGearConfigs(
         axisB: vec3(link.axisB),
         centerA: [...link.a.center] as RustVec3,
         centerB: [...link.b.center] as RustVec3,
+        referenceA: referenceFor(link.a.value, link.axisA),
+        referenceB: referenceFor(link.b.value, link.axisB),
         // Rust solves the ratio as -teethA / (signB * teethB). A tagged
         // special zone supplies that magnitude directly instead of relying on
         // the catalog's single tooth count for the whole carrier.
         teethA: link.ratioOverride ?? link.a.spec.teeth,
         teethB: link.ratioOverride ? 1 : link.b.spec.teeth,
         signB: link.signB,
+        phaseLock,
       },
     ];
   });

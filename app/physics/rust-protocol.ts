@@ -63,9 +63,15 @@ export type RustGearConfig = {
   axisB: RustVec3;
   centerA: RustVec3;
   centerB: RustVec3;
+  /** World-space ray that crosses a tooth centre on gear A. */
+  referenceA: RustVec3;
+  /** World-space ray that crosses a tooth centre on gear B. */
+  referenceB: RustVec3;
   teethA: number;
   teethB: number;
   signB: number;
+  /** Enables tooth/gap phase locking for ordinary even-tooth gears. */
+  phaseLock: boolean;
 };
 
 export type RustAxialStopConfig = {

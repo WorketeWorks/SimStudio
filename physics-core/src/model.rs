@@ -126,9 +126,12 @@ pub struct GearConfig {
     pub axis_b: Vec3,
     pub center_a: Vec3,
     pub center_b: Vec3,
+    pub reference_a: Vec3,
+    pub reference_b: Vec3,
     pub teeth_a: f32,
     pub teeth_b: f32,
     pub sign_b: f32,
+    pub phase_lock: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

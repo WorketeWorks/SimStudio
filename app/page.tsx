@@ -2263,6 +2263,7 @@ export default function Home() {
         // modelRenderKey ya agrupa referencias equivalentes.
         if (!pieces.length) return;
         const template = pieces[0];
+        const shouldInstanceMeshes = pieces.length >= 2;
         template.mesh.updateMatrixWorld(true);
         const templateMeshes: THREE.Mesh[] = [];
         template.mesh.traverse((child) => {
@@ -2271,51 +2272,67 @@ export default function Home() {
         if (!templateMeshes.length) return;
         const inverseWrapper = template.mesh.matrixWorld.clone().invert();
         let createdBatches = 0;
-        templateMeshes.forEach((child) => {
-          const materials = Array.isArray(child.material)
-              ? child.material
-              : [child.material],
-            ranges =
-              Array.isArray(child.material) && child.geometry.groups.length
-                ? child.geometry.groups.map((group) => ({
-                    start: group.start,
-                    count: group.count,
-                    material: materials[group.materialIndex ?? 0],
-                  }))
-                : [
-                    {
-                      start: 0,
-                      count: child.geometry.index
-                        ? child.geometry.index.count
-                        : child.geometry.getAttribute("position").count,
-                      material: materials[0],
-                    },
-                  ],
-            localTransform = inverseWrapper.clone().multiply(child.matrixWorld);
-          ranges.forEach(({ start, count, material }) => {
-            if (!material || count <= 0) return;
-            const geometry = cloneGeometryRange(child.geometry, start, count),
-              instance = new THREE.InstancedMesh(geometry, material, pieces.length);
-            instance.name = `${template.part} × ${pieces.length}`;
-            instance.castShadow = false;
-            instance.receiveShadow = true;
-            instance.frustumCulled = false;
-            instance.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-            instance.userData.instancePieces = pieces;
-            instance.userData.ownedBatchGeometry = true;
-            instance.userData.ownedBatchMaterial = false;
-            root.add(instance);
-            state.renderBatchItems.push({
-              mesh: instance,
-              pieces,
-              // Preserve the exact hierarchy transform used by the direct
-              // preview. Baking and merging differently transformed LDraw
-              // children can displace primitives in complex parts.
-              localMatrix: localTransform.clone(),
+
+        if (shouldInstanceMeshes) {
+          templateMeshes.forEach((child) => {
+            const materials = Array.isArray(child.material)
+                ? child.material
+                : [child.material],
+              ranges =
+                Array.isArray(child.material) && child.geometry.groups.length
+                  ? child.geometry.groups.map((group) => ({
+                      start: group.start,
+                      count: group.count,
+                      material: materials[group.materialIndex ?? 0],
+                    }))
+                  : [
+                      {
+                        start: 0,
+                        count: child.geometry.index
+                          ? child.geometry.index.count
+                          : child.geometry.getAttribute("position").count,
+                        material: materials[0],
+                      },
+                    ],
+              localTransform = inverseWrapper.clone().multiply(child.matrixWorld);
+
+            ranges.forEach(({ start, count, material }) => {
+              if (!material || count <= 0) return;
+
+              const geometry = cloneGeometryRange(
+                  child.geometry,
+                  start,
+                  count,
+                ),
+                instance = new THREE.InstancedMesh(
+                  geometry,
+                  material,
+                  pieces.length,
+                );
+
+              instance.name = `${template.part} × ${pieces.length}`;
+              instance.castShadow = false;
+              instance.receiveShadow = true;
+              instance.frustumCulled = false;
+
+              instance.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+
+              instance.userData.instancePieces = pieces;
+              instance.userData.ownedBatchGeometry = true;
+              instance.userData.ownedBatchMaterial = false;
+
+              root.add(instance);
+
+              state.renderBatchItems.push({
+                mesh: instance,
+                pieces,
+                localMatrix: localTransform.clone(),
+              });
+
+              createdBatches++;
             });
-            createdBatches++;
           });
-        });
+        }
         // LDraw represents outlines as many individual LineSegments objects.
         // Keeping those originals produced 6-8k draw calls on large imports.
         // Merge equal-material outlines by repeated part. Per-piece transforms
@@ -2517,19 +2534,33 @@ export default function Home() {
           createdLineBatches++;
           },
         );
-        if (!createdBatches) return;
+        if (!createdBatches && !createdLineBatches) return;
+
         pieces.forEach((piece) => {
           piece.mesh.traverse((child) => {
-            if (child instanceof THREE.Mesh) {
+            // Solo ocultamos las caras originales si realmente
+            // hemos creado un batch de caras.
+            if (
+              child instanceof THREE.Mesh &&
+              createdBatches > 0
+            ) {
               child.visible = false;
               hiddenOriginalMeshes++;
             }
-            if (child instanceof THREE.LineSegments && createdLineBatches > 0) {
+
+            // Las líneas sí pueden agruparse incluso para
+            // una única pieza.
+            if (
+              child instanceof THREE.LineSegments &&
+              createdLineBatches > 0
+            ) {
               child.visible = false;
               hiddenOriginalLines++;
             }
           });
-          piece.renderBatched = true;
+
+          piece.renderBatched =
+            createdBatches > 0 || createdLineBatches > 0;
         });
       });
       state.renderBatchStats = {
