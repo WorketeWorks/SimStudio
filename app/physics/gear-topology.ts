@@ -148,6 +148,41 @@ export const detectGearLinks = (
         }
       }
       if (!matchingVolumes) continue;
+      const centerA = new THREE.Vector3(...a.center);
+      const centerB = new THREE.Vector3(...b.center);
+
+      const axisA = new THREE.Vector3(...a.axis).normalize();
+      const axisB = new THREE.Vector3(...b.axis).normalize();
+
+      const delta = centerB.clone().sub(centerA);
+      const axisAlignment = Math.abs(axisA.dot(axisB));
+
+      if (axisAlignment >= 0.985) {
+        // Engranajes con ejes paralelos.
+        const axialDistance = Math.abs(delta.dot(axisA));
+
+        const radialDistance = delta
+          .clone()
+          .addScaledVector(axisA, -delta.dot(axisA))
+          .length();
+
+        const expectedDistance =
+          a.spec.pitchRadius + b.spec.pitchRadius;
+
+        const distanceError =
+          radialDistance - expectedDistance;
+
+        // Solo crear el link cuando los círculos de paso están realmente
+        // suficientemente cerca para que los dientes puedan engranar.
+        if (
+          axialDistance > 0.55 ||
+          distanceError > 0.14 ||
+          distanceError < -0.34
+        ) {
+          continue;
+        }
+      }
+
       const centerDistance = new THREE.Vector3(...a.center).distanceTo(
         new THREE.Vector3(...b.center),
         ),
