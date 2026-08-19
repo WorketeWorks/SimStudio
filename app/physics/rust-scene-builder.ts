@@ -127,12 +127,27 @@ export function buildRustJointConfig(
   // A dynamically captured axle must use the actual socket and shaft frames.
   // Using one already-coincident artificial frame records the current radial
   // and angular error as valid, leaving a visibly crooked axle forever.
-  const anchorA = dynamicAxle
-    ? connection.a.mesh.localToWorld(connection.socket.local.clone())
-    : anchor;
-  const anchorB = dynamicAxle
-    ? connection.b.mesh.localToWorld(connection.shaft.local.clone())
-    : anchor;
+  let anchorA = anchor;
+  let anchorB = anchor;
+
+  if (dynamicAxle) {
+    anchorA = connection.a.mesh.localToWorld(
+      connection.socket.local.clone(),
+    );
+
+    const shaftCenter = connection.b.mesh.localToWorld(
+      connection.shaft.local.clone(),
+    );
+
+    const along = anchorA
+      .clone()
+      .sub(shaftCenter)
+      .dot(worldAxisB);
+
+    anchorB = shaftCenter
+      .clone()
+      .addScaledVector(worldAxisB, along);
+  }
   const passiveMotorForce =
     connection.mode === "rotation" && connection.b.frictionPin
       ? 3.5
