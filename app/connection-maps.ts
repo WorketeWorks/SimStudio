@@ -16,7 +16,7 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
     { local: [0, 0, -1.5], axis: [0, 0, 1], kind: "round", role: "socket", diameter: 0.8, length: 0.5 },
     { local: [0, 0, 1.5], axis: [0, 0, 1], kind: "round", role: "socket", diameter: 0.8, length: 0.5 },
     // Central axle stud: exact-point snap with rotation and no linear travel.
-    { local: [0, -0.8, 0], axis: [0, 1, 0], kind: "axle", role: "shaft", diameter: 0.6, rotationOnly: true }
+    { local: [0, -0.75, 0], axis: [0, 1, 0], kind: "axle", role: "shaft", diameter: 0.6, rotationOnly: true }
   ],
   "62821": [
     { local: [0, 0, -1.25], axis: [0, 0, 1], kind: "round", role: "socket", diameter: 0.8, length: 0.5 },

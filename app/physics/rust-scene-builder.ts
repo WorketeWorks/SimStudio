@@ -209,6 +209,7 @@ export function buildRustGearConfigs(
     };
 
     const phaseLock =
+     !link.perpendicular &&
       link.ratioOverride === undefined &&
       Number.isInteger(link.a.spec.teeth) &&
       Number.isInteger(link.b.spec.teeth) &&
