@@ -2249,19 +2249,19 @@ export default function Home() {
         groups.set(key, group);
       });
       groups.forEach((pieces) => {
-        // Instancing a single part cannot save a draw call and makes its
-        // direct LDraw hierarchy unnecessarily diverge from the import
-        // preview. Keep unique parts untouched; only repeated references are
-        // worth batching.
-        if (pieces.length < 2) return;
-        // Network LDraw parts can come from different library revisions and
-        // retain a deeper BFC/subpart hierarchy than the packaged geometry.
-        // Keep that hierarchy direct; instancing is reserved for the uniform,
-        // locally precached assets.
-        if (
-          pieces.some((piece) => piece.sourceKind !== "packaged-cache" || !piece.geometry)
-        )
-          return;
+        // También procesamos piezas que aparecen una sola vez.
+        //
+        // Aunque instanciar una única malla no reduzca los draw calls de las caras,
+        // el batching de líneas LDraw que se hace más abajo sí fusiona los muchos
+        // LineSegments internos de una pieza en muy pocos draw calls.
+        //
+        // Esto es especialmente importante en modelos importados grandes, donde
+        // las referencias que aparecen una sola vez pueden conservar cientos o
+        // miles de objetos de línea individuales.
+        // La geometría real ya está cargada dentro de piece.mesh.
+        // No necesitamos exigir packaged-cache para poder hacer batching.
+        // modelRenderKey ya agrupa referencias equivalentes.
+        if (!pieces.length) return;
         const template = pieces[0];
         template.mesh.updateMatrixWorld(true);
         const templateMeshes: THREE.Mesh[] = [];
@@ -6761,16 +6761,22 @@ export default function Home() {
         piece.mesh.updateMatrixWorld(true);
       });
     }
-    s.rebuildRenderBatches();
     let connections = s.connections.length;
+
     if (AUTO_CONNECTIONS_ENABLED) {
       setMessage(
         language === "es"
           ? "Optimizando conexiones por lotes…"
           : "Optimizing connections in batches…",
       );
+
       connections = await s.verifyConnectionsAsync();
     }
+
+    // IMPORTANTE:
+    // reconstruir el render cuando toda la importación y
+    // detección de conexiones haya terminado.
+    s.rebuildRenderBatches();
     s.refreshDebug();
     s.scheduleRecoverySave();
     setMessage(
