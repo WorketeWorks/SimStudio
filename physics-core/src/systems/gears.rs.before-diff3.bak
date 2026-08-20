@@ -27,8 +27,6 @@ const MAX_PHASE_CORRECTION_SPEED: Real = 1.0;
 pub struct GearRuntime {
     pub body_a: RigidBodyHandle,
     pub body_b: RigidBodyHandle,
-    pub carrier_body: Option<RigidBodyHandle>,
-    pub local_carrier_axis: Option<Vector>,
     pub local_axis_a: Vector,
     pub local_axis_b: Vector,
     pub local_center_a: Vector,
@@ -63,47 +61,9 @@ pub fn build_gears(
             let rigid_a = world.bodies.get(body_a)?;
             let rigid_b = world.bodies.get(body_b)?;
 
-            let carrier_body = config
-                .carrier_body
-                .and_then(|id| bodies.get(&id).copied());
-
-            let local_carrier_axis =
-                match (carrier_body, config.carrier_axis) {
-                    (Some(handle), Some(axis)) => {
-                        world.bodies.get(handle).map(|rigid| {
-                            rigid
-                                .position()
-                                .inverse_transform_vector(
-                                    normalized(axis),
-                                )
-                        })
-                    }
-                    _ => None,
-                };
-
-            let carrier_body = config
-                .carrier_body
-                .and_then(|id| bodies.get(&id).copied());
-
-            let local_carrier_axis =
-                match (carrier_body, config.carrier_axis) {
-                    (Some(handle), Some(axis)) => {
-                        world.bodies.get(handle).map(|rigid| {
-                            rigid
-                                .position()
-                                .inverse_transform_vector(
-                                    normalized(axis),
-                                )
-                        })
-                    }
-                    _ => None,
-                };
-
             Some(GearRuntime {
                 body_a,
                 body_b,
-                carrier_body,
-                local_carrier_axis,
                 local_axis_a: rigid_a
                     .position()
                     .inverse_transform_vector(normalized(config.axis_a)),
@@ -206,23 +166,6 @@ fn solve_gear_velocity(
 
     let angular_a = body_a.angvel();
     let angular_b = body_b.angvel();
-
-    if gear.carrier_body.is_some()
-        && gear.local_carrier_axis.is_some()
-        && axis_a.dot(axis_b).abs() < 0.2
-    {
-        solve_differential_bevel_velocity(
-            gear,
-            world,
-            axis_a,
-            axis_b,
-            angular_a,
-            angular_b,
-            fixed_a,
-            fixed_b,
-        );
-        return;
-    }
 
     let center_delta = center_b - center_a;
 
@@ -628,156 +571,6 @@ fn solve_gear_velocity(
 /// As a result a translating/orbiting gear can still drive its neighbour, while
 /// a fully blocked train settles to exact rest instead of accumulating a tiny
 /// visible rotation over time.
-fn solve_differential_bevel_velocity(
-    gear: &GearRuntime,
-    world: &mut PhysicsWorld,
-    axis_a: Vector,
-    axis_b: Vector,
-    angular_a: Vector,
-    angular_b: Vector,
-    fixed_a: bool,
-    fixed_b: bool,
-) {
-    let Some(carrier_handle) = gear.carrier_body else {
-        return;
-    };
-
-    let Some(local_carrier_axis) = gear.local_carrier_axis else {
-        return;
-    };
-
-    if carrier_handle == gear.body_a
-        || carrier_handle == gear.body_b
-    {
-        return;
-    }
-
-    let Some(carrier_body) =
-        world.bodies.get(carrier_handle)
-    else {
-        return;
-    };
-
-    let carrier_position =
-        *carrier_body.position();
-
-    let carrier_axis =
-        carrier_position.rotation
-            * local_carrier_axis;
-
-    let angular_c =
-        carrier_body.angvel();
-
-    let fixed_c =
-        carrier_body.is_fixed();
-
-    /*
-     * El engrane se resuelve en el sistema de referencia
-     * de la carcasa.
-     *
-     * Así el satélite puede girar respecto a la carcasa
-     * y la reacción vuelve al carrier.
-     */
-    let relative_a =
-        angular_a - angular_c;
-
-    let relative_b =
-        angular_b - angular_c;
-
-    let spin_a =
-        relative_a.dot(axis_a);
-
-    let spin_b =
-        relative_b.dot(axis_b);
-
-    let ja =
-        gear.teeth_a;
-
-    let jb =
-        gear.signed_teeth_b;
-
-    let error =
-        ja * spin_a
-        + jb * spin_b;
-
-    if error.abs() < VELOCITY_EPSILON {
-        return;
-    }
-
-    /*
-     * Derivada respecto al giro del carrier.
-     */
-    let jc =
-        -(
-            ja * carrier_axis.dot(axis_a)
-            + jb * carrier_axis.dot(axis_b)
-        );
-
-    let effective_a =
-        if fixed_a {
-            0.0
-        } else {
-            ja
-        };
-
-    let effective_b =
-        if fixed_b {
-            0.0
-        } else {
-            jb
-        };
-
-    let effective_c =
-        if fixed_c {
-            0.0
-        } else {
-            jc
-        };
-
-    let denominator =
-        effective_a * effective_a
-        + effective_b * effective_b
-        + effective_c * effective_c;
-
-    if denominator <= GEOMETRY_EPSILON {
-        return;
-    }
-
-    let lambda =
-        -error / denominator;
-
-    if !fixed_a {
-        world.bodies[gear.body_a]
-            .set_angvel(
-                angular_a
-                    + axis_a
-                        * (lambda * effective_a),
-                true,
-            );
-    }
-
-    if !fixed_b {
-        world.bodies[gear.body_b]
-            .set_angvel(
-                angular_b
-                    + axis_b
-                        * (lambda * effective_b),
-                true,
-            );
-    }
-
-    if !fixed_c {
-        world.bodies[carrier_handle]
-            .set_angvel(
-                angular_c
-                    + carrier_axis
-                        * (lambda * effective_c),
-                true,
-            );
-    }
-}
-
-
 fn settle_near_rest(gear: &GearRuntime, world: &mut PhysicsWorld) {
     let Some(body_a) = world.bodies.get(gear.body_a) else {
         return;

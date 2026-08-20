@@ -122,12 +122,6 @@ pub struct JointConfig {
 pub struct GearConfig {
     pub body_a: u32,
     pub body_b: u32,
-
-    #[serde(default)]
-    pub carrier_body: Option<u32>,
-
-    #[serde(default)]
-    pub carrier_axis: Option<Vec3>,
     pub axis_a: Vec3,
     pub axis_b: Vec3,
     pub center_a: Vec3,

@@ -59,12 +59,6 @@ export type RustGearConfig = {
   nodeB: number;
   bodyA: number;
   bodyB: number;
-
-  /** Rigid body de la carcasa del diferencial. */
-  carrierBody?: number;
-
-  /** Eje mundial de rotación de la carcasa. */
-  carrierAxis?: RustVec3;
   axisA: RustVec3;
   axisB: RustVec3;
   centerA: RustVec3;

@@ -3326,7 +3326,13 @@ export default function Home() {
             piece.physicsBodyId ? ([[piece, piece.physicsBodyId]] as const) : [],
           ),
         );
-        state.world.replaceGears(buildRustGearConfigs(state.gearLinks, bodyIds));
+        state.world.replaceGears(
+          buildRustGearConfigs(
+            state.gearLinks,
+            bodyIds,
+            state.connections,
+          ),
+        );
       }
       const activeGearKeys = new Set(state.gearLinks.map(gearLinkKey));
       for (const key of state.gearPhases.keys())

@@ -177,70 +177,10 @@ export function buildRustJointConfig(
 export function buildRustGearConfigs(
   gearLinks: RuntimeGearLink[],
   bodyIdByPiece: Map<Piece, number>,
-  connections: Connection[],
 ): RustGearConfig[] {
-  const differentialCarrierRefs = new Set(["6573", "62821"]);
-
-  const isDifferentialCarrier = (piece: Piece) =>
-    [piece.part, piece.modelPart, piece.resolvedPart]
-      .filter(Boolean)
-      .some((ref) =>
-        differentialCarrierRefs.has(ref!.toLowerCase()),
-      );
-
-  const carrierForLink = (link: RuntimeGearLink) => {
-    if (!link.perpendicular) return undefined;
-
-    const candidates = [
-      {
-        satellite: link.a.value,
-        carrierAxis: link.axisB,
-      },
-      {
-        satellite: link.b.value,
-        carrierAxis: link.axisA,
-      },
-    ];
-
-    for (const candidate of candidates) {
-      for (const connection of connections) {
-        if (connection.mode !== "rotation") continue;
-
-        let carrier: Piece | undefined;
-
-        if (
-          connection.a === candidate.satellite &&
-          isDifferentialCarrier(connection.b)
-        ) {
-          carrier = connection.b;
-        } else if (
-          connection.b === candidate.satellite &&
-          isDifferentialCarrier(connection.a)
-        ) {
-          carrier = connection.a;
-        }
-
-        if (!carrier) continue;
-
-        const carrierBody = bodyIdByPiece.get(carrier);
-        if (!carrierBody) continue;
-
-        return {
-          carrierBody,
-          carrierAxis: vec3(
-            candidate.carrierAxis.clone().normalize(),
-          ),
-        };
-      }
-    }
-
-    return undefined;
-  };
-
   return gearLinks.flatMap((link) => {
     const bodyA = bodyIdByPiece.get(link.a.value);
     const bodyB = bodyIdByPiece.get(link.b.value);
-    const differentialCarrier = carrierForLink(link);
     if (!bodyA || !bodyB || bodyA === bodyB) return [];
 
     const referenceFor = (piece: Piece, axis: THREE.Vector3): RustVec3 => {
@@ -283,8 +223,6 @@ export function buildRustGearConfigs(
         nodeB: link.b.value.id,
         bodyA,
         bodyB,
-        carrierBody: differentialCarrier?.carrierBody,
-        carrierAxis: differentialCarrier?.carrierAxis,
         axisA: vec3(link.axisA),
         axisB: vec3(link.axisB),
         centerA: [...link.a.center] as RustVec3,
