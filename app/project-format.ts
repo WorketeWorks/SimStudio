@@ -48,6 +48,8 @@ export type SavedPiece = {
   dynamicAxleConnections: boolean;
   rotationPivotLocal?: [number, number, number];
   rotationPivotKey?: string;
+  gearDirectionLock?: -1 | 0 | 1;
+  gearMotor?: { key: string; speed: number; force: number };
   connectors: SavedConnector[];
   colliders: SavedCollisionPrimitive[];
   gearColliders: SavedCollisionPrimitive[];
@@ -276,6 +278,18 @@ const sanitizeProjectDocument = (
         rotationPivotKey:
           typeof piece.rotationPivotKey === "string"
             ? piece.rotationPivotKey
+            : undefined,
+        gearDirectionLock:
+          piece.gearDirectionLock === -1 || piece.gearDirectionLock === 1
+            ? piece.gearDirectionLock
+            : undefined,
+        gearMotor:
+          piece.gearMotor && typeof piece.gearMotor === "object"
+            ? {
+                key: typeof piece.gearMotor.key === "string" ? piece.gearMotor.key : "KeyM",
+                speed: typeof piece.gearMotor.speed === "number" ? piece.gearMotor.speed : 8,
+                force: typeof piece.gearMotor.force === "number" ? piece.gearMotor.force : 20,
+              }
             : undefined,
         connectors,
         colliders: (Array.isArray(piece.colliders)

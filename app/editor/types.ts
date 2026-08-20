@@ -65,6 +65,8 @@ export type Piece = CatalogPart & {
   dynamicAxleConnections: boolean;
   rotationPivotLocal?: THREE.Vector3;
   rotationPivotKey?: string;
+  gearDirectionLock?: -1 | 0 | 1;
+  gearMotor?: { key: string; speed: number; force: number };
   lockSprite?: THREE.Sprite;
   /** Numeric body identifier owned by the Rust/WASM physics core. */
   physicsBodyId?: number;
@@ -75,6 +77,10 @@ export type Piece = CatalogPart & {
   physicsIsland?: Piece[];
   physicsIslandFixed?: boolean;
   renderBatched?: boolean;
+  /** Gear-only one-way rotation restriction: -1, 0 (free), or 1. */
+  gearDirectionLock?: -1 | 0 | 1;
+  /** Gear-only keyboard motor, independent from shaft/joint motors. */
+  gearMotor?: { key: string; speed: number; force: number };
 };
 
 export type EditorPieceSnapshot = {
@@ -99,6 +105,7 @@ export type EditorSnapshot = {
   connections: Connection[];
   connectionModes: AppState["connectionModes"];
   selected?: Piece;
+  selectedPieces?: Piece[];
 };
 
 export type RenderBatchItem = {
@@ -283,6 +290,7 @@ export type AppState = {
   rotationSnapStep: RotationSnapStep;
   pieces: Piece[];
   selected?: Piece;
+  selectedPieces: Set<Piece>;
   running: boolean;
   physicsSettings: PhysicsSettings;
   world?: RustPhysicsRuntime;

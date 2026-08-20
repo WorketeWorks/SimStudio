@@ -1707,6 +1707,17 @@ export default function Home() {
           object.matrixAutoUpdate = false;
           object.matrix.copy(piece.mesh.matrixWorld);
           object.matrixWorldNeedsUpdate = true;
+        } else if (data.debugKind === "selection-outline" && piece) {
+          piece.mesh.updateMatrixWorld(true);
+          (object as THREE.BoxHelper).update();
+        } else if (data.debugKind === "gear-direction-lock" && piece) {
+          piece.mesh.updateMatrixWorld(true);
+          const axis = (data.axis as THREE.Vector3)
+            .clone()
+            .transformDirection(piece.mesh.matrixWorld)
+            .normalize();
+          object.position.copy(piece.mesh.getWorldPosition(new THREE.Vector3())).addScaledVector(axis, 0.35);
+          (object as THREE.ArrowHelper).setDirection(axis);
         } else if (data.debugKind === "connector-point" && piece)
           object.position.copy(
             piece.mesh.localToWorld((data.local as THREE.Vector3).clone()),
@@ -1759,8 +1770,12 @@ export default function Home() {
       debugRoot.children.forEach((rootObject) => {
         const kind = rootObject.userData.debugKind as string | undefined,
           order =
-            kind === "connector-point"
-              ? 90
+            kind === "gear-direction-lock"
+              ? 98
+              : kind === "selection-outline"
+                ? 96
+                : kind === "connector-point"
+                  ? 90
               : kind === "connector-axis" || kind === "joint-axis"
                 ? 80
                 : kind === "forced-joint-link" || kind === "joint-link"
@@ -1792,6 +1807,39 @@ export default function Home() {
 
     const refreshDebug = () => {
       disposeDebug();
+      for (const selected of state.selectedPieces ?? (state.selected ? new Set([state.selected]) : new Set())) {
+        selected.mesh.updateMatrixWorld(true);
+        const outline = new THREE.BoxHelper(
+          selected.mesh,
+          selected === state.selected ? 0x2b8cff : 0xffa51f,
+        );
+        outline.userData = { debugKind: "selection-outline", piece: selected };
+        outline.renderOrder = 96;
+        outline.frustumCulled = false;
+        const material = outline.material as THREE.LineBasicMaterial;
+        material.depthTest = false;
+        material.depthWrite = false;
+        material.transparent = true;
+        material.opacity = 0.95;
+        debugRoot.add(outline);
+        if (selected.gear && selected.gearDirectionLock) {
+          const localAxis = new THREE.Vector3(0, selected.gearDirectionLock > 0 ? 1 : -1, 0),
+            axis = localAxis
+            .clone()
+            .transformDirection(selected.mesh.matrixWorld)
+            .normalize();
+          const arrow = new THREE.ArrowHelper(
+            axis,
+            selected.mesh.getWorldPosition(new THREE.Vector3()).addScaledVector(axis, 0.35),
+            0.55,
+            0xff304f,
+            0.18,
+            0.12,
+          );
+          arrow.userData = { debugKind: "gear-direction-lock", piece: selected, axis: localAxis };
+          debugRoot.add(arrow);
+        }
+      }
       for (const piece of state.pieces) {
         piece.mesh.updateMatrixWorld(true);
         if (state.debug.colliders) {
@@ -2649,6 +2697,8 @@ export default function Home() {
             pin: isPinPart(p),
             frictionPin: hasPinFriction(p),
             dynamicAxleConnections: isAxlePart(p),
+            gearDirectionLock: undefined,
+            gearMotor: undefined,
           };
         wrapper.userData.piece = piece;
         wrapper.userData.connectorReach = connectorMapReach(connectors);
@@ -2684,6 +2734,7 @@ export default function Home() {
       axleSnapStep,
       rotationSnapStep,
       pieces: [],
+      selectedPieces: new Set<Piece>(),
       connections: [],
       gearLinks: [],
       gearAngles: new Map(),
@@ -3664,6 +3715,8 @@ export default function Home() {
       shiftHeld = false,
       rotationPivotHeld = false,
       moving: Piece | undefined,
+      movingGroup: Piece[] = [],
+      movingStartPositions = new Map<Piece, THREE.Vector3>(),
       movingPrepared = false,
       altCandidate: Piece | undefined,
       previous = { x: 0, y: 0 },
@@ -3673,6 +3726,7 @@ export default function Home() {
       movingStartPointer = new THREE.Vector2(),
       movingLinearAxis: THREE.Vector3 | undefined,
       movedAxially = false;
+    const gearMotorHeldKeys = new Set<string>();
     let pivotRotate:
       | {
           piece: Piece;
@@ -4174,6 +4228,8 @@ export default function Home() {
         dynamicAxleConnections: piece.dynamicAxleConnections,
         rotationPivotLocal: piece.rotationPivotLocal?.clone(),
         rotationPivotKey: piece.rotationPivotKey,
+        gearDirectionLock: piece.gearDirectionLock,
+        gearMotor: piece.gearMotor,
         connectors: piece.connectors.map(cloneConnector),
         colliders: piece.colliders.map(cloneCollider),
         gearColliders: piece.gearColliders.map(cloneCollider),
@@ -4184,6 +4240,7 @@ export default function Home() {
         [...state.connectionModes].map(([id, mode]) => [id, { ...mode }]),
       ),
       selected: state.selected,
+      selectedPieces: [...state.selectedPieces],
     });
     const undoStack: EditorSnapshot[] = [],
       redoStack: EditorSnapshot[] = [];
@@ -4191,19 +4248,26 @@ export default function Home() {
       historyBusy = false,
       clipboard:
         | {
-            catalog: CatalogPart;
-            position: THREE.Vector3;
-            rotation: THREE.Quaternion;
-            scale: THREE.Vector3;
-            connectors: MeshConnector[];
-            colliders: CollisionPrimitive[];
-            gearColliders: CollisionPrimitive[];
-            specialGear: boolean;
-            fixed: boolean;
-            exactCollider: boolean;
-            dynamicAxleConnections: boolean;
-            rotationPivotLocal?: THREE.Vector3;
-            rotationPivotKey?: string;
+            anchor: THREE.Vector3;
+            connections: Connection[];
+            items: {
+              sourceId: number;
+              catalog: CatalogPart;
+              position: THREE.Vector3;
+              rotation: THREE.Quaternion;
+              scale: THREE.Vector3;
+              connectors: MeshConnector[];
+              colliders: CollisionPrimitive[];
+              gearColliders: CollisionPrimitive[];
+              specialGear: boolean;
+              fixed: boolean;
+              exactCollider: boolean;
+              dynamicAxleConnections: boolean;
+              rotationPivotLocal?: THREE.Vector3;
+              rotationPivotKey?: string;
+              gearDirectionLock?: -1 | 0 | 1;
+              gearMotor?: { key: string; speed: number; force: number };
+            }[];
           }
         | undefined,
       pasteIndex = 0;
@@ -4240,6 +4304,8 @@ export default function Home() {
           piece.dynamicAxleConnections = item.dynamicAxleConnections;
           piece.rotationPivotLocal = item.rotationPivotLocal?.clone();
           piece.rotationPivotKey = item.rotationPivotKey;
+          piece.gearDirectionLock = item.gearDirectionLock;
+          piece.gearMotor = item.gearMotor;
           piece.connectors = item.connectors.map(cloneConnector);
           piece.colliders = item.colliders.map(cloneCollider);
           piece.gearColliders = item.gearColliders.map(cloneCollider);
@@ -4262,6 +4328,12 @@ export default function Home() {
           snapshot.selected && restoredPieces.has(snapshot.selected)
             ? snapshot.selected
             : undefined;
+        state.selectedPieces = new Set(
+          (snapshot.selectedPieces ?? (state.selected ? [state.selected] : []))
+            .filter((piece) => restoredPieces.has(piece)),
+        );
+        if (state.selected && !state.selectedPieces.has(state.selected))
+          state.selectedPieces.add(state.selected);
         state.rebuildRenderBatches();
         state.refreshDebug();
         setSelectedId(state.selected?.id ?? null);
@@ -4426,6 +4498,8 @@ export default function Home() {
               ? tuple3(piece.rotationPivotLocal)
               : undefined,
             rotationPivotKey: piece.rotationPivotKey,
+            gearDirectionLock: piece.gearDirectionLock,
+            gearMotor: piece.gearMotor,
             connectors: piece.connectors.map(saveConnector),
             colliders: piece.colliders.map(saveCollider),
             gearColliders: piece.gearColliders.map(saveCollider),
@@ -4563,6 +4637,7 @@ export default function Home() {
       state.connectionModes.clear();
       state.gearLinks = [];
       state.selected = undefined;
+      state.selectedPieces.clear();
       const piecesById = new Map<string, Piece>();
       try {
         for (const saved of document.pieces) {
@@ -4591,6 +4666,8 @@ export default function Home() {
             ? new THREE.Vector3().fromArray(saved.rotationPivotLocal)
             : undefined;
           piece.rotationPivotKey = saved.rotationPivotKey;
+          piece.gearDirectionLock = saved.gearDirectionLock;
+          piece.gearMotor = saved.gearMotor;
           piece.mesh.visible = true;
           piece.mesh.updateMatrixWorld(true);
           if (piece.fixed) {
@@ -4711,25 +4788,47 @@ export default function Home() {
     };
 
     const copySelected = () => {
-      const piece = state.selected;
-      if (!piece || state.running) return false;
+      const pieces = [
+        ...(state.selectedPieces.size
+          ? state.selectedPieces
+          : state.selected
+            ? [state.selected]
+            : []),
+      ];
+      if (!pieces.length || state.running) return false;
+      const anchor = (state.selected ?? pieces[0]).mesh.position.clone();
       clipboard = {
-        catalog: catalogFromPiece(piece),
-        position: piece.mesh.position.clone(),
-        rotation: piece.mesh.quaternion.clone(),
-        scale: piece.mesh.scale.clone(),
-        connectors: piece.connectors.map(cloneConnector),
-        colliders: piece.colliders.map(cloneCollider),
-        gearColliders: piece.gearColliders.map(cloneCollider),
-        specialGear: piece.specialGear,
-        fixed: piece.fixed,
-        exactCollider: piece.exactCollider,
-        dynamicAxleConnections: piece.dynamicAxleConnections,
-        rotationPivotLocal: piece.rotationPivotLocal?.clone(),
-        rotationPivotKey: piece.rotationPivotKey,
+        anchor,
+        connections: state.connections
+          .filter((connection) =>
+            pieces.includes(connection.a) && pieces.includes(connection.b),
+          )
+          .map(cloneConnection),
+        items: pieces.map((piece) => ({
+          sourceId: piece.id,
+          catalog: catalogFromPiece(piece),
+          position: piece.mesh.position.clone().sub(anchor),
+          rotation: piece.mesh.quaternion.clone(),
+          scale: piece.mesh.scale.clone(),
+          connectors: piece.connectors.map(cloneConnector),
+          colliders: piece.colliders.map(cloneCollider),
+          gearColliders: piece.gearColliders.map(cloneCollider),
+          specialGear: piece.specialGear,
+          fixed: piece.fixed,
+          exactCollider: piece.exactCollider,
+          dynamicAxleConnections: piece.dynamicAxleConnections,
+          rotationPivotLocal: piece.rotationPivotLocal?.clone(),
+          rotationPivotKey: piece.rotationPivotKey,
+          gearDirectionLock: piece.gearDirectionLock,
+          gearMotor: piece.gearMotor,
+        })),
       };
       pasteIndex = 0;
-      setMessage(`${piece.part} copiada`);
+      setMessage(
+        pieces.length > 1
+          ? `${pieces.length} piezas copiadas`
+          : `${pieces[0].part} copiada`,
+      );
       return true;
     };
 
@@ -4743,40 +4842,66 @@ export default function Home() {
       recordHistory();
       pasteIndex++;
       const offset = new THREE.Vector3(0.4 * pasteIndex, 0, 0.4 * pasteIndex),
-        piece = await addPart(
-          { ...clipboard.catalog },
-          clipboard.position.clone().add(offset),
-          clipboard.rotation,
+        pasted: Piece[] = [];
+      for (const item of clipboard.items) {
+        const piece = await addPart(
+          { ...item.catalog },
+          clipboard.anchor.clone().add(item.position).add(offset),
+          item.rotation,
         );
-      if (!piece) {
+        if (!piece) continue;
+        piece.mesh.scale.copy(item.scale);
+        piece.connectors = item.connectors.map(cloneConnector);
+        piece.colliders = item.colliders.map(cloneCollider);
+        piece.gearColliders = item.gearColliders.map(cloneCollider);
+        piece.specialGear = item.specialGear;
+        piece.fixed = item.fixed;
+        piece.exactCollider = item.exactCollider;
+        piece.dynamicAxleConnections = item.dynamicAxleConnections;
+        piece.rotationPivotLocal = item.rotationPivotLocal?.clone();
+        piece.rotationPivotKey = item.rotationPivotKey;
+        piece.gearDirectionLock = item.gearDirectionLock;
+        piece.gearMotor = item.gearMotor;
+        if (piece.fixed) {
+          piece.lockSprite = makeLock();
+          scene.add(piece.lockSprite);
+        }
+        piece.mesh.updateMatrixWorld(true);
+        pasted.push(piece);
+      }
+      if (!pasted.length) {
         undoStack.length = historyLength;
         return null;
       }
-      piece.mesh.scale.copy(clipboard.scale);
-      piece.connectors = clipboard.connectors.map(cloneConnector);
-      piece.colliders = clipboard.colliders.map(cloneCollider);
-      piece.gearColliders = clipboard.gearColliders.map(cloneCollider);
-      piece.specialGear = clipboard.specialGear;
-      piece.fixed = clipboard.fixed;
-      piece.exactCollider = clipboard.exactCollider;
-      piece.dynamicAxleConnections = clipboard.dynamicAxleConnections;
-      piece.rotationPivotLocal = clipboard.rotationPivotLocal?.clone();
-      piece.rotationPivotKey = clipboard.rotationPivotKey;
-      if (piece.fixed) {
-        piece.lockSprite = makeLock();
-        scene.add(piece.lockSprite);
+      for (const piece of pasted) connect(piece);
+      const pastedBySource = new Map(
+        clipboard.items.map((item, index) => [item.sourceId, pasted[index]]),
+      );
+      for (const connection of clipboard.connections) {
+        const a = pastedBySource.get(connection.a.id),
+          b = pastedBySource.get(connection.b.id);
+        if (!a || !b) continue;
+        state.connections.push({
+          ...cloneConnection(connection),
+          id: `${connection.id}:copy:${pasteIndex}`,
+          a,
+          b,
+        });
       }
-      piece.mesh.updateMatrixWorld(true);
-      connect(piece);
       void verifyConnectionsAsync();
-      state.selected = piece;
+      state.selected = pasted[0];
+      state.selectedPieces = new Set(pasted);
       state.rebuildRenderBatches();
       state.refreshDebug();
-      setSelectedId(piece.id);
+      setSelectedId(pasted[0].id);
       setCount(state.pieces.length);
       setConnectionRevision((value) => value + 1);
-      setMessage(`${piece.part} pegada`);
-      return piece;
+      setMessage(
+        pasted.length > 1
+          ? `${pasted.length} piezas pegadas`
+          : `${pasted[0].part} pegada`,
+      );
+      return pasted[0];
     };
     Object.assign(state, {
       recordHistory,
@@ -4904,6 +5029,7 @@ export default function Home() {
         hitPiece.rotationPivotLocal = anchorLocal.clone();
         hitPiece.rotationPivotKey = jointPivotKey(connection);
         state.selected = hitPiece;
+        state.selectedPieces = new Set([hitPiece]);
         pivotRotate = {
           piece: hitPiece,
           local: anchorLocal.clone(),
@@ -4971,6 +5097,7 @@ export default function Home() {
           connectorsWereVisible: state.debug.connectors,
         };
         state.selected = hitPiece;
+        state.selectedPieces = new Set([hitPiece]);
         state.debug.connectors = true;
         setSelectedId(hitPiece.id);
         setDebugViews((current) => ({ ...current, connectors: true }));
@@ -4985,6 +5112,7 @@ export default function Home() {
       if (state.running) {
         if (hit && hitPiece && !hitPiece.physicsIslandFixed && hitPiece.body) {
           state.selected = hitPiece;
+          state.selectedPieces = new Set([hitPiece]);
           setSelectedId(hitPiece.id);
           const overlay = document.createElementNS("http://www.w3.org/2000/svg", "svg"),
             line = document.createElementNS("http://www.w3.org/2000/svg", "polyline"),
@@ -5032,7 +5160,29 @@ export default function Home() {
         return;
       }
       if (hit && hitPiece) {
+        // Shift-click toggles membership in the editor's multi-selection.
+        // Ctrl/Cmd remains reserved for the existing manual-connect gesture.
+        if (e.shiftKey) {
+          if (state.selectedPieces.has(hitPiece)) {
+            if (state.selectedPieces.size > 1) {
+              state.selectedPieces.delete(hitPiece);
+              state.selected = [...state.selectedPieces].at(-1);
+              setSelectedId(state.selected?.id ?? null);
+              return;
+            }
+          } else state.selectedPieces.add(hitPiece);
+        } else if (!state.selectedPieces.has(hitPiece) || state.selectedPieces.size !== 1) {
+          state.selectedPieces = new Set([hitPiece]);
+        }
         moving = hitPiece;
+        movingGroup = [...state.selectedPieces];
+        if (!movingGroup.length) {
+          movingGroup = [hitPiece];
+          state.selectedPieces.add(hitPiece);
+        }
+        movingStartPositions = new Map(
+          movingGroup.map((piece) => [piece, piece.mesh.position.clone()]),
+        );
         movedAxially = false;
         movingPrepared = false;
         state.selected = moving;
@@ -5061,6 +5211,7 @@ export default function Home() {
           );
       } else {
         state.selected = undefined;
+        state.selectedPieces.clear();
         setSelectedId(null);
       }
     };
@@ -5208,13 +5359,18 @@ export default function Home() {
           state.recordHistory();
           movingPrepared = true;
           moved = true;
+          const movingSet = new Set(movingGroup);
           state.connections = state.connections.filter(
-            (connection) => connection.a !== moving && connection.b !== moving,
+            (connection) =>
+              !movingSet.has(connection.a) && !movingSet.has(connection.b),
           );
           rebalanceAllSmartDefaults(state);
           setConnectionRevision((value) => value + 1);
         } else moved = true;
-        const shiftActive = e.shiftKey || shiftHeld;
+        // Shift's axial/vertical drag mode is intentionally single-selection
+        // only. With a group selected it would conflict with preserving the
+        // relative offsets of the other pieces.
+        const shiftActive = movingGroup.length <= 1 && (e.shiftKey || shiftHeld);
         if (shiftActive && movingLinearAxis) {
           movedAxially = true;
           const bounds = canvas.getBoundingClientRect(),
@@ -5263,6 +5419,12 @@ export default function Home() {
                 state.gridStep
               : ground.point.z + moveOffset.y;
           }
+        }
+        const groupDelta = moving.mesh.position.clone().sub(movingStartPosition);
+        for (const piece of movingGroup) {
+          if (piece === moving) continue;
+          const start = movingStartPositions.get(piece);
+          if (start) piece.mesh.position.copy(start).add(groupDelta);
         }
         previous = { x: e.clientX, y: e.clientY };
         state.renderBatchesDirty = true;
@@ -5448,10 +5610,14 @@ export default function Home() {
       altCandidate = undefined;
       const movedPiece = moving;
       if (moving && moved) {
-        if (!movedAxially) connect(moving);
-        verifyPieceConnections(moving);
+        if (!movedAxially) {
+          for (const piece of movingGroup) connect(piece);
+        }
+        for (const piece of movingGroup) verifyPieceConnections(piece);
       }
       moving = undefined;
+      movingGroup = [];
+      movingStartPositions.clear();
       movingPrepared = false;
       movingLinearAxis = undefined;
       movedAxially = false;
@@ -5536,6 +5702,11 @@ export default function Home() {
         e.preventDefault();
         return;
       }
+      if (state.running && state.selected?.gear && state.selected.gearMotor?.key === e.code) {
+        gearMotorHeldKeys.add(e.code);
+        e.preventDefault();
+        return;
+      }
       const command = e.ctrlKey || e.metaKey;
       if (command && !e.altKey) {
         if (e.code === "KeyS") {
@@ -5562,24 +5733,34 @@ export default function Home() {
       }
       if (state.running || !state.selected) return;
       const piece = state.selected,
+        selectedPieces = [...(state.selectedPieces.size ? state.selectedPieces : new Set([piece]))],
         code = e.code;
       if (code === "Delete") {
         e.preventDefault();
         state.recordHistory();
-        scene.remove(piece.mesh);
-        if (piece.lockSprite) scene.remove(piece.lockSprite);
-        state.pieces = state.pieces.filter((item) => item !== piece);
+        const selectedSet = new Set(selectedPieces);
+        for (const selected of selectedPieces) {
+          scene.remove(selected.mesh);
+          if (selected.lockSprite) scene.remove(selected.lockSprite);
+        }
+        state.pieces = state.pieces.filter((item) => !selectedSet.has(item));
         state.rebuildRenderBatches();
         state.connections = state.connections.filter(
-          (connection) => connection.a !== piece && connection.b !== piece,
+          (connection) =>
+            !selectedSet.has(connection.a) && !selectedSet.has(connection.b),
         );
         rebalanceAllSmartDefaults(state);
         state.selected = undefined;
+        state.selectedPieces.clear();
         refreshDebug();
         setSelectedId(null);
         setCount(state.pieces.length);
         setConnectionRevision((value) => value + 1);
-        setMessage(`${piece.part} eliminada`);
+        setMessage(
+          selectedPieces.length > 1
+            ? `${selectedPieces.length} piezas eliminadas`
+            : `${piece.part} eliminada`,
+        );
         return;
       }
       if (e.repeat) return;
@@ -5623,6 +5804,7 @@ export default function Home() {
     };
 
     const keyup = (e: KeyboardEvent) => {
+      gearMotorHeldKeys.delete(e.code);
       if (e.code === "ShiftLeft" || e.code === "ShiftRight") {
         shiftHeld = false;
         updateManualForceMode(false);
@@ -5802,6 +5984,38 @@ export default function Home() {
           phaseStarted = performance.now();
           const frameTimestep = Math.min(clock.getDelta(), 1 / 60);
           state.world.timestep = frameTimestep;
+          // Gear motors and one-way restrictions are intentionally handled on
+          // the gear body itself, separate from shaft/joint motors.
+          state.pieces.forEach((piece) => {
+            if (!piece.body || !piece.gear) return;
+            piece.mesh.updateMatrixWorld(true);
+            const axis = new THREE.Vector3(0, 1, 0)
+              .transformDirection(piece.mesh.matrixWorld)
+              .normalize();
+            if (piece.gearMotor && gearMotorHeldKeys.has(piece.gearMotor.key)) {
+              const angular = piece.body.angvel(),
+                currentSpeed = new THREE.Vector3(angular.x, angular.y, angular.z).dot(axis),
+                error = piece.gearMotor.speed - currentSpeed,
+                impulse = THREE.MathUtils.clamp(
+                  error * piece.body.mass(),
+                  -Math.abs(piece.gearMotor.force),
+                  Math.abs(piece.gearMotor.force),
+                );
+              piece.body.applyTorqueImpulse(axis.clone().multiplyScalar(impulse));
+            }
+            const lock = piece.gearDirectionLock;
+            if (lock) {
+              const angular = piece.body.angvel();
+              const velocity = new THREE.Vector3(angular.x, angular.y, angular.z);
+              const projected = velocity.dot(axis);
+              if (projected * lock < 0)
+                piece.body.setAngvel({
+                  x: velocity.x - axis.x * projected,
+                  y: velocity.y - axis.y * projected,
+                  z: velocity.z - axis.z * projected,
+                });
+            }
+          });
           // One boundary crossing advances forces, motors, joints, gear phase,
           // Rapier and SIMD transform packing. No Rust-owned object is exposed
           // to JavaScript, eliminating wasm-bindgen aliasing crashes.
@@ -8969,6 +9183,59 @@ export default function Home() {
                 <div className="data-row">
                   <span>{language === "es" ? "Radio primitivo" : "Pitch radius"}</span>
                   <b>{selectedGearSpec.pitchRadius.toFixed(3)} studs</b>
+                </div>
+                <label className="property-check">
+                  <span>{language === "es" ? "Restricción de giro" : "Rotation restriction"}</span>
+                  <select
+                    value={selected.gearDirectionLock ?? 0}
+                    disabled={running}
+                    onChange={(event) => {
+                      appRef.current?.recordHistory();
+                      const value = Number(event.target.value) as -1 | 0 | 1;
+                      selected.gearDirectionLock = value || undefined;
+                      state.refreshDebug();
+                      setConnectionRevision((revision) => revision + 1);
+                    }}
+                  >
+                    <option value={0}>{language === "es" ? "Libre" : "Free"}</option>
+                    <option value={1}>{language === "es" ? "Solo sentido horario" : "Clockwise only"}</option>
+                    <option value={-1}>{language === "es" ? "Solo sentido antihorario" : "Counter-clockwise only"}</option>
+                  </select>
+                </label>
+                <div className="connection-editor gear-motor-editor">
+                  <label>{language === "es" ? "Motor del engranaje" : "Gear motor"}</label>
+                  <div className="data-row">
+                    <span>{language === "es" ? "Tecla" : "Key"}</span>
+                    <input
+                      value={selected.gearMotor?.key ?? "KeyM"}
+                      disabled={running}
+                      onChange={(event) => {
+                        selected.gearMotor = {
+                          key: event.target.value || "KeyM",
+                          speed: selected.gearMotor?.speed ?? 8,
+                          force: selected.gearMotor?.force ?? 20,
+                        };
+                        setConnectionRevision((revision) => revision + 1);
+                      }}
+                    />
+                  </div>
+                  <div className="data-row">
+                    <span>{language === "es" ? "Velocidad" : "Speed"}</span>
+                    <input
+                      type="number"
+                      value={selected.gearMotor?.speed ?? 8}
+                      disabled={running}
+                      onChange={(event) => {
+                        selected.gearMotor = {
+                          key: selected.gearMotor?.key ?? "KeyM",
+                          speed: Number(event.target.value) || 0,
+                          force: selected.gearMotor?.force ?? 20,
+                        };
+                        setConnectionRevision((revision) => revision + 1);
+                      }}
+                    />
+                  </div>
+                  <small>{language === "es" ? "Mantén la tecla durante la simulación para accionar este engranaje." : "Hold the key during simulation to drive this gear."}</small>
                 </div>
                 {selectedGearLinks.length ? (
                   selectedGearLinks.map((link) => {
