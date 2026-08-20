@@ -189,11 +189,44 @@ export function buildRustGearConfigs(
         [leftBody, rightBody].sort((a, b) => a - b).join(":"),
       ),
   );
+  const differentialInternalPairs = new Set(differentialSidePairs);
+  const differentialRefs = new Set(["6573", "62821"]);
+  const isCarrier = (piece: Piece) =>
+    [piece.part, piece.modelPart, piece.resolvedPart]
+      .filter(Boolean)
+      .some((ref) => differentialRefs.has(ref!.toLowerCase()));
+  for (const carrier of connectedPieces.filter(isCarrier)) {
+    const carrierBody = bodyIdByPiece.get(carrier);
+    if (!carrierBody) continue;
+    const differential = buildRustDifferentialConfigs(
+      connectedPieces,
+      connections,
+      bodyIdByPiece,
+    ).find((candidate) => candidate.carrierBody === carrierBody);
+    if (!differential) continue;
+    const satelliteBodies = connections.flatMap((connection) => {
+      if (connection.mode !== "rotation" || connection.profile !== "axle-cross") return [];
+      const satellite = connection.a === carrier
+        ? connection.b
+        : connection.b === carrier
+          ? connection.a
+          : undefined;
+      const body = satellite && bodyIdByPiece.get(satellite);
+      return body && body !== carrierBody ? [body] : [];
+    });
+    for (const satelliteBody of satelliteBodies) {
+      for (const sideBody of [differential.leftBody, differential.rightBody]) {
+        differentialInternalPairs.add(
+          [satelliteBody, sideBody].sort((a, b) => a - b).join(":"),
+        );
+      }
+    }
+  }
   return gearLinks.flatMap((link) => {
     const bodyA = bodyIdByPiece.get(link.a.value);
     const bodyB = bodyIdByPiece.get(link.b.value);
     if (!bodyA || !bodyB || bodyA === bodyB) return [];
-    if (differentialSidePairs.has(
+    if (differentialInternalPairs.has(
       [bodyA, bodyB].sort((a, b) => a - b).join(":"),
     )) return [];
 
