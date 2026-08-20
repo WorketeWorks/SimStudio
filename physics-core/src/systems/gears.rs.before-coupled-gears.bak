@@ -5,7 +5,7 @@ use rapier3d::prelude::*;
 use crate::math::{normalized, vector};
 use crate::model::GearConfig;
 
-const VELOCITY_SOLVER_PASSES: usize = 1;
+const VELOCITY_SOLVER_PASSES: usize = 16;
 const BEVEL_SOLVER_PASSES: usize = 1;
 const VELOCITY_EPSILON: Real = 1.0e-6;
 const GEOMETRY_EPSILON: Real = 1.0e-8;
@@ -286,24 +286,7 @@ fn solve_gear_velocity(
 
     if perpendicular {
         let contact = (pitch_point_a + pitch_point_b) * 0.5;
-
-        let phase_bias = bevel_phase_velocity_bias(
-            gear,
-            world,
-            radial_a,
-            radial_b,
-            radius_a,
-            radius_b,
-            dt,
-        );
-
-        solve_bevel_contact_impulse(
-            gear,
-            world,
-            contact,
-            tangent,
-            phase_bias,
-        );
+        solve_bevel_contact_impulse(gear, world, contact, tangent);
         return;
     }
 
@@ -412,68 +395,6 @@ fn solve_gear_velocity(
     }
 }
 
-fn bevel_phase_velocity_bias(
-    gear: &GearRuntime,
-    world: &PhysicsWorld,
-    radial_a: Vector,
-    radial_b: Vector,
-    radius_a: Real,
-    radius_b: Real,
-    dt: Real,
-) -> Real {
-    if !gear.phase_lock || dt <= 1.0e-6 {
-        return 0.0;
-    }
-
-    let Some(body_a) = world.bodies.get(gear.body_a) else {
-        return 0.0;
-    };
-    let Some(body_b) = world.bodies.get(gear.body_b) else {
-        return 0.0;
-    };
-
-    let position_a = *body_a.position();
-    let position_b = *body_b.position();
-
-    let axis_a = position_a.rotation * gear.local_axis_a;
-    let axis_b = position_b.rotation * gear.local_axis_b;
-
-    let reference_a_world = position_a.rotation * gear.local_reference_a;
-    let reference_b_world = position_b.rotation * gear.local_reference_b;
-
-    let reference_a_plane =
-        reference_a_world - axis_a * reference_a_world.dot(axis_a);
-    let reference_b_plane =
-        reference_b_world - axis_b * reference_b_world.dot(axis_b);
-
-    if reference_a_plane.length_squared() <= GEOMETRY_EPSILON
-        || reference_b_plane.length_squared() <= GEOMETRY_EPSILON
-    {
-        return 0.0;
-    }
-
-    let ref_a = reference_a_plane.normalize();
-    let ref_b = reference_b_plane.normalize();
-
-    let angle_a = signed_angle_around_axis(ref_a, radial_a, axis_a);
-    let angle_b = signed_angle_around_axis(ref_b, radial_b, axis_b);
-
-    let teeth_b = gear.signed_teeth_b.abs().max(1.0);
-    let sign_b = if gear.signed_teeth_b < 0.0 { -1.0 } else { 1.0 };
-
-    let phase_a = wrap_pi(gear.teeth_a * angle_a);
-    let phase_b = wrap_pi(teeth_b * angle_b);
-    let phase_error =
-        wrap_pi(phase_a + sign_b * phase_b - std::f32::consts::PI);
-
-    let pitch_scale = 0.5
-        * (radius_a / gear.teeth_a.max(1.0)
-            + radius_b / teeth_b);
-
-    (phase_error * pitch_scale * 0.20 / dt).clamp(-0.30, 0.30)
-}
-
-
 fn point_impulse_denominator(
     body: &RigidBody,
     point: Vector,
@@ -500,7 +421,6 @@ fn solve_bevel_contact_impulse(
     world: &mut PhysicsWorld,
     contact: Vector,
     tangent: Vector,
-    phase_bias: Real,
 ) {
     let (
         relative_speed,
@@ -533,9 +453,7 @@ fn solve_bevel_contact_impulse(
         )
     };
 
-    let error = relative_speed - phase_bias;
-
-    if error.abs() < VELOCITY_EPSILON {
+    if relative_speed.abs() < VELOCITY_EPSILON {
         return;
     }
 
@@ -543,7 +461,7 @@ fn solve_bevel_contact_impulse(
         return;
     }
 
-    let lambda = -error / denominator;
+    let lambda = -relative_speed / denominator;
     let impulse = tangent * lambda;
 
     if !fixed_a {
