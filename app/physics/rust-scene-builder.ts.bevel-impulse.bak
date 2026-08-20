@@ -177,17 +177,78 @@ export function buildRustJointConfig(
 export function buildRustGearConfigs(
   gearLinks: RuntimeGearLink[],
   bodyIdByPiece: Map<Piece, number>,
-  _connections?: Connection[],
+  connections: Connection[],
 ): RustGearConfig[] {
+  const differentialCarrierRefs = new Set(["6573", "62821"]);
+
+  const isDifferentialCarrier = (piece: Piece) =>
+    [piece.part, piece.modelPart, piece.resolvedPart]
+      .filter(Boolean)
+      .some((ref) =>
+        differentialCarrierRefs.has(ref!.toLowerCase()),
+      );
+
+  const carrierForLink = (link: RuntimeGearLink) => {
+    if (!link.perpendicular) return undefined;
+
+    const candidates = [
+      {
+        satellite: link.a.value,
+        carrierAxis: link.axisB,
+      },
+      {
+        satellite: link.b.value,
+        carrierAxis: link.axisA,
+      },
+    ];
+
+    for (const candidate of candidates) {
+      for (const connection of connections) {
+        if (connection.mode !== "rotation") continue;
+
+        let carrier: Piece | undefined;
+
+        if (
+          connection.a === candidate.satellite &&
+          isDifferentialCarrier(connection.b)
+        ) {
+          carrier = connection.b;
+        } else if (
+          connection.b === candidate.satellite &&
+          isDifferentialCarrier(connection.a)
+        ) {
+          carrier = connection.a;
+        }
+
+        if (!carrier) continue;
+
+        const carrierBody = bodyIdByPiece.get(carrier);
+        if (!carrierBody) continue;
+
+        return {
+          carrierBody,
+          carrierAxis: vec3(
+            candidate.carrierAxis.clone().normalize(),
+          ),
+        };
+      }
+    }
+
+    return undefined;
+  };
+
   return gearLinks.flatMap((link) => {
     const bodyA = bodyIdByPiece.get(link.a.value);
     const bodyB = bodyIdByPiece.get(link.b.value);
+    const differentialCarrier = carrierForLink(link);
     if (!bodyA || !bodyB || bodyA === bodyB) return [];
 
     const referenceFor = (piece: Piece, axis: THREE.Vector3): RustVec3 => {
       piece.mesh.updateMatrixWorld(true);
       const center = piece.mesh.localToWorld(new THREE.Vector3());
 
+      // Even-tooth Technic gears expose a tooth ray every 90 degrees, so any
+      // local model axis lying in the gear plane is a valid tooth reference.
       for (const local of [
         new THREE.Vector3(1, 0, 0),
         new THREE.Vector3(0, 1, 0),
@@ -208,7 +269,7 @@ export function buildRustGearConfigs(
     };
 
     const phaseLock =
-      !link.perpendicular &&
+     !link.perpendicular &&
       link.ratioOverride === undefined &&
       Number.isInteger(link.a.spec.teeth) &&
       Number.isInteger(link.b.spec.teeth) &&
@@ -222,12 +283,17 @@ export function buildRustGearConfigs(
         nodeB: link.b.value.id,
         bodyA,
         bodyB,
+        carrierBody: differentialCarrier?.carrierBody,
+        carrierAxis: differentialCarrier?.carrierAxis,
         axisA: vec3(link.axisA),
         axisB: vec3(link.axisB),
         centerA: [...link.a.center] as RustVec3,
         centerB: [...link.b.center] as RustVec3,
         referenceA: referenceFor(link.a.value, link.axisA),
         referenceB: referenceFor(link.b.value, link.axisB),
+        // Rust solves the ratio as -teethA / (signB * teethB). A tagged
+        // special zone supplies that magnitude directly instead of relying on
+        // the catalog's single tooth count for the whole carrier.
         teethA: link.ratioOverride ?? link.a.spec.teeth,
         teethB: link.ratioOverride ? 1 : link.b.spec.teeth,
         signB: link.signB,
