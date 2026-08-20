@@ -1,6 +1,8 @@
 use wasm_bindgen::prelude::*;
+use wgpu::util::DeviceExt;
 
 const INSTANCE_FLOATS: usize = 20;
+const MSAA_SAMPLE_COUNT: u32 = 4;
 
 const PREPARE_INSTANCES_SHADER: &str = r#"
 struct Instance {
@@ -29,7 +31,11 @@ struct Instance {
     transform_3: vec4<f32>,
     color_flags: vec4<f32>,
 };
-struct Camera { view_projection: mat4x4<f32> };
+struct Camera {
+    view_projection: mat4x4<f32>,
+    eye_fog_near: vec4<f32>,
+    fog_color_far: vec4<f32>,
+};
 
 @group(0) @binding(0) var<storage, read> instances: array<Instance>;
 @group(1) @binding(0) var<uniform> camera: Camera;
@@ -76,6 +82,125 @@ fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
+const MESH_SHADER: &str = r#"
+struct Instance {
+    transform_0: vec4<f32>,
+    transform_1: vec4<f32>,
+    transform_2: vec4<f32>,
+    transform_3: vec4<f32>,
+    color_flags: vec4<f32>,
+};
+struct Camera {
+    view_projection: mat4x4<f32>,
+    eye_fog_near: vec4<f32>,
+    fog_color_far: vec4<f32>,
+};
+
+@group(0) @binding(0) var<storage, read> instances: array<Instance>;
+@group(1) @binding(0) var<uniform> camera: Camera;
+
+struct VertexInput {
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+};
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) world_normal: vec3<f32>,
+    @location(1) color: vec3<f32>,
+    @location(2) selected: f32,
+    @location(3) fog_distance: f32,
+};
+
+@vertex
+fn vertex_main(input: VertexInput, @builtin(instance_index) instance_index: u32) -> VertexOutput {
+    let item = instances[instance_index];
+    let model = mat4x4<f32>(item.transform_0, item.transform_1, item.transform_2, item.transform_3);
+    let world_position = model * vec4(input.position, 1.0);
+    var output: VertexOutput;
+    output.position = camera.view_projection * world_position;
+    output.world_normal = normalize(mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz) * input.normal);
+    output.color = item.color_flags.rgb;
+    output.selected = item.color_flags.w;
+    output.fog_distance = distance(world_position.xyz, camera.eye_fog_near.xyz);
+    return output;
+}
+
+@fragment
+fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    let light_direction = normalize(vec3(0.45, 0.85, 0.35));
+    let diffuse = max(dot(normalize(input.world_normal), light_direction), 0.0);
+    var color = input.color * (0.34 + diffuse * 0.66);
+    color = mix(color, vec3(1.0, 0.55, 0.04), clamp(input.selected, 0.0, 1.0) * 0.42);
+    if (camera.fog_color_far.w > camera.eye_fog_near.w) {
+        let fog = smoothstep(camera.eye_fog_near.w, camera.fog_color_far.w, input.fog_distance);
+        color = mix(color, camera.fog_color_far.rgb, fog);
+    }
+    return vec4(pow(clamp(color, vec3(0.0), vec3(1.0)), vec3(1.0 / 2.2)), 1.0);
+}
+"#;
+
+const LINE_SHADER: &str = r#"
+struct Instance {
+    transform_0: vec4<f32>,
+    transform_1: vec4<f32>,
+    transform_2: vec4<f32>,
+    transform_3: vec4<f32>,
+    color_flags: vec4<f32>,
+};
+struct Camera {
+    view_projection: mat4x4<f32>,
+    eye_fog_near: vec4<f32>,
+    fog_color_far: vec4<f32>,
+};
+
+@group(0) @binding(0) var<storage, read> instances: array<Instance>;
+@group(1) @binding(0) var<uniform> camera: Camera;
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) color: vec3<f32>,
+    @location(1) world_position: vec3<f32>,
+};
+
+@vertex
+fn vertex_main(@location(0) position: vec3<f32>, @builtin(instance_index) instance_index: u32) -> VertexOutput {
+    let item = instances[instance_index];
+    let model = mat4x4<f32>(item.transform_0, item.transform_1, item.transform_2, item.transform_3);
+    let world_position = model * vec4(position, 1.0);
+    var output: VertexOutput;
+    output.position = camera.view_projection * world_position;
+    output.color = mix(item.color_flags.rgb, vec3(1.0, 0.64, 0.08), clamp(item.color_flags.w, 0.0, 1.0));
+    output.world_position = world_position.xyz;
+    return output;
+}
+
+@fragment
+fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    var color = input.color;
+    if (camera.fog_color_far.w > camera.eye_fog_near.w) {
+        let fog_distance = distance(input.world_position, camera.eye_fog_near.xyz);
+        let fog = smoothstep(camera.eye_fog_near.w, camera.fog_color_far.w, fog_distance);
+        color = mix(color, camera.fog_color_far.rgb, fog);
+    }
+    return vec4(pow(clamp(color, vec3(0.0), vec3(1.0)), vec3(1.0 / 2.2)), 1.0);
+}
+"#;
+
+struct MeshBatch {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
+    first_instance: u32,
+    instance_count: u32,
+}
+
+struct LineBatch {
+    vertex_buffer: wgpu::Buffer,
+    vertex_count: u32,
+    first_instance: u32,
+    instance_count: u32,
+}
+
 fn js_error(context: &str, error: impl core::fmt::Display) -> JsValue {
     JsValue::from_str(&format!("{context}: {error}"))
 }
@@ -96,9 +221,15 @@ pub struct RenderCore {
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
     render_pipeline: wgpu::RenderPipeline,
+    mesh_pipeline: wgpu::RenderPipeline,
+    line_pipeline: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     depth_texture: wgpu::Texture,
+    msaa_texture: wgpu::Texture,
+    mesh_batches: Vec<MeshBatch>,
+    line_batches: Vec<LineBatch>,
+    clear_color: wgpu::Color,
 }
 
 #[wasm_bindgen]
@@ -191,7 +322,7 @@ impl RenderCore {
         );
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Sim Studio camera uniform"),
-            size: 64,
+            size: 96,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -199,7 +330,7 @@ impl RenderCore {
             label: Some("Sim Studio camera layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -248,7 +379,10 @@ impl RenderCore {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: wgpu::MultisampleState {
+                count: MSAA_SAMPLE_COUNT,
+                ..Default::default()
+            },
             fragment: Some(wgpu::FragmentState {
                 module: &render_shader,
                 entry_point: Some("fragment_main"),
@@ -262,7 +396,108 @@ impl RenderCore {
             multiview_mask: None,
             cache: None,
         });
+        let mesh_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Sim Studio scene mesh shader"),
+            source: wgpu::ShaderSource::Wgsl(MESH_SHADER.into()),
+        });
+        let mesh_vertex_attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+        let mesh_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Sim Studio scene mesh pipeline"),
+            layout: Some(&render_layout),
+            vertex: wgpu::VertexState {
+                module: &mesh_shader,
+                entry_point: Some("vertex_main"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: 6 * core::mem::size_of::<f32>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &mesh_vertex_attributes,
+                }],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                front_face: wgpu::FrontFace::Ccw,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24Plus,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: MSAA_SAMPLE_COUNT,
+                ..Default::default()
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &mesh_shader,
+                entry_point: Some("fragment_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let line_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Sim Studio scene line shader"),
+            source: wgpu::ShaderSource::Wgsl(LINE_SHADER.into()),
+        });
+        let line_vertex_attributes = wgpu::vertex_attr_array![0 => Float32x3];
+        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Sim Studio scene line pipeline"),
+            layout: Some(&render_layout),
+            vertex: wgpu::VertexState {
+                module: &line_shader,
+                entry_point: Some("vertex_main"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: 3 * core::mem::size_of::<f32>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &line_vertex_attributes,
+                }],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24Plus,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: MSAA_SAMPLE_COUNT,
+                ..Default::default()
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &line_shader,
+                entry_point: Some("fragment_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let depth_texture = Self::create_depth_texture(&device, surface_config.width, surface_config.height);
+        let msaa_texture = Self::create_msaa_texture(
+            &device,
+            surface_config.width,
+            surface_config.height,
+            surface_config.format,
+        );
         Ok(RenderCore {
             adapter_name,
             device,
@@ -278,9 +513,15 @@ impl RenderCore {
             surface,
             surface_config,
             render_pipeline,
+            mesh_pipeline,
+            line_pipeline,
             camera_buffer,
             camera_bind_group,
             depth_texture,
+            msaa_texture,
+            mesh_batches: Vec::new(),
+            line_batches: Vec::new(),
+            clear_color: wgpu::Color { r: 0.025, g: 0.035, b: 0.065, a: 1.0 },
         })
     }
 
@@ -289,6 +530,126 @@ impl RenderCore {
 
     #[wasm_bindgen(getter, js_name = instanceCount)]
     pub fn instance_count(&self) -> u32 { self.instance_count }
+
+    #[wasm_bindgen(getter, js_name = drawCalls)]
+    pub fn draw_calls(&self) -> u32 {
+        if self.mesh_batches.is_empty() && self.line_batches.is_empty() {
+            u32::from(self.instance_count > 0)
+        } else {
+            (self.mesh_batches.len() + self.line_batches.len()).min(u32::MAX as usize) as u32
+        }
+    }
+
+    #[wasm_bindgen(getter, js_name = triangleCount)]
+    pub fn triangle_count(&self) -> u32 {
+        if self.mesh_batches.is_empty() && self.line_batches.is_empty() {
+            return self.instance_count.saturating_mul(12);
+        }
+        self.mesh_batches.iter().fold(0_u32, |total, batch| {
+            total.saturating_add((batch.index_count / 3).saturating_mul(batch.instance_count))
+        })
+    }
+
+    #[wasm_bindgen(getter, js_name = lineCount)]
+    pub fn line_count(&self) -> u32 {
+        self.line_batches.iter().fold(0_u32, |total, batch| {
+            total.saturating_add((batch.vertex_count / 2).saturating_mul(batch.instance_count))
+        })
+    }
+
+    #[wasm_bindgen(js_name = setClearColor)]
+    pub fn set_clear_color(&mut self, red: f64, green: f64, blue: f64, alpha: f64) {
+        self.clear_color = wgpu::Color {
+            r: red.clamp(0.0, 1.0),
+            g: green.clamp(0.0, 1.0),
+            b: blue.clamp(0.0, 1.0),
+            a: alpha.clamp(0.0, 1.0),
+        };
+    }
+
+    #[wasm_bindgen(js_name = clearGeometry)]
+    pub fn clear_geometry(&mut self) {
+        self.mesh_batches.clear();
+        self.line_batches.clear();
+    }
+
+    #[wasm_bindgen(js_name = addMesh)]
+    pub fn add_mesh(
+        &mut self,
+        positions: &[f32],
+        normals: &[f32],
+        indices: &[u32],
+        first_instance: u32,
+        instance_count: u32,
+    ) -> Result<(), JsValue> {
+        if positions.is_empty() || positions.len() % 3 != 0 {
+            return Err(JsValue::from_str("Mesh positions must contain XYZ vertices"));
+        }
+        if normals.len() != positions.len() {
+            return Err(JsValue::from_str("Mesh normals must match mesh positions"));
+        }
+        if indices.is_empty() || indices.len() % 3 != 0 {
+            return Err(JsValue::from_str("Mesh indices must contain complete triangles"));
+        }
+        let vertex_count = positions.len() / 3;
+        if indices.iter().any(|index| *index as usize >= vertex_count) {
+            return Err(JsValue::from_str("Mesh index exceeds the vertex count"));
+        }
+        first_instance
+            .checked_add(instance_count)
+            .ok_or_else(|| JsValue::from_str("Mesh instance range overflow"))?;
+        let mut vertices = Vec::with_capacity(vertex_count * 6);
+        for vertex in 0..vertex_count {
+            let offset = vertex * 3;
+            vertices.extend_from_slice(&positions[offset..offset + 3]);
+            vertices.extend_from_slice(&normals[offset..offset + 3]);
+        }
+        let vertex_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Sim Studio scene vertices"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let index_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Sim Studio scene indices"),
+            contents: bytemuck::cast_slice(indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        self.mesh_batches.push(MeshBatch {
+            vertex_buffer,
+            index_buffer,
+            index_count: indices.len() as u32,
+            first_instance,
+            instance_count,
+        });
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = addLines)]
+    pub fn add_lines(
+        &mut self,
+        positions: &[f32],
+        first_instance: u32,
+        instance_count: u32,
+    ) -> Result<(), JsValue> {
+        if positions.is_empty() || positions.len() % 6 != 0 {
+            return Err(JsValue::from_str("Line positions must contain complete XYZ pairs"));
+        }
+        first_instance
+            .checked_add(instance_count)
+            .ok_or_else(|| JsValue::from_str("Line instance range overflow"))?;
+        let vertex_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Sim Studio scene lines"),
+            contents: bytemuck::cast_slice(positions),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        self.line_batches.push(LineBatch {
+            vertex_buffer,
+            vertex_count: (positions.len() / 3) as u32,
+            first_instance,
+            instance_count,
+        });
+        Ok(())
+    }
 
     /// Uploads mat4 + RGBA/flags (20 floats per instance) in one boundary call.
     #[wasm_bindgen(js_name = uploadInstances)]
@@ -322,10 +683,18 @@ impl RenderCore {
 
     #[wasm_bindgen(js_name = uploadCamera)]
     pub fn upload_camera(&self, matrix: &[f32]) -> Result<(), JsValue> {
-        if matrix.len() != 16 {
-            return Err(JsValue::from_str("Camera matrix must contain exactly 16 floats"));
+        if matrix.len() != 16 && matrix.len() != 24 {
+            return Err(JsValue::from_str(
+                "Camera data must contain a 16-float matrix or the complete 24-float scene uniform",
+            ));
         }
-        self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(matrix));
+        let mut uniform = [0.0_f32; 24];
+        uniform[..matrix.len()].copy_from_slice(matrix);
+        if matrix.len() == 16 {
+            uniform[19] = 1.0;
+            uniform[23] = 0.0;
+        }
+        self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&uniform));
         Ok(())
     }
 
@@ -338,6 +707,12 @@ impl RenderCore {
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
         self.depth_texture = Self::create_depth_texture(&self.device, width, height);
+        self.msaa_texture = Self::create_msaa_texture(
+            &self.device,
+            width,
+            height,
+            self.surface_config.format,
+        );
     }
 
     #[wasm_bindgen(js_name = prepareFrame)]
@@ -375,17 +750,18 @@ impl RenderCore {
             }
         };
         let color_view = frame.texture.create_view(&Default::default());
+        let msaa_view = self.msaa_texture.create_view(&Default::default());
         let depth_view = self.depth_texture.create_view(&Default::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Sim Studio visible frame encoder"),
         });
         {
             let color_attachments = [Some(wgpu::RenderPassColorAttachment {
-                view: &color_view,
-                resolve_target: None,
+                view: &msaa_view,
+                resolve_target: Some(&color_view),
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.025, g: 0.035, b: 0.065, a: 1.0 }),
-                    store: wgpu::StoreOp::Store,
+                    load: wgpu::LoadOp::Clear(self.clear_color),
+                    store: wgpu::StoreOp::Discard,
                 },
                 depth_slice: None,
             })];
@@ -404,10 +780,31 @@ impl RenderCore {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.render_pipeline);
             pass.set_bind_group(0, &self.render_bind_group, &[]);
             pass.set_bind_group(1, &self.camera_bind_group, &[]);
-            pass.draw(0..36, 0..self.instance_count);
+            if self.mesh_batches.is_empty() && self.line_batches.is_empty() {
+                pass.set_pipeline(&self.render_pipeline);
+                pass.draw(0..36, 0..self.instance_count);
+            } else {
+                pass.set_pipeline(&self.mesh_pipeline);
+                for batch in &self.mesh_batches {
+                    pass.set_vertex_buffer(0, batch.vertex_buffer.slice(..));
+                    pass.set_index_buffer(batch.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(
+                        0..batch.index_count,
+                        0,
+                        batch.first_instance..batch.first_instance + batch.instance_count,
+                    );
+                }
+                pass.set_pipeline(&self.line_pipeline);
+                for batch in &self.line_batches {
+                    pass.set_vertex_buffer(0, batch.vertex_buffer.slice(..));
+                    pass.draw(
+                        0..batch.vertex_count,
+                        batch.first_instance..batch.first_instance + batch.instance_count,
+                    );
+                }
+            }
         }
         self.queue.submit([encoder.finish()]);
         frame.present();
@@ -448,9 +845,31 @@ impl RenderCore {
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
-            sample_count: 1,
+            sample_count: MSAA_SAMPLE_COUNT,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Depth24Plus,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+    }
+
+    fn create_msaa_texture(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Sim Studio multisampled color texture"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: MSAA_SAMPLE_COUNT,
+            dimension: wgpu::TextureDimension::D2,
+            format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         })

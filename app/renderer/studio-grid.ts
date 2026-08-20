@@ -12,18 +12,20 @@ const GRID_DIVISIONS = 240;
 export const GRID_RECENTER_STEP = 20;
 
 export const createStudioGrid = (dark: boolean) => {
-  const group = new THREE.Group(),
+  const minorColor = dark ? 0x41484f : 0xb3c1ca,
+    majorColor = dark ? 0x78838d : 0x8297a5,
+    group = new THREE.Group(),
     minor = new THREE.GridHelper(
       GRID_SIZE,
       GRID_DIVISIONS,
-      dark ? 0x41484f : 0xb3c1ca,
-      dark ? 0x41484f : 0xb3c1ca,
+      minorColor,
+      minorColor,
     ),
     major = new THREE.GridHelper(
       GRID_SIZE,
       GRID_DIVISIONS / 10,
-      dark ? 0x78838d : 0x8297a5,
-      dark ? 0x78838d : 0x8297a5,
+      majorColor,
+      majorColor,
     ),
     axisMaterial = new THREE.LineBasicMaterial({
       color: dark ? 0xd5dbe0 : 0x4e6574,
@@ -46,20 +48,31 @@ export const createStudioGrid = (dark: boolean) => {
       axisMaterial.clone(),
     );
 
-  const configure = (helper: THREE.GridHelper, y: number, order: number) => {
+  // GridHelper stores its tint in a per-vertex attribute. The Rust/WebGPU
+  // renderer batches line colors per instance, so also expose the same tint
+  // through the material. Both renderers then produce an identical grid.
+  const configure = (
+    helper: THREE.GridHelper,
+    color: number,
+    y: number,
+    order: number,
+  ) => {
     helper.position.y = y;
     helper.renderOrder = order;
     const materials = Array.isArray(helper.material)
       ? helper.material
       : [helper.material];
     materials.forEach((material) => {
+      material.color.setHex(color);
+      material.vertexColors = false;
       material.transparent = true;
       material.opacity = order === 1 ? 0.72 : 0.95;
       material.depthWrite = false;
+      material.needsUpdate = true;
     });
   };
-  configure(minor, 0.002, 1);
-  configure(major, 0.007, 2);
+  configure(minor, minorColor, 0.002, 1);
+  configure(major, majorColor, 0.007, 2);
   axisX.name = "grid-axis-x";
   axisZ.name = "grid-axis-z";
   axisX.position.y = axisZ.position.y = 0.014;

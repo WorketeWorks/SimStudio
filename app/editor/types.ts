@@ -77,10 +77,6 @@ export type Piece = CatalogPart & {
   physicsIsland?: Piece[];
   physicsIslandFixed?: boolean;
   renderBatched?: boolean;
-  /** Gear-only one-way rotation restriction: -1, 0 (free), or 1. */
-  gearDirectionLock?: -1 | 0 | 1;
-  /** Gear-only keyboard motor, independent from shaft/joint motors. */
-  gearMotor?: { key: string; speed: number; force: number };
 };
 
 export type EditorPieceSnapshot = {
@@ -94,6 +90,8 @@ export type EditorPieceSnapshot = {
   dynamicAxleConnections: boolean;
   rotationPivotLocal?: THREE.Vector3;
   rotationPivotKey?: string;
+  gearDirectionLock?: -1 | 0 | 1;
+  gearMotor?: { key: string; speed: number; force: number };
   connectors: MeshConnector[];
   colliders: CollisionPrimitive[];
   gearColliders: CollisionPrimitive[];
@@ -278,6 +276,8 @@ export type AxleSnapStep = 0 | 0.0625 | 0.125 | 0.25;
 
 export type RotationSnapStep = 0 | 11.25 | 22.5 | 45;
 
+export type ViewportRendererPreference = "auto" | "webgpu" | "webgl";
+
 export type AppState = {
   scene: THREE.Scene;
   renderer: THREE.WebGLRenderer;
@@ -366,6 +366,9 @@ export type AppState = {
   gpuTimerSupported: boolean;
   gpuRenderer: string;
   gpuVendor: string;
+  setViewportRendererPreference: (
+    preference: ViewportRendererPreference,
+  ) => void;
   pendingPlacement?: {
     pieces: Piece[];
     offsets: THREE.Vector3[];

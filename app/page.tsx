@@ -61,7 +61,9 @@ import { createStudioGrid, GRID_RECENTER_STEP, GRID_SIZE } from "./renderer/stud
 import { configureDistanceScaledOutlineMaterial } from "./renderer/outline-material";
 import {
   GpuRenderPrototype,
+  GpuSceneRenderer,
   type GpuPrototypeResult,
+  type GpuSceneStats,
 } from "./renderer/gpu-runtime";
 import { RustPhysicsRuntime } from "./physics/rust-runtime";
 import {
@@ -103,6 +105,7 @@ import type {
   PreparedImportPlacement,
   RotationSnapStep,
   StructuralMode,
+  ViewportRendererPreference,
 } from "./editor/types";
 
 type FogSettings = {
@@ -233,6 +236,15 @@ const gearAxisForPiece = (piece: Piece) => {
     : piece.connectors.find((connector) => connector.kind === "axle")?.axis.clone() ??
       new THREE.Vector3(0, 1, 0);
   return localAxis.transformDirection(piece.mesh.matrixWorld).normalize();
+};
+
+const initialViewportRendererPreference = (): ViewportRendererPreference => {
+  if (typeof window === "undefined") return "auto";
+  const queryPreference = new URLSearchParams(window.location.search).get("renderer");
+  if (queryPreference === "webgpu" || queryPreference === "webgl")
+    return queryPreference;
+  const stored = localStorage.getItem("sim-studio:viewport-renderer");
+  return stored === "webgpu" || stored === "webgl" ? stored : "auto";
 };
 
 const normalizeMotorKey = (key: string) => {
@@ -720,6 +732,14 @@ export default function Home() {
     useState<GpuPrototypeResult | null>(null);
   const [gpuPrototypeError, setGpuPrototypeError] = useState("");
   const [gpuPreviewRunning, setGpuPreviewRunning] = useState(false);
+  const [viewportRenderer, setViewportRenderer] = useState<"WebGPU" | "WebGL">(
+    "WebGL",
+  );
+  const [rendererPreference, setRendererPreference] =
+    useState<ViewportRendererPreference>("auto");
+  const rendererPreferenceRef = useRef(rendererPreference);
+  const rendererPreferenceInitializedRef = useRef(false);
+  rendererPreferenceRef.current = rendererPreference;
   const [, setConnectionRevision] = useState(0);
   const [, setConnectorRevision] = useState(0);
   const [, setColliderRevision] = useState(0);
@@ -803,6 +823,24 @@ export default function Home() {
     },
     [],
   );
+
+  useEffect(() => {
+    if (!rendererPreferenceInitializedRef.current) {
+      rendererPreferenceInitializedRef.current = true;
+      const initialPreference = initialViewportRendererPreference();
+      rendererPreferenceRef.current = initialPreference;
+      if (initialPreference !== rendererPreference)
+        setRendererPreference(initialPreference);
+      return;
+    }
+    rendererPreferenceRef.current = rendererPreference;
+    try {
+      localStorage.setItem("sim-studio:viewport-renderer", rendererPreference);
+    } catch {
+      // Storage may be disabled; switching still works for this session.
+    }
+    appRef.current?.setViewportRendererPreference(rendererPreference);
+  }, [rendererPreference]);
 
   useEffect(() => {
     try {
@@ -1033,7 +1071,14 @@ export default function Home() {
       gpuVendor = rendererInfoExtension
         ? String(gl.getParameter(rendererInfoExtension.UNMASKED_VENDOR_WEBGL))
         : String(gl.getParameter(gl.VENDOR));
+    renderer.domElement.className = "viewport-webgl-canvas";
     host.appendChild(renderer.domElement);
+    const gpuViewportCanvas = document.createElement("canvas");
+    gpuViewportCanvas.className = "viewport-webgpu-canvas";
+    gpuViewportCanvas.setAttribute("aria-hidden", "true");
+    let gpuSceneRenderer: GpuSceneRenderer | null = null,
+      gpuSceneStats: GpuSceneStats | null = null,
+      gpuInitializationCancelled = false;
     scene.add(new THREE.HemisphereLight(0xffffff, 0x718090, 2.1));
     const sun = new THREE.DirectionalLight(0xffffff, 2.3);
     sun.position.set(8, 16, 10);
@@ -2809,6 +2854,7 @@ export default function Home() {
       gpuTimerSupported: !!gpuTimerExtension,
       gpuRenderer,
       gpuVendor,
+      setViewportRendererPreference: () => undefined,
       renderBatchItems: [],
       renderLineBatchItems: [],
       renderBatchStats: {
@@ -2830,6 +2876,86 @@ export default function Home() {
       updateDebug,
     });
     appRef.current = state;
+
+    let activeRendererPreference = rendererPreferenceRef.current,
+      gpuInitializationVersion = 0;
+    const fallBackToWebGl = (error?: unknown, disposeRenderer = true) => {
+      const active = gpuSceneRenderer;
+      if (disposeRenderer) {
+        gpuSceneRenderer = null;
+        active?.dispose();
+      }
+      gpuSceneStats = null;
+      gpuViewportCanvas.classList.remove("active");
+      renderer.domElement.classList.remove("webgpu-active");
+      state.gpuRenderer = gpuRenderer;
+      state.gpuVendor = gpuVendor;
+      state.gpuTimerSupported = !!gpuTimerExtension;
+      setViewportRenderer("WebGL");
+      if (error)
+        console.warn("WebGPU viewport unavailable; continuing with WebGL:", error);
+    };
+    const startWebGpu = () => {
+      if (!GpuSceneRenderer.supported()) {
+        fallBackToWebGl();
+        return;
+      }
+      if (gpuSceneRenderer) {
+        gpuViewportCanvas.classList.add("active");
+        renderer.domElement.classList.add("webgpu-active");
+        state.gpuRenderer = gpuSceneRenderer.adapterName;
+        state.gpuVendor = "wgpu / navegador";
+        state.gpuTimerSupported = false;
+        setViewportRenderer("WebGPU");
+        return;
+      }
+      const initializationVersion = ++gpuInitializationVersion;
+      if (gpuViewportCanvas.parentElement !== host)
+        host.appendChild(gpuViewportCanvas);
+      void GpuSceneRenderer.create(gpuViewportCanvas)
+        .then((gpuRendererInstance) => {
+          if (
+            gpuInitializationCancelled ||
+            initializationVersion !== gpuInitializationVersion ||
+            activeRendererPreference === "webgl"
+          ) {
+            gpuRendererInstance.dispose();
+            return;
+          }
+          gpuSceneRenderer = gpuRendererInstance;
+          gpuSceneRenderer.resize(
+            host.clientWidth,
+            host.clientHeight,
+            nativePixelRatio * renderScale,
+          );
+          gpuViewportCanvas.classList.add("active");
+          renderer.domElement.classList.add("webgpu-active");
+          state.gpuRenderer = gpuRendererInstance.adapterName;
+          state.gpuVendor = "wgpu / navegador";
+          state.gpuTimerSupported = false;
+          setViewportRenderer("WebGPU");
+        })
+        .catch((error) => {
+          if (
+            !gpuInitializationCancelled &&
+            initializationVersion === gpuInitializationVersion
+          )
+            fallBackToWebGl(error);
+        });
+    };
+    const applyRendererPreference = (
+      preference: ViewportRendererPreference,
+    ) => {
+      activeRendererPreference = preference;
+      if (preference === "webgl") {
+        gpuInitializationVersion++;
+        fallBackToWebGl();
+        return;
+      }
+      startWebGpu();
+    };
+    state.setViewportRendererPreference = applyRendererPreference;
+    applyRendererPreference(activeRendererPreference);
 
     const isRod = (piece: Piece) =>
       isPinPart(piece) ||
@@ -5744,6 +5870,11 @@ export default function Home() {
       state.renderScale = renderScale;
       renderer.setPixelRatio(nativePixelRatio * renderScale);
       renderer.setSize(host.clientWidth, host.clientHeight);
+      gpuSceneRenderer?.resize(
+        host.clientWidth,
+        host.clientHeight,
+        nativePixelRatio * renderScale,
+      );
     };
 
     const keydown = (e: KeyboardEvent) => {
@@ -5981,6 +6112,11 @@ export default function Home() {
           state.renderScale = renderScale;
           renderer.setPixelRatio(nativePixelRatio * renderScale);
           renderer.setSize(host.clientWidth, host.clientHeight, false);
+          gpuSceneRenderer?.resize(
+            host.clientWidth,
+            host.clientHeight,
+            nativePixelRatio * renderScale,
+          );
         }
         if (counter) {
           counter.textContent = `${Math.round(fps)} FPS · ${(1000 / Math.max(fps, 0.1)).toFixed(1)} ms · ${Math.round(renderScale * 100)}%`;
@@ -6237,7 +6373,16 @@ export default function Home() {
         floor.receiveShadow = !viewingFloorFromBelow;
         floorMaterial.needsUpdate = true;
       }
+      // Diagnostics and lock sprites still use Three-specific helper
+      // materials. Keep them exact by temporarily revealing the live WebGL
+      // fallback; normal editing and simulation remain on WebGPU.
+      const requiresWebGlFrame =
+        state.debug.colliders ||
+        state.debug.connectors ||
+        state.debug.physics ||
+        state.pieces.some((piece) => piece.lockSprite?.visible);
       const gpuQuery =
+        (!gpuSceneRenderer || requiresWebGlFrame) &&
         gpuTimerExtension &&
         state.performanceTrace.totalFrames % 4 === 0 &&
         pendingGpuTimers.length < 16
@@ -6245,7 +6390,27 @@ export default function Home() {
           : null;
       if (gpuQuery && gpuTimerExtension)
         gl.beginQuery(gpuTimerExtension.TIME_ELAPSED_EXT, gpuQuery);
-      renderer.render(scene, camera);
+      if (gpuSceneRenderer && !requiresWebGlFrame) {
+        gpuViewportCanvas.classList.add("active");
+        renderer.domElement.classList.add("webgpu-active");
+        try {
+          gpuSceneStats = gpuSceneRenderer.render(
+            scene,
+            camera,
+            state.pieces,
+            state.selectedPieces,
+            [state.floor, state.grid],
+          );
+        } catch (error) {
+          fallBackToWebGl(error);
+          renderer.render(scene, camera);
+        }
+      } else {
+        gpuSceneStats = null;
+        gpuViewportCanvas.classList.remove("active");
+        renderer.domElement.classList.remove("webgpu-active");
+        renderer.render(scene, camera);
+      }
       if (gpuQuery && gpuTimerExtension) gl.endQuery(gpuTimerExtension.TIME_ELAPSED_EXT);
       const renderMs = performance.now() - phaseStarted,
         trace = state.performanceTrace,
@@ -6271,9 +6436,9 @@ export default function Home() {
           connections: state.connections.length,
           activeBodies,
           sleepingBodies,
-          drawCalls: renderer.info.render.calls,
-          triangles: renderer.info.render.triangles,
-          lines: renderer.info.render.lines,
+          drawCalls: gpuSceneStats?.drawCalls ?? renderer.info.render.calls,
+          triangles: gpuSceneStats?.triangles ?? renderer.info.render.triangles,
+          lines: gpuSceneStats?.lines ?? renderer.info.render.lines,
           resolutionScale: state.renderScale,
         };
       previousFrameWorkMs = sample.totalMs;
@@ -6289,6 +6454,7 @@ export default function Home() {
     };
     frame = requestAnimationFrame(animate);
     return () => {
+      gpuInitializationCancelled = true;
       cancelAnimationFrame(frame);
       if (renderBatchRebuildFrame) cancelAnimationFrame(renderBatchRebuildFrame);
       pendingGpuTimers.forEach(({ query }) => gl.deleteQuery(query));
@@ -6297,6 +6463,10 @@ export default function Home() {
       window.removeEventListener("keydown", keydown, true);
       window.removeEventListener("keyup", keyup, true);
       window.removeEventListener("blur", clearModifiers);
+      gpuSceneRenderer?.dispose();
+      gpuSceneRenderer = null;
+      if (gpuViewportCanvas.parentElement === host)
+        host.removeChild(gpuViewportCanvas);
       renderer.dispose();
       document.removeEventListener("visibilitychange", flushRecovery);
       host.removeChild(canvas);
@@ -8936,6 +9106,7 @@ export default function Home() {
         <div className="view-label">
           <span className={running ? "live" : ""} />
           {running ? t.running : message === "catalog-ready" ? t.ready : message}
+          <small className="viewport-renderer-badge">{viewportRenderer}</small>
         </div>
         {controlsHelpVisible ? (
           <div className="camera-help">
@@ -9001,6 +9172,42 @@ export default function Home() {
       <aside className="inspector">
         <div className="panel-title">
           <span>{t.properties}</span>
+        </div>
+        <div className="renderer-setting">
+          <label>
+            {language === "es" ? "Motor gráfico" : "Graphics renderer"}
+          </label>
+          <div
+            className="renderer-mode"
+            role="group"
+            aria-label={language === "es" ? "Motor gráfico" : "Graphics renderer"}
+          >
+            {(
+              [
+                ["auto", language === "es" ? "Automático" : "Automatic"],
+                ["webgpu", "WebGPU"],
+                ["webgl", "WebGL"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={rendererPreference === value ? "active" : ""}
+                aria-pressed={rendererPreference === value}
+                onClick={() => setRendererPreference(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <small>
+            {language === "es" ? "Activo" : "Active"}: {viewportRenderer}
+            {rendererPreference === "auto"
+              ? language === "es"
+                ? " · usa WebGPU cuando está disponible"
+                : " · uses WebGPU when available"
+              : ""}
+          </small>
         </div>
         <div className="connection-editor gear-motor-editor">
           <label>{language === "es" ? "Motores de engranaje" : "Gear motors"}</label>
@@ -9337,7 +9544,7 @@ export default function Home() {
                       appRef.current?.recordHistory();
                       const value = Number(event.target.value) as -1 | 0 | 1;
                       selected.gearDirectionLock = value || undefined;
-                      state.refreshDebug();
+                      appRef.current?.refreshDebug();
                       setConnectionRevision((revision) => revision + 1);
                     }}
                   >
