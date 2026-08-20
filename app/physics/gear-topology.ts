@@ -148,11 +148,31 @@ export const detectGearLinks = (
         }
       }
       if (!matchingVolumes) continue;
-      const centerA = new THREE.Vector3(...a.center);
-      const centerB = new THREE.Vector3(...b.center);
+      const taggedPitchRadius = a.value.specialGear
+          ? matchingVolumes.a.ratio
+          : b.value.specialGear
+            ? matchingVolumes.b.ratio
+            : undefined;
+      let pitchRadiusA = a.spec.pitchRadius,
+        pitchRadiusB = b.spec.pitchRadius;
+      // The tagged 1.5 and 1.0 values are the two rings' pitch radii, not a
+      // precomputed ratio against whichever external gear happens to mesh.
+      if (taggedPitchRadius && a.value.specialGear && !b.value.specialGear)
+        pitchRadiusA = taggedPitchRadius;
+      else if (taggedPitchRadius && b.value.specialGear && !a.value.specialGear)
+        pitchRadiusB = taggedPitchRadius;
+      const ratioMagnitude =
+        a.value.specialGear || b.value.specialGear
+          ? pitchRadiusA / pitchRadiusB
+          : undefined;
 
-      const axisA = new THREE.Vector3(...a.axis).normalize();
-      const axisB = new THREE.Vector3(...b.axis).normalize();
+      // Multi-gear zones are offset from the LDraw origin. Geometry and the
+      // Rust contact constraint must use the matched zone, not the carrier's
+      // single catalogue pose.
+      const centerA = matchingVolumes.a.center.clone();
+      const centerB = matchingVolumes.b.center.clone();
+      const axisA = matchingVolumes.a.axis.clone().normalize();
+      const axisB = matchingVolumes.b.axis.clone().normalize();
 
       const delta = centerB.clone().sub(centerA);
       const axisAlignment = Math.abs(axisA.dot(axisB));
@@ -166,8 +186,7 @@ export const detectGearLinks = (
           .addScaledVector(axisA, -delta.dot(axisA))
           .length();
 
-        const expectedDistance =
-          a.spec.pitchRadius + b.spec.pitchRadius;
+        const expectedDistance = pitchRadiusA + pitchRadiusB;
 
         const distanceError =
           radialDistance - expectedDistance;
@@ -192,26 +211,31 @@ export const detectGearLinks = (
           continue;
         const cross = new THREE.Vector3().crossVectors(axisA, axisB).normalize(),
           lineSeparation = Math.abs(delta.dot(cross)),
-          errorA = Math.abs(Math.abs(delta.dot(axisA)) - b.spec.pitchRadius),
-          errorB = Math.abs(Math.abs(delta.dot(axisB)) - a.spec.pitchRadius);
+          errorA = Math.abs(Math.abs(delta.dot(axisA)) - pitchRadiusB),
+          errorB = Math.abs(Math.abs(delta.dot(axisB)) - pitchRadiusA);
         if (lineSeparation > 0.2 || errorA > 0.32 || errorB > 0.32)
           continue;
       }
 
-      const centerDistance = new THREE.Vector3(...a.center).distanceTo(
-        new THREE.Vector3(...b.center),
-        ),
-        ratioMagnitude = a.value.specialGear
-          ? matchingVolumes.a.ratio
-          : b.value.specialGear && matchingVolumes.b.ratio
-            ? 1 / matchingVolumes.b.ratio
-            : undefined;
+      const centerDistance = centerA.distanceTo(centerB),
+        poseA: GearPose<Piece> = {
+          ...a,
+          center: centerA.toArray(),
+          axis: axisA.toArray(),
+          spec: { ...a.spec, pitchRadius: pitchRadiusA },
+        },
+        poseB: GearPose<Piece> = {
+          ...b,
+          center: centerB.toArray(),
+          axis: axisB.toArray(),
+          spec: { ...b.spec, pitchRadius: pitchRadiusB },
+        };
       pairs.push({
-        a,
-        b,
+        a: poseA,
+        b: poseB,
         ratio: -a.spec.teeth / b.spec.teeth,
         centerDistance,
-        expectedDistance: a.spec.pitchRadius + b.spec.pitchRadius,
+        expectedDistance: pitchRadiusA + pitchRadiusB,
         distanceError: 0,
         ratioMagnitude,
       });
