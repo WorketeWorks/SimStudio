@@ -226,7 +226,7 @@ impl PhysicsEngine {
         let commands: Vec<PhysicsCommand> = serde_wasm_bindgen::from_value(commands)
             .map_err(|error| js_error(format!("Invalid physics commands: {error}")))?;
         let timestep = delta_seconds.clamp(1.0 / 240.0, 1.0 / 60.0);
-        let substeps = if self.gears.is_empty() { 1 } else { 6 };
+        let substeps = if self.gears.is_empty() { 1 } else { 12 };
 
         self.stats.max_spring_force =
             forces::apply_commands(&commands, &self.body_ids, &mut self.world, timestep);
@@ -242,6 +242,7 @@ impl PhysicsEngine {
             gears::project_exact_no_slip(&self.gears, &mut self.world);
             self.world.step_with_events(&self.contact_filter, &());
             gears::project_exact_no_slip(&self.gears, &mut self.world);
+            gears::project_velocities(&self.gears, &mut self.world, substep_dt);
         }
         gears::accumulate_angles(
             &mut self.gears,
@@ -267,6 +268,11 @@ impl PhysicsEngine {
             &mut self.gears,
             &mut self.previous_gear_rotations,
             &self.world,
+        );
+        gears::project_hard_phase_positions(
+            &mut self.gears,
+            &self.joints,
+            &mut self.world,
         );
         gears::project_exact_no_slip(&self.gears, &mut self.world);
         gears::accumulate_angles(

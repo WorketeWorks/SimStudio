@@ -522,14 +522,8 @@ fn solve_spur_contact_impulse(
     point_b: Vector,
     tangent: Vector,
     _surface_sign: Real,
-    _phase_bias: Real,
+    phase_bias: Real,
 ) {
-    // A single common contact point is essential for frame invariance.
-    // If the whole mechanism translates or rotates rigidly, both bodies have
-    // the same rigid-motion velocity at this exact world point, so the gear
-    // constraint sees zero slip.
-    let contact = (point_a + point_b) * 0.5;
-
     let (
         relative_speed,
         denominator,
@@ -543,14 +537,16 @@ fn solve_spur_contact_impulse(
             return;
         };
 
-        let relative_speed =
-            (body_a.velocity_at_point(contact)
-                - body_b.velocity_at_point(contact))
-                .dot(tangent);
+        let velocity_a =
+            body_a.velocity_at_point(point_a).dot(tangent);
+        let velocity_b =
+            body_b.velocity_at_point(point_b).dot(tangent);
+
+        let relative_speed = velocity_a - velocity_b;
 
         let denominator =
-            point_impulse_denominator(body_a, contact, tangent)
-            + point_impulse_denominator(body_b, contact, tangent);
+            point_impulse_denominator(body_a, point_a, tangent)
+            + point_impulse_denominator(body_b, point_b, tangent);
 
         (
             relative_speed,
@@ -560,31 +556,35 @@ fn solve_spur_contact_impulse(
         )
     };
 
-    if relative_speed.abs() <= VELOCITY_EPSILON
+    let error = relative_speed - phase_bias;
+
+    if error.abs() < VELOCITY_EPSILON
         || denominator <= GEOMETRY_EPSILON
     {
         return;
     }
 
-    let lambda = -relative_speed / denominator;
-    let impulse = tangent * lambda;
+    let lambda = -error / denominator;
+    let impulse_a = tangent * lambda;
+    let impulse_b = -impulse_a;
 
     if !fixed_a {
         world.bodies[gear.body_a].apply_impulse_at_point(
-            impulse,
-            contact,
+            impulse_a,
+            point_a,
             true,
         );
     }
 
     if !fixed_b {
         world.bodies[gear.body_b].apply_impulse_at_point(
-            -impulse,
-            contact,
+            impulse_b,
+            point_b,
             true,
         );
     }
 }
+
 
 fn hard_phase_contact_bias(
     gear: &GearRuntime,
@@ -794,11 +794,88 @@ fn project_one_exact_no_slip(
     let point_a = center_a + radial_a * radius_a;
     let point_b = center_b + radial_b * radius_b;
 
-    // IMPORTANT:
-    // Both bodies are evaluated at the SAME world-space contact point.
-    // Therefore a global rigid translation/rotation cancels exactly and
-    // cannot be mistaken for tooth slip.
-    let contact = (point_a + point_b) * 0.5;
+    if perpendicular {
+        let contact = (point_a + point_b) * 0.5;
+
+        let pitch_scale = 0.5
+            * (
+                radius_a / gear.teeth_a.max(1.0)
+                + radius_b / teeth_b
+            );
+
+        let phase_bias = hard_phase_contact_bias(
+            gear,
+            position_a,
+            position_b,
+            radial_a,
+            radial_b,
+            pitch_scale,
+            world.integration_parameters.dt,
+        );
+
+        let (
+            relative_speed,
+            denominator,
+        ) = {
+            let Some(body_a) = world.bodies.get(gear.body_a) else {
+                return;
+            };
+            let Some(body_b) = world.bodies.get(gear.body_b) else {
+                return;
+            };
+
+            let relative_speed =
+                (body_a.velocity_at_point(contact)
+                    - body_b.velocity_at_point(contact))
+                    .dot(tangent);
+
+            let denominator =
+                point_impulse_denominator(body_a, contact, tangent)
+                + point_impulse_denominator(body_b, contact, tangent);
+
+            (relative_speed, denominator)
+        };
+
+        let error = relative_speed - phase_bias;
+
+        if error.abs() <= VELOCITY_EPSILON
+            || denominator <= GEOMETRY_EPSILON
+        {
+            return;
+        }
+
+        let lambda = -error / denominator;
+        let impulse = tangent * lambda;
+
+        if !fixed_a {
+            world.bodies[gear.body_a].apply_impulse_at_point(
+                impulse,
+                contact,
+                true,
+            );
+        }
+
+        if !fixed_b {
+            world.bodies[gear.body_b].apply_impulse_at_point(
+                -impulse,
+                contact,
+                true,
+            );
+        }
+
+        return;
+    }
+
+    let pitch_scale = distance / total_teeth;
+    let phase_bias = hard_phase_contact_bias(
+        gear,
+        position_a,
+        position_b,
+        radial_a,
+        radial_b,
+        pitch_scale,
+        world.integration_parameters.dt,
+    );
 
     let (
         relative_speed,
@@ -811,34 +888,36 @@ fn project_one_exact_no_slip(
             return;
         };
 
-        let relative_speed =
-            (body_a.velocity_at_point(contact)
-                - body_b.velocity_at_point(contact))
-                .dot(tangent);
+        let velocity_a =
+            body_a.velocity_at_point(point_a).dot(tangent);
+        let velocity_b =
+            body_b.velocity_at_point(point_b).dot(tangent);
+
+        let relative_speed = velocity_a - velocity_b;
 
         let denominator =
-            point_impulse_denominator(body_a, contact, tangent)
-            + point_impulse_denominator(body_b, contact, tangent);
+            point_impulse_denominator(body_a, point_a, tangent)
+            + point_impulse_denominator(body_b, point_b, tangent);
 
         (relative_speed, denominator)
     };
 
-    // This function is only a hard NO-SLIP velocity constraint.
-    // Do not inject phase-position error as velocity here.
-    if relative_speed.abs() <= VELOCITY_EPSILON
+    let error = relative_speed - phase_bias;
+
+    if error.abs() <= VELOCITY_EPSILON
         || denominator <= GEOMETRY_EPSILON
     {
         return;
     }
 
-    let lambda = -relative_speed / denominator;
+    let lambda = -error / denominator;
+
     let impulse = tangent * lambda;
 
-    // Newton's third law: always equal and opposite.
     if !fixed_a {
         world.bodies[gear.body_a].apply_impulse_at_point(
             impulse,
-            contact,
+            point_a,
             true,
         );
     }
@@ -846,11 +925,12 @@ fn project_one_exact_no_slip(
     if !fixed_b {
         world.bodies[gear.body_b].apply_impulse_at_point(
             -impulse,
-            contact,
+            point_b,
             true,
         );
     }
 }
+
 
 fn point_impulse_denominator(
     body: &RigidBody,

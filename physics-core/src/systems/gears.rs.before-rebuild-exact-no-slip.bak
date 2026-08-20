@@ -718,86 +718,9 @@ fn project_one_exact_no_slip(
         return;
     }
 
-    let axis_a = position_a.rotation * gear.local_axis_a;
-    let axis_b = position_b.rotation * gear.local_axis_b;
-
-    let center_a = position_a.transform_point(gear.local_center_a);
-    let center_b = position_b.transform_point(gear.local_center_b);
-    let center_delta = center_b - center_a;
-
-    if center_delta.length_squared() <= GEOMETRY_EPSILON {
-        return;
-    }
-
-    let radial_a_raw =
-        center_delta - axis_a * center_delta.dot(axis_a);
-    let radial_b_raw =
-        -center_delta - axis_b * (-center_delta).dot(axis_b);
-
-    if radial_a_raw.length_squared() <= GEOMETRY_EPSILON
-        || radial_b_raw.length_squared() <= GEOMETRY_EPSILON
-    {
-        return;
-    }
-
-    let radial_a = radial_a_raw.normalize();
-    let radial_b = radial_b_raw.normalize();
-
-    let tangent_a_raw = axis_a.cross(radial_a);
-    let tangent_b_raw = axis_b.cross(radial_b);
-
-    if tangent_a_raw.length_squared() <= GEOMETRY_EPSILON
-        || tangent_b_raw.length_squared() <= GEOMETRY_EPSILON
-    {
-        return;
-    }
-
-    let tangent_a = tangent_a_raw.normalize();
-    let mut tangent_b = tangent_b_raw.normalize();
-
-    if tangent_a.dot(tangent_b) < 0.0 {
-        tangent_b = -tangent_b;
-    }
-
-    let tangent_sum = tangent_a + tangent_b;
-    let tangent =
-        if tangent_sum.length_squared() > GEOMETRY_EPSILON {
-            tangent_sum.normalize()
-        } else {
-            tangent_a
-        };
-
-    let perpendicular = axis_a.dot(axis_b).abs() < 0.2;
-    let distance = center_delta.length();
-
-    let teeth_b = gear.signed_teeth_b.abs().max(1.0);
-    let total_teeth = (gear.teeth_a + teeth_b).max(1.0);
-
-    let (radius_a, radius_b) = if perpendicular {
-        (
-            center_delta.dot(axis_b).abs(),
-            center_delta.dot(axis_a).abs(),
-        )
-    } else {
-        (
-            distance * gear.teeth_a / total_teeth,
-            distance * teeth_b / total_teeth,
-        )
-    };
-
-    if radius_a <= GEOMETRY_EPSILON
-        || radius_b <= GEOMETRY_EPSILON
-    {
-        return;
-    }
-
-    let point_a = center_a + radial_a * radius_a;
-    let point_b = center_b + radial_b * radius_b;
-
-    // IMPORTANT:
-    // Both bodies are evaluated at the SAME world-space contact point.
-    // Therefore a global rigid translation/rotation cancels exactly and
-    // cannot be mistaken for tooth slip.
+    // Parallel/spur gear: use the SAME world contact point for both
+    // bodies. This prevents a global rigid-body rotation from being mistaken
+    // for tooth slip when point_a and point_b differ slightly numerically.
     let contact = (point_a + point_b) * 0.5;
 
     let (
@@ -823,8 +746,10 @@ fn project_one_exact_no_slip(
         (relative_speed, denominator)
     };
 
-    // This function is only a hard NO-SLIP velocity constraint.
-    // Do not inject phase-position error as velocity here.
+    // IMPORTANT:
+    // No positional phase bias here. A phase error must never be converted
+    // into an artificial velocity source. This solver only removes actual
+    // relative tooth velocity.
     if relative_speed.abs() <= VELOCITY_EPSILON
         || denominator <= GEOMETRY_EPSILON
     {
@@ -834,7 +759,6 @@ fn project_one_exact_no_slip(
     let lambda = -relative_speed / denominator;
     let impulse = tangent * lambda;
 
-    // Newton's third law: always equal and opposite.
     if !fixed_a {
         world.bodies[gear.body_a].apply_impulse_at_point(
             impulse,
