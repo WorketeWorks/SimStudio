@@ -11,6 +11,8 @@
     "build:pages": "vite build --config vite.pages.config.ts",
     "physics:build": "node scripts/build-physics-wasm.mjs",
     "physics:check": "cargo check --manifest-path physics-core/Cargo.toml",
+    "render:build": "node scripts/build-render-wasm.mjs",
+    "render:check": "cargo check --manifest-path render-core/Cargo.toml --target wasm32-unknown-unknown",
     "start": "vinext start",
     "test": "npm run build && node --test tests/rendered-html.test.mjs && npm run test:physics && npm run test:import && npm run test:connectors && npm run test:geometry",
     "test:physics": "node --test tests/physics-core.test.mjs",

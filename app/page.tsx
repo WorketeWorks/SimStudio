@@ -59,6 +59,10 @@ import {
 } from "./project-format";
 import { createStudioGrid, GRID_RECENTER_STEP, GRID_SIZE } from "./renderer/studio-grid";
 import { configureDistanceScaledOutlineMaterial } from "./renderer/outline-material";
+import {
+  GpuRenderPrototype,
+  type GpuPrototypeResult,
+} from "./renderer/gpu-runtime";
 import { RustPhysicsRuntime } from "./physics/rust-runtime";
 import {
   buildRustGearConfigs,
@@ -665,6 +669,9 @@ export default function Home() {
   const connectorFileRef = useRef<HTMLInputElement>(null);
   const colliderFileRef = useRef<HTMLInputElement>(null);
   const projectNameInputRef = useRef<HTMLInputElement>(null);
+  const gpuCanvasRef = useRef<HTMLCanvasElement>(null);
+  const gpuPrototypeRef = useRef<GpuRenderPrototype | null>(null);
+  const gpuPrototypeFrameRef = useRef(0);
 
   // Mutable guards shared with asynchronous loaders and the simulation loop.
   const importTokenRef = useRef(0);
@@ -708,6 +715,11 @@ export default function Home() {
     physics: false,
   });
   const [lastLog, setLastLog] = useState("");
+  const [gpuPrototypeBusy, setGpuPrototypeBusy] = useState(false);
+  const [gpuPrototypeResult, setGpuPrototypeResult] =
+    useState<GpuPrototypeResult | null>(null);
+  const [gpuPrototypeError, setGpuPrototypeError] = useState("");
+  const [gpuPreviewRunning, setGpuPreviewRunning] = useState(false);
   const [, setConnectionRevision] = useState(0);
   const [, setConnectorRevision] = useState(0);
   const [, setColliderRevision] = useState(0);
@@ -782,6 +794,15 @@ export default function Home() {
           "axle-cross": "Purple ↔ green",
           "axle-round": "Purple ↔ blue",
         };
+
+  useEffect(
+    () => () => {
+      cancelAnimationFrame(gpuPrototypeFrameRef.current);
+      gpuPrototypeRef.current?.dispose();
+      gpuPrototypeRef.current = null;
+    },
+    [],
+  );
 
   useEffect(() => {
     try {
@@ -8211,6 +8232,63 @@ export default function Home() {
     URL.revokeObjectURL(anchor.href);
   };
 
+  const runGpuPrototype = async () => {
+    if (gpuPrototypeBusy) return;
+    setGpuPrototypeBusy(true);
+    setGpuPrototypeError("");
+    try {
+      const canvas = gpuCanvasRef.current;
+      if (!canvas) throw new Error("No se pudo crear el canvas WebGPU");
+      cancelAnimationFrame(gpuPrototypeFrameRef.current);
+      gpuPrototypeRef.current?.dispose();
+      const prototype = await GpuRenderPrototype.create(canvas);
+      gpuPrototypeRef.current = prototype;
+      const result = prototype.benchmark(
+        Math.max(714, appRef.current?.pieces.length ?? 0),
+        240,
+      );
+      setGpuPrototypeResult(result);
+      setGpuPreviewRunning(true);
+      const renderGpuFrame = (time: number) => {
+        if (gpuPrototypeRef.current !== prototype) return;
+        try {
+          prototype.render(time);
+        } catch (error) {
+          prototype.dispose();
+          gpuPrototypeRef.current = null;
+          setGpuPreviewRunning(false);
+          const detail = error instanceof Error ? error.message : String(error);
+          setGpuPrototypeError(detail);
+          setMessage(`WebGPU: ${detail}`);
+          return;
+        }
+        gpuPrototypeFrameRef.current = requestAnimationFrame(renderGpuFrame);
+      };
+      gpuPrototypeFrameRef.current = requestAnimationFrame(renderGpuFrame);
+      setMessage(
+        language === "es"
+          ? `WebGPU Rust activo: ${result.instances} instancias en ${result.adapter}`
+          : `Rust WebGPU active: ${result.instances} instances on ${result.adapter}`,
+      );
+    } catch (error) {
+      gpuPrototypeRef.current?.dispose();
+      gpuPrototypeRef.current = null;
+      setGpuPreviewRunning(false);
+      const detail = error instanceof Error ? error.message : String(error);
+      setGpuPrototypeError(detail);
+      setMessage(`WebGPU: ${detail}`);
+    } finally {
+      setGpuPrototypeBusy(false);
+    }
+  };
+
+  const stopGpuPrototype = () => {
+    cancelAnimationFrame(gpuPrototypeFrameRef.current);
+    gpuPrototypeRef.current?.dispose();
+    gpuPrototypeRef.current = null;
+    setGpuPreviewRunning(false);
+  };
+
   const importStatusText = importDraft
       ? {
           reading: t.importReading,
@@ -9936,6 +10014,60 @@ export default function Home() {
           <label>{t.performanceLog}</label>
           <p>{t.performanceHelp}</p>
           <button onClick={downloadPerformanceLog}>{t.downloadPerformance}</button>
+        </div>
+        <div className="log-tools gpu-prototype-tools">
+          <label>{language === "es" ? "Render-core WebGPU" : "WebGPU render-core"}</label>
+          <p>
+            {language === "es"
+              ? "Renderiza instancias visibles con el nuevo pipeline WebGPU implementado en Rust/WASM."
+              : "Render visible instances with the new Rust/WASM WebGPU pipeline."}
+          </p>
+          <canvas
+            ref={gpuCanvasRef}
+            className="gpu-prototype-canvas"
+            width={640}
+            height={360}
+            aria-label={language === "es" ? "Vista previa WebGPU" : "WebGPU preview"}
+          />
+          <button
+            disabled={gpuPrototypeBusy}
+            onClick={() =>
+              gpuPreviewRunning ? stopGpuPrototype() : void runGpuPrototype()
+            }
+          >
+            {gpuPrototypeBusy
+              ? language === "es"
+                ? "Iniciando WebGPU…"
+                : "Starting WebGPU…"
+              : gpuPreviewRunning
+                ? language === "es"
+                  ? "Detener vista WebGPU"
+                  : "Stop WebGPU preview"
+                : language === "es"
+                  ? "Iniciar vista WebGPU"
+                  : "Start WebGPU preview"}
+          </button>
+          {gpuPrototypeResult && (
+            <div className="model-provenance">
+              <div className="data-row">
+                <span>{language === "es" ? "Adaptador" : "Adapter"}</span>
+                <b>{gpuPrototypeResult.adapter}</b>
+              </div>
+              <div className="data-row">
+                <span>{language === "es" ? "Instancias" : "Instances"}</span>
+                <b>{gpuPrototypeResult.instances}</b>
+              </div>
+              <div className="data-row">
+                <span>{language === "es" ? "Carga WASM → GPU" : "WASM → GPU upload"}</span>
+                <b>{gpuPrototypeResult.uploadMs.toFixed(3)} ms</b>
+              </div>
+              <div className="data-row">
+                <span>{language === "es" ? "Envío por frame" : "Submission per frame"}</span>
+                <b>{gpuPrototypeResult.averageSubmitMs.toFixed(3)} ms</b>
+              </div>
+            </div>
+          )}
+          {gpuPrototypeError && <p className="no-connections">{gpuPrototypeError}</p>}
         </div>
         <div className="physics">
           <label className="grid-setting-title">{t.gridSize}</label>

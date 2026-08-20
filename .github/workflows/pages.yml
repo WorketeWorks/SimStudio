@@ -30,6 +30,17 @@ jobs:
       - name: Install dependencies
         run: npm install --include=optional --no-audit --no-fund
 
+      - name: Setup Rust for WebAssembly renderer
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-bindgen CLI
+        run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
+
+      - name: Build WebGPU render core
+        run: npm run render:build
+
       - name: Build static site
         run: npm run build:pages
 
