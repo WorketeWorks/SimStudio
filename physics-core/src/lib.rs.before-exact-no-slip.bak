@@ -240,7 +240,6 @@ impl PhysicsEngine {
         for _ in 0..substeps {
             gears::project_velocities(&self.gears, &mut self.world, substep_dt);
             self.world.step_with_events(&self.contact_filter, &());
-            gears::project_exact_no_slip(&self.gears, &mut self.world);
             gears::project_velocities(&self.gears, &mut self.world, substep_dt);
         }
         gears::accumulate_angles(

@@ -399,7 +399,7 @@ fn solve_gear_velocity(
     if perpendicular {
         let contact = (pitch_point_a + pitch_point_b) * 0.5;
 
-        let _phase_bias = bevel_phase_velocity_bias(
+        let phase_bias = bevel_phase_velocity_bias(
             gear,
             world,
             radial_a,
@@ -414,7 +414,7 @@ fn solve_gear_velocity(
             world,
             contact,
             tangent,
-            0.0,
+            phase_bias,
         );
         return;
     }
@@ -445,7 +445,7 @@ fn solve_gear_velocity(
     );
 
     let pitch_scale = distance / total_teeth;
-    let _phase_bias = if gear.phase_lock && dt > 1.0e-6 {
+    let phase_bias = if gear.phase_lock && dt > 1.0e-6 {
         (phase_error * pitch_scale * PHASE_BAUMGARTE / dt)
             .clamp(-MAX_PHASE_CORRECTION_SPEED, MAX_PHASE_CORRECTION_SPEED)
     } else {
@@ -462,7 +462,7 @@ fn solve_gear_velocity(
         pitch_point_b,
         tangent,
         surface_sign,
-        0.0,
+        phase_bias,
     );
 }
 
@@ -620,240 +620,6 @@ fn unwrapped_phase_error(
     gear.teeth_a * current_a
         + gear.signed_teeth_b * current_b
         - gear.phase_target
-}
-
-
-pub fn project_exact_no_slip(
-    gears: &[GearRuntime],
-    world: &mut PhysicsWorld,
-) {
-    // This is the hard gear constraint.
-    //
-    // Repeated forward/reverse Gauss-Seidel sweeps make every gear contact
-    // satisfy zero relative tooth velocity. There is no clutch, tolerance,
-    // phase spring, or permitted tooth slip.
-    for _ in 0..16 {
-        for gear in gears {
-            project_one_exact_no_slip(gear, world);
-        }
-
-        for gear in gears.iter().rev() {
-            project_one_exact_no_slip(gear, world);
-        }
-    }
-}
-
-fn project_one_exact_no_slip(
-    gear: &GearRuntime,
-    world: &mut PhysicsWorld,
-) {
-    let (
-        position_a,
-        position_b,
-        fixed_a,
-        fixed_b,
-    ) = {
-        let Some(body_a) = world.bodies.get(gear.body_a) else {
-            return;
-        };
-        let Some(body_b) = world.bodies.get(gear.body_b) else {
-            return;
-        };
-
-        (
-            *body_a.position(),
-            *body_b.position(),
-            body_a.is_fixed(),
-            body_b.is_fixed(),
-        )
-    };
-
-    if fixed_a && fixed_b {
-        return;
-    }
-
-    let axis_a = position_a.rotation * gear.local_axis_a;
-    let axis_b = position_b.rotation * gear.local_axis_b;
-
-    let center_a = position_a.transform_point(gear.local_center_a);
-    let center_b = position_b.transform_point(gear.local_center_b);
-    let center_delta = center_b - center_a;
-
-    if center_delta.length_squared() <= GEOMETRY_EPSILON {
-        return;
-    }
-
-    let radial_a_raw =
-        center_delta - axis_a * center_delta.dot(axis_a);
-    let radial_b_raw =
-        -center_delta - axis_b * (-center_delta).dot(axis_b);
-
-    if radial_a_raw.length_squared() <= GEOMETRY_EPSILON
-        || radial_b_raw.length_squared() <= GEOMETRY_EPSILON
-    {
-        return;
-    }
-
-    let radial_a = radial_a_raw.normalize();
-    let radial_b = radial_b_raw.normalize();
-
-    let tangent_a_raw = axis_a.cross(radial_a);
-    let tangent_b_raw = axis_b.cross(radial_b);
-
-    if tangent_a_raw.length_squared() <= GEOMETRY_EPSILON
-        || tangent_b_raw.length_squared() <= GEOMETRY_EPSILON
-    {
-        return;
-    }
-
-    let tangent_a = tangent_a_raw.normalize();
-    let mut tangent_b = tangent_b_raw.normalize();
-
-    if tangent_a.dot(tangent_b) < 0.0 {
-        tangent_b = -tangent_b;
-    }
-
-    let tangent_sum = tangent_a + tangent_b;
-    let tangent =
-        if tangent_sum.length_squared() > GEOMETRY_EPSILON {
-            tangent_sum.normalize()
-        } else {
-            tangent_a
-        };
-
-    let perpendicular = axis_a.dot(axis_b).abs() < 0.2;
-    let distance = center_delta.length();
-
-    let teeth_b = gear.signed_teeth_b.abs().max(1.0);
-    let total_teeth = (gear.teeth_a + teeth_b).max(1.0);
-
-    let (radius_a, radius_b) = if perpendicular {
-        (
-            center_delta.dot(axis_b).abs(),
-            center_delta.dot(axis_a).abs(),
-        )
-    } else {
-        (
-            distance * gear.teeth_a / total_teeth,
-            distance * teeth_b / total_teeth,
-        )
-    };
-
-    if radius_a <= GEOMETRY_EPSILON
-        || radius_b <= GEOMETRY_EPSILON
-    {
-        return;
-    }
-
-    let point_a = center_a + radial_a * radius_a;
-    let point_b = center_b + radial_b * radius_b;
-
-    if perpendicular {
-        let contact = (point_a + point_b) * 0.5;
-
-        let (
-            relative_speed,
-            denominator,
-        ) = {
-            let Some(body_a) = world.bodies.get(gear.body_a) else {
-                return;
-            };
-            let Some(body_b) = world.bodies.get(gear.body_b) else {
-                return;
-            };
-
-            let relative_speed =
-                (body_a.velocity_at_point(contact)
-                    - body_b.velocity_at_point(contact))
-                    .dot(tangent);
-
-            let denominator =
-                point_impulse_denominator(body_a, contact, tangent)
-                + point_impulse_denominator(body_b, contact, tangent);
-
-            (relative_speed, denominator)
-        };
-
-        if relative_speed.abs() <= VELOCITY_EPSILON
-            || denominator <= GEOMETRY_EPSILON
-        {
-            return;
-        }
-
-        let lambda = -relative_speed / denominator;
-        let impulse = tangent * lambda;
-
-        if !fixed_a {
-            world.bodies[gear.body_a].apply_impulse_at_point(
-                impulse,
-                contact,
-                true,
-            );
-        }
-
-        if !fixed_b {
-            world.bodies[gear.body_b].apply_impulse_at_point(
-                -impulse,
-                contact,
-                true,
-            );
-        }
-
-        return;
-    }
-
-    let surface_sign =
-        if gear.signed_teeth_b < 0.0 { -1.0 } else { 1.0 };
-
-    let (
-        relative_speed,
-        denominator,
-    ) = {
-        let Some(body_a) = world.bodies.get(gear.body_a) else {
-            return;
-        };
-        let Some(body_b) = world.bodies.get(gear.body_b) else {
-            return;
-        };
-
-        let velocity_a =
-            body_a.velocity_at_point(point_a).dot(tangent);
-        let velocity_b =
-            body_b.velocity_at_point(point_b).dot(tangent);
-
-        let relative_speed =
-            velocity_a - surface_sign * velocity_b;
-
-        let denominator =
-            point_impulse_denominator(body_a, point_a, tangent)
-            + point_impulse_denominator(body_b, point_b, tangent);
-
-        (relative_speed, denominator)
-    };
-
-    if relative_speed.abs() <= VELOCITY_EPSILON
-        || denominator <= GEOMETRY_EPSILON
-    {
-        return;
-    }
-
-    let lambda = -relative_speed / denominator;
-
-    if !fixed_a {
-        world.bodies[gear.body_a].apply_impulse_at_point(
-            tangent * lambda,
-            point_a,
-            true,
-        );
-    }
-
-    if !fixed_b {
-        world.bodies[gear.body_b].apply_impulse_at_point(
-            tangent * (-surface_sign * lambda),
-            point_b,
-            true,
-        );
-    }
 }
 
 
