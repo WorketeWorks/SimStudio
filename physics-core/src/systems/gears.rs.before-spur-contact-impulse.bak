@@ -14,8 +14,8 @@ const REST_ANGULAR_SPEED: Real = 2.0e-5;
 const REST_CONTACT_SPEED: Real = 2.0e-5;
 const REST_LINEAR_SPEED: Real = 2.0e-5;
 
-const PHASE_BAUMGARTE: Real = 0.12;
-const MAX_PHASE_CORRECTION_SPEED: Real = 0.35;
+const PHASE_BAUMGARTE: Real = 0.35;
+const MAX_PHASE_CORRECTION_SPEED: Real = 1.0;
 
 #[derive(Clone)]
 pub struct GearRuntime {
@@ -363,18 +363,53 @@ fn solve_gear_velocity(
         0.0
     };
 
-    // Spur gears are solved as a bilateral physical contact too.
-    // Never overwrite angular velocity directly here: that would ignore
-    // the linear reaction at the tooth contact and can inject energy.
-    solve_spur_contact_impulse(
-        gear,
-        world,
-        pitch_point_a,
-        pitch_point_b,
-        tangent,
-        surface_sign,
-        phase_bias,
-    );
+    let error = contact_error - phase_bias;
+    if error.abs() < VELOCITY_EPSILON {
+        return;
+    }
+
+    let gain_a = axis_a.cross(r_a).dot(tangent);
+    let gain_b = axis_b.cross(r_b).dot(tangent);
+
+    let jacobian_a = if fixed_a { 0.0 } else { gain_a };
+    let jacobian_b = if fixed_b {
+        0.0
+    } else {
+        -surface_sign * gain_b
+    };
+
+    let denominator =
+        jacobian_a * jacobian_a + jacobian_b * jacobian_b;
+
+    if denominator <= GEOMETRY_EPSILON {
+        solve_angular_ratio_fallback(
+            gear,
+            world,
+            axis_a,
+            axis_b,
+            angular_a,
+            angular_b,
+            fixed_a,
+            fixed_b,
+        );
+        return;
+    }
+
+    let lambda = -error / denominator;
+
+    if !fixed_a {
+        world.bodies[gear.body_a].set_angvel(
+            angular_a + axis_a * (lambda * jacobian_a),
+            true,
+        );
+    }
+
+    if !fixed_b {
+        world.bodies[gear.body_b].set_angvel(
+            angular_b + axis_b * (lambda * jacobian_b),
+            true,
+        );
+    }
 }
 
 fn bevel_phase_velocity_bias(
@@ -436,78 +471,6 @@ fn bevel_phase_velocity_bias(
             + radius_b / teeth_b);
 
     (phase_error * pitch_scale * 0.20 / dt).clamp(-0.30, 0.30)
-}
-
-
-fn solve_spur_contact_impulse(
-    gear: &GearRuntime,
-    world: &mut PhysicsWorld,
-    point_a: Vector,
-    point_b: Vector,
-    tangent: Vector,
-    surface_sign: Real,
-    phase_bias: Real,
-) {
-    let (
-        relative_speed,
-        denominator,
-        fixed_a,
-        fixed_b,
-    ) = {
-        let Some(body_a) = world.bodies.get(gear.body_a) else {
-            return;
-        };
-        let Some(body_b) = world.bodies.get(gear.body_b) else {
-            return;
-        };
-
-        let velocity_a =
-            body_a.velocity_at_point(point_a).dot(tangent);
-        let velocity_b =
-            body_b.velocity_at_point(point_b).dot(tangent);
-
-        let relative_speed =
-            velocity_a - surface_sign * velocity_b;
-
-        let denominator =
-            point_impulse_denominator(body_a, point_a, tangent)
-            + point_impulse_denominator(body_b, point_b, tangent);
-
-        (
-            relative_speed,
-            denominator,
-            body_a.is_fixed(),
-            body_b.is_fixed(),
-        )
-    };
-
-    let error = relative_speed - phase_bias;
-
-    if error.abs() < VELOCITY_EPSILON
-        || denominator <= GEOMETRY_EPSILON
-    {
-        return;
-    }
-
-    let lambda = -error / denominator;
-    let impulse_a = tangent * lambda;
-    let impulse_b = tangent * (-surface_sign * lambda);
-
-    if !fixed_a {
-        world.bodies[gear.body_a].apply_impulse_at_point(
-            impulse_a,
-            point_a,
-            true,
-        );
-    }
-
-    if !fixed_b {
-        world.bodies[gear.body_b].apply_impulse_at_point(
-            impulse_b,
-            point_b,
-            true,
-        );
-    }
 }
 
 
