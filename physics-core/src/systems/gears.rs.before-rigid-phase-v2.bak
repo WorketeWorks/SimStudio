@@ -30,51 +30,9 @@ pub struct GearRuntime {
     pub teeth_a: Real,
     pub signed_teeth_b: Real,
     pub phase_lock: bool,
-    pub initial_phase: Real,
-    pub phase_target: Real,
     pub angle_a: Real,
     pub angle_b: Real,
 }
-
-fn initial_gear_angles(config: &GearConfig) -> (Real, Real) {
-    let axis_a = normalized(config.axis_a);
-    let axis_b = normalized(config.axis_b);
-    let center_a = vector(config.center_a);
-    let center_b = vector(config.center_b);
-    let center_delta = center_b - center_a;
-
-    let radial_a_raw =
-        center_delta - axis_a * center_delta.dot(axis_a);
-    let radial_b_raw =
-        -center_delta - axis_b * (-center_delta).dot(axis_b);
-
-    if radial_a_raw.length_squared() <= GEOMETRY_EPSILON
-        || radial_b_raw.length_squared() <= GEOMETRY_EPSILON
-    {
-        return (0.0, 0.0);
-    }
-
-    let radial_a = radial_a_raw.normalize();
-    let radial_b = radial_b_raw.normalize();
-
-    let reference_a = normalized(config.reference_a);
-    let reference_b = normalized(config.reference_b);
-
-    let ref_a_raw = reference_a - axis_a * reference_a.dot(axis_a);
-    let ref_b_raw = reference_b - axis_b * reference_b.dot(axis_b);
-
-    if ref_a_raw.length_squared() <= GEOMETRY_EPSILON
-        || ref_b_raw.length_squared() <= GEOMETRY_EPSILON
-    {
-        return (0.0, 0.0);
-    }
-
-    (
-        signed_angle_around_axis(ref_a_raw.normalize(), radial_a, axis_a),
-        signed_angle_around_axis(ref_b_raw.normalize(), radial_b, axis_b),
-    )
-}
-
 
 pub fn build_gears(
     configs: &[GearConfig],
@@ -93,18 +51,6 @@ pub fn build_gears(
 
             let rigid_a = world.bodies.get(body_a)?;
             let rigid_b = world.bodies.get(body_b)?;
-
-            let initial_phase = initial_gear_phase(config);
-
-            let (initial_angle_a, initial_angle_b) =
-                initial_gear_angles(config);
-            let teeth_a = config.teeth_a.max(1.0);
-            let teeth_b = config.teeth_b.max(1.0);
-            let sign_b = if config.sign_b < 0.0 { -1.0 } else { 1.0 };
-            let phase_target =
-                teeth_a * initial_angle_a
-                    + sign_b * teeth_b * initial_angle_b;
-            let initial_phase = wrap_pi(phase_target);
 
             Some(GearRuntime {
                 body_a,
@@ -130,70 +76,12 @@ pub fn build_gears(
                 teeth_a: config.teeth_a.max(1.0),
                 signed_teeth_b: config.sign_b * config.teeth_b.max(1.0),
                 phase_lock: config.phase_lock,
-                initial_phase,
-                phase_target,
-                angle_a: initial_angle_a,
-                angle_b: initial_angle_b,
+                angle_a: 0.0,
+                angle_b: 0.0,
             })
         })
         .collect()
 }
-
-fn initial_gear_phase(config: &GearConfig) -> Real {
-    let axis_a = normalized(config.axis_a);
-    let axis_b = normalized(config.axis_b);
-
-    let center_a = vector(config.center_a);
-    let center_b = vector(config.center_b);
-    let center_delta = center_b - center_a;
-
-    let radial_a_raw =
-        center_delta - axis_a * center_delta.dot(axis_a);
-    let radial_b_raw =
-        -center_delta - axis_b * (-center_delta).dot(axis_b);
-
-    if radial_a_raw.length_squared() <= GEOMETRY_EPSILON
-        || radial_b_raw.length_squared() <= GEOMETRY_EPSILON
-    {
-        return 0.0;
-    }
-
-    let radial_a = radial_a_raw.normalize();
-    let radial_b = radial_b_raw.normalize();
-
-    let reference_a_world = normalized(config.reference_a);
-    let reference_b_world = normalized(config.reference_b);
-
-    let reference_a_plane =
-        reference_a_world - axis_a * reference_a_world.dot(axis_a);
-    let reference_b_plane =
-        reference_b_world - axis_b * reference_b_world.dot(axis_b);
-
-    if reference_a_plane.length_squared() <= GEOMETRY_EPSILON
-        || reference_b_plane.length_squared() <= GEOMETRY_EPSILON
-    {
-        return 0.0;
-    }
-
-    let ref_a = reference_a_plane.normalize();
-    let ref_b = reference_b_plane.normalize();
-
-    let angle_a =
-        signed_angle_around_axis(ref_a, radial_a, axis_a);
-    let angle_b =
-        signed_angle_around_axis(ref_b, radial_b, axis_b);
-
-    let teeth_a = config.teeth_a.max(1.0);
-    let teeth_b = config.teeth_b.max(1.0);
-    let sign_b =
-        if config.sign_b < 0.0 { -1.0 } else { 1.0 };
-
-    wrap_pi(
-        teeth_a * angle_a
-            + sign_b * teeth_b * angle_b,
-    )
-}
-
 
 pub fn project_velocities(
     gears: &[GearRuntime],
@@ -434,20 +322,43 @@ fn solve_gear_velocity(
         1.0
     };
 
-    let _contact_error = velocity_a - surface_sign * velocity_b;
+    let contact_error = velocity_a - surface_sign * velocity_b;
 
-    let phase_error = unwrapped_phase_error(
-        gear,
-        position_a,
-        position_b,
-        radial_a,
-        radial_b,
-    );
-
-    let pitch_scale = distance / total_teeth;
     let phase_bias = if gear.phase_lock && dt > 1.0e-6 {
-        (phase_error * pitch_scale * PHASE_BAUMGARTE / dt)
-            .clamp(-MAX_PHASE_CORRECTION_SPEED, MAX_PHASE_CORRECTION_SPEED)
+        let reference_a_world = position_a.rotation * gear.local_reference_a;
+        let reference_b_world = position_b.rotation * gear.local_reference_b;
+
+        let reference_a_plane =
+            reference_a_world - axis_a * reference_a_world.dot(axis_a);
+        let reference_b_plane =
+            reference_b_world - axis_b * reference_b_world.dot(axis_b);
+
+        if reference_a_plane.length_squared() > GEOMETRY_EPSILON
+            && reference_b_plane.length_squared() > GEOMETRY_EPSILON
+        {
+            let ref_a = reference_a_plane.normalize();
+            let ref_b = reference_b_plane.normalize();
+
+            let angle_a = signed_angle_around_axis(ref_a, radial_a, axis_a);
+            let angle_b = signed_angle_around_axis(ref_b, radial_b, axis_b);
+
+            let phase_a = wrap_pi(gear.teeth_a * angle_a);
+            let phase_b = wrap_pi(teeth_b * angle_b);
+            let sign_b = if gear.signed_teeth_b < 0.0 {
+                -1.0
+            } else {
+                1.0
+            };
+
+            let phase_error =
+                wrap_pi(phase_a + sign_b * phase_b - std::f32::consts::PI);
+            let pitch_scale = distance / total_teeth;
+
+            (phase_error * pitch_scale * PHASE_BAUMGARTE / dt)
+                .clamp(-MAX_PHASE_CORRECTION_SPEED, MAX_PHASE_CORRECTION_SPEED)
+        } else {
+            0.0
+        }
     } else {
         0.0
     };
@@ -486,24 +397,47 @@ fn bevel_phase_velocity_bias(
         return 0.0;
     };
 
-    let phase_error = unwrapped_phase_error(
-        gear,
-        *body_a.position(),
-        *body_b.position(),
-        radial_a,
-        radial_b,
-    );
+    let position_a = *body_a.position();
+    let position_b = *body_b.position();
+
+    let axis_a = position_a.rotation * gear.local_axis_a;
+    let axis_b = position_b.rotation * gear.local_axis_b;
+
+    let reference_a_world = position_a.rotation * gear.local_reference_a;
+    let reference_b_world = position_b.rotation * gear.local_reference_b;
+
+    let reference_a_plane =
+        reference_a_world - axis_a * reference_a_world.dot(axis_a);
+    let reference_b_plane =
+        reference_b_world - axis_b * reference_b_world.dot(axis_b);
+
+    if reference_a_plane.length_squared() <= GEOMETRY_EPSILON
+        || reference_b_plane.length_squared() <= GEOMETRY_EPSILON
+    {
+        return 0.0;
+    }
+
+    let ref_a = reference_a_plane.normalize();
+    let ref_b = reference_b_plane.normalize();
+
+    let angle_a = signed_angle_around_axis(ref_a, radial_a, axis_a);
+    let angle_b = signed_angle_around_axis(ref_b, radial_b, axis_b);
 
     let teeth_b = gear.signed_teeth_b.abs().max(1.0);
-    let pitch_scale = 0.5
-        * (
-            radius_a / gear.teeth_a.max(1.0)
-            + radius_b / teeth_b
-        );
+    let sign_b = if gear.signed_teeth_b < 0.0 { -1.0 } else { 1.0 };
 
-    (phase_error * pitch_scale * PHASE_BAUMGARTE / dt)
-        .clamp(-MAX_PHASE_CORRECTION_SPEED, MAX_PHASE_CORRECTION_SPEED)
+    let phase_a = wrap_pi(gear.teeth_a * angle_a);
+    let phase_b = wrap_pi(teeth_b * angle_b);
+    let phase_error =
+        wrap_pi(phase_a + sign_b * phase_b - std::f32::consts::PI);
+
+    let pitch_scale = 0.5
+        * (radius_a / gear.teeth_a.max(1.0)
+            + radius_b / teeth_b);
+
+    (phase_error * pitch_scale * 0.20 / dt).clamp(-0.30, 0.30)
 }
+
 
 fn solve_spur_contact_impulse(
     gear: &GearRuntime,
@@ -574,52 +508,6 @@ fn solve_spur_contact_impulse(
             true,
         );
     }
-}
-
-
-fn unwrapped_phase_error(
-    gear: &GearRuntime,
-    position_a: Pose,
-    position_b: Pose,
-    radial_a: Vector,
-    radial_b: Vector,
-) -> Real {
-    if !gear.phase_lock {
-        return 0.0;
-    }
-
-    let axis_a = position_a.rotation * gear.local_axis_a;
-    let axis_b = position_b.rotation * gear.local_axis_b;
-
-    let reference_a_world =
-        position_a.rotation * gear.local_reference_a;
-    let reference_b_world =
-        position_b.rotation * gear.local_reference_b;
-
-    let ref_a_raw =
-        reference_a_world - axis_a * reference_a_world.dot(axis_a);
-    let ref_b_raw =
-        reference_b_world - axis_b * reference_b_world.dot(axis_b);
-
-    if ref_a_raw.length_squared() <= GEOMETRY_EPSILON
-        || ref_b_raw.length_squared() <= GEOMETRY_EPSILON
-    {
-        return 0.0;
-    }
-
-    let wrapped_a =
-        signed_angle_around_axis(ref_a_raw.normalize(), radial_a, axis_a);
-    let wrapped_b =
-        signed_angle_around_axis(ref_b_raw.normalize(), radial_b, axis_b);
-
-    let current_a =
-        gear.angle_a + wrap_pi(wrapped_a - wrap_pi(gear.angle_a));
-    let current_b =
-        gear.angle_b + wrap_pi(wrapped_b - wrap_pi(gear.angle_b));
-
-    gear.teeth_a * current_a
-        + gear.signed_teeth_b * current_b
-        - gear.phase_target
 }
 
 
@@ -829,120 +717,6 @@ fn settle_near_rest(gear: &GearRuntime, world: &mut PhysicsWorld) {
     }
 }
 
-pub fn project_phase_constraints(
-    gears: &[GearRuntime],
-    world: &mut PhysicsWorld,
-) {
-    for gear in gears {
-        project_one_phase_constraint(gear, world);
-    }
-}
-
-fn project_one_phase_constraint(
-    gear: &GearRuntime,
-    world: &mut PhysicsWorld,
-) {
-    if !gear.phase_lock {
-        return;
-    }
-
-    let (position_a, position_b, fixed_a, fixed_b) = {
-        let Some(body_a) = world.bodies.get(gear.body_a) else {
-            return;
-        };
-        let Some(body_b) = world.bodies.get(gear.body_b) else {
-            return;
-        };
-
-        (
-            *body_a.position(),
-            *body_b.position(),
-            body_a.is_fixed(),
-            body_b.is_fixed(),
-        )
-    };
-
-    if fixed_a && fixed_b {
-        return;
-    }
-
-    let axis_a = position_a.rotation * gear.local_axis_a;
-    let axis_b = position_b.rotation * gear.local_axis_b;
-
-    let center_a = position_a.transform_point(gear.local_center_a);
-    let center_b = position_b.transform_point(gear.local_center_b);
-    let center_delta = center_b - center_a;
-
-    let radial_a_raw =
-        center_delta - axis_a * center_delta.dot(axis_a);
-    let radial_b_raw =
-        -center_delta - axis_b * (-center_delta).dot(axis_b);
-
-    if radial_a_raw.length_squared() <= GEOMETRY_EPSILON
-        || radial_b_raw.length_squared() <= GEOMETRY_EPSILON
-    {
-        return;
-    }
-
-    let radial_a = radial_a_raw.normalize();
-    let radial_b = radial_b_raw.normalize();
-
-    let reference_a_world =
-        position_a.rotation * gear.local_reference_a;
-    let reference_b_world =
-        position_b.rotation * gear.local_reference_b;
-
-    let reference_a_plane =
-        reference_a_world - axis_a * reference_a_world.dot(axis_a);
-    let reference_b_plane =
-        reference_b_world - axis_b * reference_b_world.dot(axis_b);
-
-    if reference_a_plane.length_squared() <= GEOMETRY_EPSILON
-        || reference_b_plane.length_squared() <= GEOMETRY_EPSILON
-    {
-        return;
-    }
-
-    let ref_a = reference_a_plane.normalize();
-    let ref_b = reference_b_plane.normalize();
-
-    let angle_a = signed_angle_around_axis(ref_a, radial_a, axis_a);
-    let angle_b = signed_angle_around_axis(ref_b, radial_b, axis_b);
-
-    let teeth_b = gear.signed_teeth_b.abs().max(1.0);
-    let sign_b = if gear.signed_teeth_b < 0.0 { -1.0 } else { 1.0 };
-
-    let current_phase = wrap_pi(
-        gear.teeth_a * angle_a + sign_b * teeth_b * angle_b
-    );
-    let phase_error = wrap_pi(current_phase - gear.initial_phase);
-
-    // Tiny numerical drift only. Large errors should be resisted by
-    // the physical no-slip gear constraint, not teleported away.
-    if phase_error.abs() <= 1.0e-5 || phase_error.abs() > 0.20 {
-        return;
-    }
-
-    // Correct one side only when possible. This avoids changing both
-    // free bodies in opposite directions and creating a positional "kick".
-    if !fixed_b {
-        let correction = -phase_error / (sign_b * teeth_b);
-        let local_delta =
-            Rotation::from_scaled_axis(gear.local_axis_b.normalize() * correction);
-        let mut pos = *world.bodies[gear.body_b].position();
-        pos.rotation = pos.rotation * local_delta;
-        world.bodies[gear.body_b].set_position(pos, false);
-    } else if !fixed_a {
-        let correction = -phase_error / gear.teeth_a.max(1.0);
-        let local_delta =
-            Rotation::from_scaled_axis(gear.local_axis_a.normalize() * correction);
-        let mut pos = *world.bodies[gear.body_a].position();
-        pos.rotation = pos.rotation * local_delta;
-        world.bodies[gear.body_a].set_position(pos, false);
-    }
-}
-
-
 fn signed_angle_around_axis(from: Vector, to: Vector, axis: Vector) -> Real {
     axis.dot(from.cross(to)).atan2(from.dot(to))
 }
@@ -1008,66 +782,41 @@ fn solve_angular_ratio_fallback(
 
 pub fn accumulate_angles(
     gears: &mut [GearRuntime],
-    _previous_rotations: &mut HashMap<RigidBodyHandle, Rotation>,
+    previous_rotations: &mut HashMap<RigidBodyHandle, Rotation>,
     world: &PhysicsWorld,
 ) {
+    let mut deltas = HashMap::new();
+
+    for gear in gears.iter() {
+        for handle in [gear.body_a, gear.body_b] {
+            if deltas.contains_key(&handle) {
+                continue;
+            }
+
+            let current = *world.bodies[handle].rotation();
+            let previous = previous_rotations
+                .insert(handle, current)
+                .unwrap_or(current);
+            let delta = current * previous.inverse();
+
+            deltas.insert(handle, delta.to_scaled_axis());
+        }
+    }
+
     for gear in gears {
-        let Some(body_a) = world.bodies.get(gear.body_a) else {
-            continue;
-        };
-        let Some(body_b) = world.bodies.get(gear.body_b) else {
-            continue;
-        };
+        let axis_a =
+            world.bodies[gear.body_a].rotation() * gear.local_axis_a;
+        let axis_b =
+            world.bodies[gear.body_b].rotation() * gear.local_axis_b;
 
-        let position_a = *body_a.position();
-        let position_b = *body_b.position();
+        gear.angle_a += deltas
+            .get(&gear.body_a)
+            .map_or(0.0, |delta| delta.dot(axis_a));
 
-        let axis_a = position_a.rotation * gear.local_axis_a;
-        let axis_b = position_b.rotation * gear.local_axis_b;
-
-        let center_a = position_a.transform_point(gear.local_center_a);
-        let center_b = position_b.transform_point(gear.local_center_b);
-        let center_delta = center_b - center_a;
-
-        let radial_a_raw =
-            center_delta - axis_a * center_delta.dot(axis_a);
-        let radial_b_raw =
-            -center_delta - axis_b * (-center_delta).dot(axis_b);
-
-        if radial_a_raw.length_squared() <= GEOMETRY_EPSILON
-            || radial_b_raw.length_squared() <= GEOMETRY_EPSILON
-        {
-            continue;
-        }
-
-        let radial_a = radial_a_raw.normalize();
-        let radial_b = radial_b_raw.normalize();
-
-        let reference_a =
-            position_a.rotation * gear.local_reference_a;
-        let reference_b =
-            position_b.rotation * gear.local_reference_b;
-
-        let ref_a_raw =
-            reference_a - axis_a * reference_a.dot(axis_a);
-        let ref_b_raw =
-            reference_b - axis_b * reference_b.dot(axis_b);
-
-        if ref_a_raw.length_squared() <= GEOMETRY_EPSILON
-            || ref_b_raw.length_squared() <= GEOMETRY_EPSILON
-        {
-            continue;
-        }
-
-        let wrapped_a =
-            signed_angle_around_axis(ref_a_raw.normalize(), radial_a, axis_a);
-        let wrapped_b =
-            signed_angle_around_axis(ref_b_raw.normalize(), radial_b, axis_b);
-
-        gear.angle_a += wrap_pi(wrapped_a - wrap_pi(gear.angle_a));
-        gear.angle_b += wrap_pi(wrapped_b - wrap_pi(gear.angle_b));
+        gear.angle_b += deltas
+            .get(&gear.body_b)
+            .map_or(0.0, |delta| delta.dot(axis_b));
     }
 }
 
 pub fn enforce_phase(_gears: &mut [GearRuntime], _world: &mut PhysicsWorld) {}
-
