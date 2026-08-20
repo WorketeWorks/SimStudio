@@ -740,6 +740,9 @@ export default function Home() {
   const rendererPreferenceRef = useRef(rendererPreference);
   const rendererPreferenceInitializedRef = useRef(false);
   rendererPreferenceRef.current = rendererPreference;
+  const [adaptiveRendering, setAdaptiveRendering] = useState(true);
+  const adaptiveRenderingRef = useRef(true);
+  const adaptiveRenderingInitializedRef = useRef(false);
   const [, setConnectionRevision] = useState(0);
   const [, setConnectorRevision] = useState(0);
   const [, setColliderRevision] = useState(0);
@@ -841,6 +844,29 @@ export default function Home() {
     }
     appRef.current?.setViewportRendererPreference(rendererPreference);
   }, [rendererPreference]);
+
+  useEffect(() => {
+    if (!adaptiveRenderingInitializedRef.current) {
+      adaptiveRenderingInitializedRef.current = true;
+      const initialAdaptive = localStorage.getItem(
+        "sim-studio:adaptive-rendering",
+      ) !== "0";
+      adaptiveRenderingRef.current = initialAdaptive;
+      if (initialAdaptive !== adaptiveRendering)
+        setAdaptiveRendering(initialAdaptive);
+      return;
+    }
+    adaptiveRenderingRef.current = adaptiveRendering;
+    try {
+      localStorage.setItem(
+        "sim-studio:adaptive-rendering",
+        adaptiveRendering ? "1" : "0",
+      );
+    } catch {
+      // Storage may be disabled; the current session still keeps the choice.
+    }
+    appRef.current?.setAdaptiveRendering(adaptiveRendering);
+  }, [adaptiveRendering]);
 
   useEffect(() => {
     try {
@@ -1050,6 +1076,7 @@ export default function Home() {
       }),
       nativePixelRatio = Math.min(devicePixelRatio, 2);
     let renderScale = 1,
+      adaptiveRenderingEnabled = adaptiveRenderingRef.current,
       healthyFpsWindows = 0,
       lowFpsWindows = 0;
     renderer.setPixelRatio(nativePixelRatio * renderScale);
@@ -1774,6 +1801,27 @@ export default function Home() {
       }
     };
 
+    const setDebugLineEndpoints = (
+      object: THREE.Line,
+      start: THREE.Vector3,
+      end: THREE.Vector3,
+    ) => {
+      if (!object.geometry.getAttribute("position"))
+        object.geometry.setFromPoints([
+          new THREE.Vector3(-0.5, 0, 0),
+          new THREE.Vector3(0.5, 0, 0),
+        ]);
+      const delta = end.clone().sub(start),
+        length = delta.length();
+      object.position.copy(start).add(end).multiplyScalar(0.5);
+      object.quaternion.setFromUnitVectors(
+        new THREE.Vector3(1, 0, 0),
+        length > 1.0e-8 ? delta.multiplyScalar(1 / length) : new THREE.Vector3(1, 0, 0),
+      );
+      object.scale.set(Math.max(length, 1.0e-8), 1, 1);
+      object.updateMatrixWorld(true);
+    };
+
     const updateDebug = () => {
       debugRoot.children.forEach((object) => {
         const data = object.userData,
@@ -1840,13 +1888,13 @@ export default function Home() {
           const connection = data.connection as Connection,
             a = connection.a.mesh.getWorldPosition(new THREE.Vector3()),
             b = connection.b.mesh.getWorldPosition(new THREE.Vector3());
-          (object as THREE.Line).geometry.setFromPoints([a, b]);
+          setDebugLineEndpoints(object as THREE.Line, a, b);
         } else if (data.debugKind === "forced-joint-link") {
           const connection = data.connection as Connection;
           if (!connection.localPointA || !connection.localPointB) return;
           const a = connection.a.mesh.localToWorld(connection.localPointA.clone()),
             b = connection.b.mesh.localToWorld(connection.localPointB.clone());
-          (object as THREE.Line).geometry.setFromPoints([a, b]);
+          setDebugLineEndpoints(object as THREE.Line, a, b);
         }
       });
     };
@@ -2225,6 +2273,7 @@ export default function Home() {
         }
       configureDebugOverlay();
       updateDebug();
+      gpuSceneRenderer?.invalidate();
     };
 
     const disposeRenderBatches = () => {
@@ -2855,6 +2904,7 @@ export default function Home() {
       gpuRenderer,
       gpuVendor,
       setViewportRendererPreference: () => undefined,
+      setAdaptiveRendering: () => undefined,
       renderBatchItems: [],
       renderLineBatchItems: [],
       renderBatchStats: {
@@ -4310,31 +4360,41 @@ export default function Home() {
 
 
     const makeLock = () => {
-      const c = document.createElement("canvas");
-      c.width = c.height = 96;
-      const x = c.getContext("2d")!;
-      x.fillStyle = "#fff";
-      x.beginPath();
-      x.arc(48, 48, 42, 0, Math.PI * 2);
-      x.fill();
-      x.strokeStyle = "#f1b900";
-      x.lineWidth = 7;
-      x.stroke();
-      x.font = "48px 'Segoe UI Emoji'";
-      x.textAlign = "center";
-      x.textBaseline = "middle";
-      x.fillText("🔒", 48, 50);
-      const texture = new THREE.CanvasTexture(c),
-        sprite = new THREE.Sprite(
-          new THREE.SpriteMaterial({
-            map: texture,
-            depthTest: false,
-            transparent: true,
-          }),
-        );
-      sprite.scale.set(0.72, 0.72, 1);
-      sprite.renderOrder = 20;
-      return sprite;
+      const lock = new THREE.Group(),
+        white = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false }),
+        gold = new THREE.MeshBasicMaterial({ color: 0xf1b900, depthTest: false }),
+        darkGold = new THREE.MeshBasicMaterial({ color: 0x9a6b00, depthTest: false }),
+        background = new THREE.Mesh(new THREE.CircleGeometry(0.42, 24), white),
+        border = new THREE.Mesh(new THREE.RingGeometry(0.34, 0.42, 24), gold),
+        body = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.27, 0.06), gold),
+        shackle = new THREE.Mesh(
+          new THREE.TorusGeometry(0.14, 0.045, 8, 18, Math.PI),
+          darkGold,
+        ),
+        keyhole = new THREE.Mesh(new THREE.CircleGeometry(0.035, 12), darkGold);
+      background.position.z = 0;
+      border.position.z = 0.01;
+      body.position.set(0, -0.07, 0.055);
+      shackle.position.set(0, 0.08, 0.055);
+      keyhole.position.set(0, -0.07, 0.09);
+      lock.add(background, border, shackle, body, keyhole);
+      lock.renderOrder = 100;
+      lock.userData.gpuOverlay = true;
+      return lock;
+    };
+
+    const disposeLock = (piece: Piece) => {
+      if (!piece.lockSprite) return;
+      scene.remove(piece.lockSprite);
+      piece.lockSprite.traverse((object) => {
+        if (!(object instanceof THREE.Mesh) && !(object instanceof THREE.Line)) return;
+        object.geometry.dispose();
+        const materials = Array.isArray(object.material)
+          ? object.material
+          : [object.material];
+        materials.forEach((material) => material.dispose());
+      });
+      piece.lockSprite = undefined;
     };
 
     const toggleFixed = (piece: Piece) => {
@@ -4342,12 +4402,7 @@ export default function Home() {
       if (piece.fixed) {
         piece.lockSprite = makeLock();
         scene.add(piece.lockSprite);
-      } else if (piece.lockSprite) {
-        scene.remove(piece.lockSprite);
-        piece.lockSprite.material.map?.dispose();
-        piece.lockSprite.material.dispose();
-        piece.lockSprite = undefined;
-      }
+      } else disposeLock(piece);
       if (piece.body)
         (piece.physicsIsland ?? [piece]).forEach((member) => {
           member.physicsIslandFixed = (member.physicsIsland ?? [member]).some(
@@ -4435,14 +4490,6 @@ export default function Home() {
           }
         | undefined,
       pasteIndex = 0;
-    const disposeLock = (piece: Piece) => {
-      if (!piece.lockSprite) return;
-      scene.remove(piece.lockSprite);
-      piece.lockSprite.material.map?.dispose();
-      piece.lockSprite.material.dispose();
-      piece.lockSprite = undefined;
-    };
-
     const restoreEditorSnapshot = async (snapshot: EditorSnapshot) => {
       restoringHistory = true;
       try {
@@ -5876,6 +5923,16 @@ export default function Home() {
         nativePixelRatio * renderScale,
       );
     };
+    state.setAdaptiveRendering = (enabled) => {
+      adaptiveRenderingEnabled = enabled;
+      healthyFpsWindows = 0;
+      lowFpsWindows = 0;
+      if (!enabled) {
+        renderScale = 1;
+        state.renderScale = 1;
+        resize();
+      }
+    };
 
     const keydown = (e: KeyboardEvent) => {
       if (e.code === "ShiftLeft" || e.code === "ShiftRight") {
@@ -6088,15 +6145,22 @@ export default function Home() {
       if (frameStarted - fpsWindowStarted >= 500) {
         const fps = (fpsFrames * 1000) / (frameStarted - fpsWindowStarted),
           counter = fpsRef.current;
+        const webGpuQualityActive = !!gpuSceneRenderer,
+          lowerFpsThreshold = webGpuQualityActive ? 52 : 15,
+          upperFpsThreshold = webGpuQualityActive ? 58 : 30;
         let nextScale = renderScale;
-        if (fps < 15) {
+        if (!adaptiveRenderingEnabled) {
+          nextScale = 1;
+          healthyFpsWindows = 0;
+          lowFpsWindows = 0;
+        } else if (fps < lowerFpsThreshold) {
           healthyFpsWindows = 0;
           lowFpsWindows++;
           if (lowFpsWindows >= 2) {
             nextScale = Math.max(0.5, renderScale - 0.1);
             lowFpsWindows = 0;
           }
-        } else if (fps > 30) {
+        } else if (fps > upperFpsThreshold) {
           lowFpsWindows = 0;
           healthyFpsWindows++;
           if (healthyFpsWindows >= 4) {
@@ -6345,6 +6409,8 @@ export default function Home() {
           const box = new THREE.Box3().setFromObject(p.mesh),
             center = box.getCenter(new THREE.Vector3());
           p.lockSprite.position.set(center.x, box.max.y + 0.55, center.z);
+          p.lockSprite.quaternion.copy(camera.quaternion);
+          p.lockSprite.updateMatrixWorld(true);
         }
       });
       const locksMs = performance.now() - phaseStarted;
@@ -6373,16 +6439,16 @@ export default function Home() {
         floor.receiveShadow = !viewingFloorFromBelow;
         floorMaterial.needsUpdate = true;
       }
-      // Diagnostics and lock sprites still use Three-specific helper
-      // materials. Keep them exact by temporarily revealing the live WebGL
-      // fallback; normal editing and simulation remain on WebGPU.
-      const requiresWebGlFrame =
-        state.debug.colliders ||
-        state.debug.connectors ||
-        state.debug.physics ||
-        state.pieces.some((piece) => piece.lockSprite?.visible);
+      const gpuExtras: THREE.Object3D[] = [
+        state.floor,
+        state.grid,
+        ...debugRoot.children,
+      ];
+      state.pieces.forEach((piece) => {
+        if (piece.lockSprite?.visible) gpuExtras.push(piece.lockSprite);
+      });
       const gpuQuery =
-        (!gpuSceneRenderer || requiresWebGlFrame) &&
+        !gpuSceneRenderer &&
         gpuTimerExtension &&
         state.performanceTrace.totalFrames % 4 === 0 &&
         pendingGpuTimers.length < 16
@@ -6390,7 +6456,7 @@ export default function Home() {
           : null;
       if (gpuQuery && gpuTimerExtension)
         gl.beginQuery(gpuTimerExtension.TIME_ELAPSED_EXT, gpuQuery);
-      if (gpuSceneRenderer && !requiresWebGlFrame) {
+      if (gpuSceneRenderer) {
         gpuViewportCanvas.classList.add("active");
         renderer.domElement.classList.add("webgpu-active");
         try {
@@ -6399,7 +6465,7 @@ export default function Home() {
             camera,
             state.pieces,
             state.selectedPieces,
-            [state.floor, state.grid],
+            gpuExtras,
           );
         } catch (error) {
           fallBackToWebGl(error);
@@ -8346,9 +8412,13 @@ export default function Home() {
           p95: (summary[name] as { p95: number }).p95,
         }))
         .sort((a, b) => b.p95 - a.p95)[0],
+      activeGpuCanvas = mountRef.current?.querySelector<HTMLCanvasElement>(
+        ".viewport-webgpu-canvas.active",
+      ),
+      viewportCanvas = activeGpuCanvas ?? state.renderer.domElement,
       payload = {
         format: "sim-studio-frame-profile",
-        version: 2,
+        version: 3,
         generatedAt: new Date().toISOString(),
         recordingStartedAt: trace.startedAt,
         retainedFrames: samples.length,
@@ -8371,11 +8441,19 @@ export default function Home() {
           gpuTimerSupported: state.gpuTimerSupported,
           gpuRenderer: state.gpuRenderer,
           gpuVendor: state.gpuVendor,
+          rendererMode: activeGpuCanvas ? "WebGPU" : "WebGL",
+          adaptiveRendering,
+          webgpuQuality: activeGpuCanvas
+            ? {
+                pixelRatio: Number(activeGpuCanvas.dataset.pixelRatio ?? 1),
+                msaaSamples: Number(activeGpuCanvas.dataset.msaaSamples ?? 1),
+              }
+            : null,
           viewport: {
-            cssWidth: state.renderer.domElement.clientWidth,
-            cssHeight: state.renderer.domElement.clientHeight,
-            drawingBufferWidth: state.renderer.domElement.width,
-            drawingBufferHeight: state.renderer.domElement.height,
+            cssWidth: viewportCanvas.clientWidth,
+            cssHeight: viewportCanvas.clientHeight,
+            drawingBufferWidth: viewportCanvas.width,
+            drawingBufferHeight: viewportCanvas.height,
           },
         },
         diagnosis: {
@@ -9207,6 +9285,42 @@ export default function Home() {
                 ? " · usa WebGPU cuando está disponible"
                 : " · uses WebGPU when available"
               : ""}
+          </small>
+          <label className="renderer-quality-label">
+            {language === "es" ? "Escalado de calidad" : "Quality scaling"}
+          </label>
+          <div
+            className="renderer-mode renderer-quality"
+            role="group"
+            aria-label={
+              language === "es" ? "Escalado de calidad" : "Quality scaling"
+            }
+          >
+            <button
+              type="button"
+              className={adaptiveRendering ? "active" : ""}
+              aria-pressed={adaptiveRendering}
+              onClick={() => setAdaptiveRendering(true)}
+            >
+              {language === "es" ? "Adaptativa" : "Adaptive"}
+            </button>
+            <button
+              type="button"
+              className={!adaptiveRendering ? "active" : ""}
+              aria-pressed={!adaptiveRendering}
+              onClick={() => setAdaptiveRendering(false)}
+            >
+              {language === "es" ? "Fija 100%" : "Fixed 100%"}
+            </button>
+          </div>
+          <small>
+            {adaptiveRendering
+              ? language === "es"
+                ? "Reduce resolución y MSAA si faltan FPS."
+                : "Reduces resolution and MSAA when FPS drops."
+              : language === "es"
+                ? "Mantiene resolución completa y MSAA 4×."
+                : "Keeps full resolution and 4× MSAA."}
           </small>
         </div>
         <div className="connection-editor gear-motor-editor">

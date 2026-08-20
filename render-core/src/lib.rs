@@ -192,6 +192,7 @@ struct MeshBatch {
     index_count: u32,
     first_instance: u32,
     instance_count: u32,
+    overlay: bool,
 }
 
 struct LineBatch {
@@ -199,10 +200,172 @@ struct LineBatch {
     vertex_count: u32,
     first_instance: u32,
     instance_count: u32,
+    overlay: bool,
 }
 
 fn js_error(context: &str, error: impl core::fmt::Display) -> JsValue {
     JsValue::from_str(&format!("{context}: {error}"))
+}
+
+fn multisample_state(sample_count: u32) -> wgpu::MultisampleState {
+    wgpu::MultisampleState {
+        count: sample_count,
+        ..Default::default()
+    }
+}
+
+fn create_instance_render_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    sample_count: u32,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Sim Studio visible instance pipeline"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vertex_main"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode: None,
+            front_face: wgpu::FrontFace::Ccw,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth24Plus,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: multisample_state(sample_count),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fragment_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn create_mesh_render_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    sample_count: u32,
+    overlay: bool,
+) -> wgpu::RenderPipeline {
+    let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Sim Studio scene mesh pipeline"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vertex_main"),
+            compilation_options: Default::default(),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: 6 * core::mem::size_of::<f32>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &attributes,
+            }],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode: None,
+            front_face: wgpu::FrontFace::Ccw,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth24Plus,
+            depth_write_enabled: Some(!overlay),
+            depth_compare: Some(if overlay {
+                wgpu::CompareFunction::Always
+            } else {
+                wgpu::CompareFunction::Less
+            }),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: multisample_state(sample_count),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fragment_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn create_line_render_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    sample_count: u32,
+    overlay: bool,
+) -> wgpu::RenderPipeline {
+    let attributes = wgpu::vertex_attr_array![0 => Float32x3];
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Sim Studio scene line pipeline"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vertex_main"),
+            compilation_options: Default::default(),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: 3 * core::mem::size_of::<f32>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &attributes,
+            }],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::LineList,
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth24Plus,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(if overlay {
+                wgpu::CompareFunction::Always
+            } else {
+                wgpu::CompareFunction::LessEqual
+            }),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: multisample_state(sample_count),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fragment_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 #[wasm_bindgen]
@@ -221,12 +384,20 @@ pub struct RenderCore {
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
     render_pipeline: wgpu::RenderPipeline,
+    render_pipeline_single_sample: wgpu::RenderPipeline,
     mesh_pipeline: wgpu::RenderPipeline,
+    mesh_pipeline_single_sample: wgpu::RenderPipeline,
+    mesh_pipeline_overlay: wgpu::RenderPipeline,
+    mesh_pipeline_overlay_single_sample: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
+    line_pipeline_single_sample: wgpu::RenderPipeline,
+    line_pipeline_overlay: wgpu::RenderPipeline,
+    line_pipeline_overlay_single_sample: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     depth_texture: wgpu::Texture,
     msaa_texture: wgpu::Texture,
+    msaa_samples: u32,
     mesh_batches: Vec<MeshBatch>,
     line_batches: Vec<LineBatch>,
     clear_color: wgpu::Color,
@@ -396,6 +567,13 @@ impl RenderCore {
             multiview_mask: None,
             cache: None,
         });
+        let render_pipeline_single_sample = create_instance_render_pipeline(
+            &device,
+            &render_layout,
+            &render_shader,
+            surface_config.format,
+            1,
+        );
         let mesh_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Sim Studio scene mesh shader"),
             source: wgpu::ShaderSource::Wgsl(MESH_SHADER.into()),
@@ -444,6 +622,30 @@ impl RenderCore {
             multiview_mask: None,
             cache: None,
         });
+        let mesh_pipeline_single_sample = create_mesh_render_pipeline(
+            &device,
+            &render_layout,
+            &mesh_shader,
+            surface_config.format,
+            1,
+            false,
+        );
+        let mesh_pipeline_overlay = create_mesh_render_pipeline(
+            &device,
+            &render_layout,
+            &mesh_shader,
+            surface_config.format,
+            MSAA_SAMPLE_COUNT,
+            true,
+        );
+        let mesh_pipeline_overlay_single_sample = create_mesh_render_pipeline(
+            &device,
+            &render_layout,
+            &mesh_shader,
+            surface_config.format,
+            1,
+            true,
+        );
         let line_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Sim Studio scene line shader"),
             source: wgpu::ShaderSource::Wgsl(LINE_SHADER.into()),
@@ -491,7 +693,36 @@ impl RenderCore {
             multiview_mask: None,
             cache: None,
         });
-        let depth_texture = Self::create_depth_texture(&device, surface_config.width, surface_config.height);
+        let line_pipeline_single_sample = create_line_render_pipeline(
+            &device,
+            &render_layout,
+            &line_shader,
+            surface_config.format,
+            1,
+            false,
+        );
+        let line_pipeline_overlay = create_line_render_pipeline(
+            &device,
+            &render_layout,
+            &line_shader,
+            surface_config.format,
+            MSAA_SAMPLE_COUNT,
+            true,
+        );
+        let line_pipeline_overlay_single_sample = create_line_render_pipeline(
+            &device,
+            &render_layout,
+            &line_shader,
+            surface_config.format,
+            1,
+            true,
+        );
+        let depth_texture = Self::create_depth_texture(
+            &device,
+            surface_config.width,
+            surface_config.height,
+            MSAA_SAMPLE_COUNT,
+        );
         let msaa_texture = Self::create_msaa_texture(
             &device,
             surface_config.width,
@@ -513,12 +744,20 @@ impl RenderCore {
             surface,
             surface_config,
             render_pipeline,
+            render_pipeline_single_sample,
             mesh_pipeline,
+            mesh_pipeline_single_sample,
+            mesh_pipeline_overlay,
+            mesh_pipeline_overlay_single_sample,
             line_pipeline,
+            line_pipeline_single_sample,
+            line_pipeline_overlay,
+            line_pipeline_overlay_single_sample,
             camera_buffer,
             camera_bind_group,
             depth_texture,
             msaa_texture,
+            msaa_samples: MSAA_SAMPLE_COUNT,
             mesh_batches: Vec::new(),
             line_batches: Vec::new(),
             clear_color: wgpu::Color { r: 0.025, g: 0.035, b: 0.065, a: 1.0 },
@@ -581,6 +820,7 @@ impl RenderCore {
         indices: &[u32],
         first_instance: u32,
         instance_count: u32,
+        overlay: bool,
     ) -> Result<(), JsValue> {
         if positions.is_empty() || positions.len() % 3 != 0 {
             return Err(JsValue::from_str("Mesh positions must contain XYZ vertices"));
@@ -620,6 +860,7 @@ impl RenderCore {
             index_count: indices.len() as u32,
             first_instance,
             instance_count,
+            overlay,
         });
         Ok(())
     }
@@ -630,6 +871,7 @@ impl RenderCore {
         positions: &[f32],
         first_instance: u32,
         instance_count: u32,
+        overlay: bool,
     ) -> Result<(), JsValue> {
         if positions.is_empty() || positions.len() % 6 != 0 {
             return Err(JsValue::from_str("Line positions must contain complete XYZ pairs"));
@@ -647,6 +889,7 @@ impl RenderCore {
             vertex_count: (positions.len() / 3) as u32,
             first_instance,
             instance_count,
+            overlay,
         });
         Ok(())
     }
@@ -706,12 +949,36 @@ impl RenderCore {
         self.surface_config.width = width;
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
-        self.depth_texture = Self::create_depth_texture(&self.device, width, height);
+        self.depth_texture = Self::create_depth_texture(
+            &self.device,
+            width,
+            height,
+            self.msaa_samples,
+        );
         self.msaa_texture = Self::create_msaa_texture(
             &self.device,
             width,
             height,
             self.surface_config.format,
+        );
+    }
+
+    #[wasm_bindgen(js_name = setMsaaSamples)]
+    pub fn set_msaa_samples(&mut self, samples: u32) {
+        let samples = if samples >= MSAA_SAMPLE_COUNT {
+            MSAA_SAMPLE_COUNT
+        } else {
+            1
+        };
+        if self.msaa_samples == samples {
+            return;
+        }
+        self.msaa_samples = samples;
+        self.depth_texture = Self::create_depth_texture(
+            &self.device,
+            self.surface_config.width,
+            self.surface_config.height,
+            samples,
         );
     }
 
@@ -752,16 +1019,21 @@ impl RenderCore {
         let color_view = frame.texture.create_view(&Default::default());
         let msaa_view = self.msaa_texture.create_view(&Default::default());
         let depth_view = self.depth_texture.create_view(&Default::default());
+        let (render_view, resolve_target, color_store) = if self.msaa_samples > 1 {
+            (&msaa_view, Some(&color_view), wgpu::StoreOp::Discard)
+        } else {
+            (&color_view, None, wgpu::StoreOp::Store)
+        };
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Sim Studio visible frame encoder"),
         });
         {
             let color_attachments = [Some(wgpu::RenderPassColorAttachment {
-                view: &msaa_view,
-                resolve_target: Some(&color_view),
+                view: render_view,
+                resolve_target,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(self.clear_color),
-                    store: wgpu::StoreOp::Discard,
+                    store: color_store,
                 },
                 depth_slice: None,
             })];
@@ -783,26 +1055,42 @@ impl RenderCore {
             pass.set_bind_group(0, &self.render_bind_group, &[]);
             pass.set_bind_group(1, &self.camera_bind_group, &[]);
             if self.mesh_batches.is_empty() && self.line_batches.is_empty() {
-                pass.set_pipeline(&self.render_pipeline);
+                pass.set_pipeline(if self.msaa_samples > 1 {
+                    &self.render_pipeline
+                } else {
+                    &self.render_pipeline_single_sample
+                });
                 pass.draw(0..36, 0..self.instance_count);
             } else {
-                pass.set_pipeline(&self.mesh_pipeline);
-                for batch in &self.mesh_batches {
-                    pass.set_vertex_buffer(0, batch.vertex_buffer.slice(..));
-                    pass.set_index_buffer(batch.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(
-                        0..batch.index_count,
-                        0,
-                        batch.first_instance..batch.first_instance + batch.instance_count,
-                    );
-                }
-                pass.set_pipeline(&self.line_pipeline);
-                for batch in &self.line_batches {
-                    pass.set_vertex_buffer(0, batch.vertex_buffer.slice(..));
-                    pass.draw(
-                        0..batch.vertex_count,
-                        batch.first_instance..batch.first_instance + batch.instance_count,
-                    );
+                for overlay in [false, true] {
+                    pass.set_pipeline(match (overlay, self.msaa_samples > 1) {
+                        (false, true) => &self.mesh_pipeline,
+                        (false, false) => &self.mesh_pipeline_single_sample,
+                        (true, true) => &self.mesh_pipeline_overlay,
+                        (true, false) => &self.mesh_pipeline_overlay_single_sample,
+                    });
+                    for batch in self.mesh_batches.iter().filter(|batch| batch.overlay == overlay) {
+                        pass.set_vertex_buffer(0, batch.vertex_buffer.slice(..));
+                        pass.set_index_buffer(batch.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(
+                            0..batch.index_count,
+                            0,
+                            batch.first_instance..batch.first_instance + batch.instance_count,
+                        );
+                    }
+                    pass.set_pipeline(match (overlay, self.msaa_samples > 1) {
+                        (false, true) => &self.line_pipeline,
+                        (false, false) => &self.line_pipeline_single_sample,
+                        (true, true) => &self.line_pipeline_overlay,
+                        (true, false) => &self.line_pipeline_overlay_single_sample,
+                    });
+                    for batch in self.line_batches.iter().filter(|batch| batch.overlay == overlay) {
+                        pass.set_vertex_buffer(0, batch.vertex_buffer.slice(..));
+                        pass.draw(
+                            0..batch.vertex_count,
+                            batch.first_instance..batch.first_instance + batch.instance_count,
+                        );
+                    }
                 }
             }
         }
@@ -836,7 +1124,12 @@ impl RenderCore {
         })
     }
 
-    fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
+    fn create_depth_texture(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        sample_count: u32,
+    ) -> wgpu::Texture {
         device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Sim Studio depth texture"),
             size: wgpu::Extent3d {
@@ -845,7 +1138,7 @@ impl RenderCore {
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
-            sample_count: MSAA_SAMPLE_COUNT,
+            sample_count,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Depth24Plus,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,

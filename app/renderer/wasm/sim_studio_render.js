@@ -40,13 +40,14 @@ export class RenderCore {
      * @param {Float32Array} positions
      * @param {number} first_instance
      * @param {number} instance_count
+     * @param {boolean} overlay
      */
-    addLines(positions, first_instance, instance_count) {
+    addLines(positions, first_instance, instance_count, overlay) {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
             const ptr0 = passArrayF32ToWasm0(positions, wasm.__wbindgen_export);
             const len0 = WASM_VECTOR_LEN;
-            wasm.rendercore_addLines(retptr, this.__wbg_ptr, ptr0, len0, first_instance, instance_count);
+            wasm.rendercore_addLines(retptr, this.__wbg_ptr, ptr0, len0, first_instance, instance_count, overlay);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             if (r1) {
@@ -62,8 +63,9 @@ export class RenderCore {
      * @param {Uint32Array} indices
      * @param {number} first_instance
      * @param {number} instance_count
+     * @param {boolean} overlay
      */
-    addMesh(positions, normals, indices, first_instance, instance_count) {
+    addMesh(positions, normals, indices, first_instance, instance_count, overlay) {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
             const ptr0 = passArrayF32ToWasm0(positions, wasm.__wbindgen_export);
@@ -72,7 +74,7 @@ export class RenderCore {
             const len1 = WASM_VECTOR_LEN;
             const ptr2 = passArray32ToWasm0(indices, wasm.__wbindgen_export);
             const len2 = WASM_VECTOR_LEN;
-            wasm.rendercore_addMesh(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, first_instance, instance_count);
+            wasm.rendercore_addMesh(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, first_instance, instance_count, overlay);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             if (r1) {
@@ -150,6 +152,12 @@ export class RenderCore {
      */
     setClearColor(red, green, blue, alpha) {
         wasm.rendercore_setClearColor(this.__wbg_ptr, red, green, blue, alpha);
+    }
+    /**
+     * @param {number} samples
+     */
+    setMsaaSamples(samples) {
+        wasm.rendercore_setMsaaSamples(this.__wbg_ptr, samples);
     }
     /**
      * @returns {number}
@@ -441,7 +449,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return __wasm_bindgen_func_elem_1293(a, state0.b, arg0, arg1);
+                        return __wasm_bindgen_func_elem_1295(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -1041,12 +1049,12 @@ function __wbg_get_imports() {
         }, arguments); },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 23, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_341);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_343);
             return addHeapObject(ret);
         },
         __wbindgen_cast_0000000000000002: function(arg0, arg1) {
             // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 71, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_1278);
+            const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_1280);
             return addHeapObject(ret);
         },
         __wbindgen_cast_0000000000000003: function(arg0) {
@@ -1078,14 +1086,14 @@ function __wbg_get_imports() {
     };
 }
 
-function __wasm_bindgen_func_elem_341(arg0, arg1, arg2) {
-    wasm.__wasm_bindgen_func_elem_341(arg0, arg1, addHeapObject(arg2));
+function __wasm_bindgen_func_elem_343(arg0, arg1, arg2) {
+    wasm.__wasm_bindgen_func_elem_343(arg0, arg1, addHeapObject(arg2));
 }
 
-function __wasm_bindgen_func_elem_1278(arg0, arg1, arg2) {
+function __wasm_bindgen_func_elem_1280(arg0, arg1, arg2) {
     try {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        wasm.__wasm_bindgen_func_elem_1278(retptr, arg0, arg1, addHeapObject(arg2));
+        wasm.__wasm_bindgen_func_elem_1280(retptr, arg0, arg1, addHeapObject(arg2));
         var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
         var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
         if (r1) {
@@ -1096,8 +1104,8 @@ function __wasm_bindgen_func_elem_1278(arg0, arg1, arg2) {
     }
 }
 
-function __wasm_bindgen_func_elem_1293(arg0, arg1, arg2, arg3) {
-    wasm.__wasm_bindgen_func_elem_1293(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_1295(arg0, arg1, arg2, arg3) {
+    wasm.__wasm_bindgen_func_elem_1295(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 
 

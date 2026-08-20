@@ -67,7 +67,7 @@ export type Piece = CatalogPart & {
   rotationPivotKey?: string;
   gearDirectionLock?: -1 | 0 | 1;
   gearMotor?: { key: string; speed: number; force: number };
-  lockSprite?: THREE.Sprite;
+  lockSprite?: THREE.Group;
   /** Numeric body identifier owned by the Rust/WASM physics core. */
   physicsBodyId?: number;
   /** Cached facade; the real Rapier body never crosses the WASM boundary. */
@@ -369,6 +369,7 @@ export type AppState = {
   setViewportRendererPreference: (
     preference: ViewportRendererPreference,
   ) => void;
+  setAdaptiveRendering: (enabled: boolean) => void;
   pendingPlacement?: {
     pieces: Piece[];
     offsets: THREE.Vector3[];

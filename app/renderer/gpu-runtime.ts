@@ -42,19 +42,24 @@ export type GpuSceneStats = {
 type GpuInstanceSource = {
   object: THREE.Object3D;
   material: THREE.Material;
+  color: THREE.Color;
   piece?: GpuScenePiece;
 };
+
+type GpuInstanceSourceInput = Omit<GpuInstanceSource, "color">;
 
 type MeshUploadGroup = {
   positions: number[];
   normals: number[];
   indices: number[];
   sources: GpuInstanceSource[];
+  overlay: boolean;
 };
 
 type LineUploadGroup = {
   positions: number[];
   sources: GpuInstanceSource[];
+  overlay: boolean;
 };
 
 const initialize = () =>
@@ -184,6 +189,7 @@ export class GpuSceneRenderer {
   private instanceSources: GpuInstanceSource[] = [];
   private sceneSignature = -1;
   private instanceValues = new Float32Array(0);
+  private msaaSamples = 4;
 
   private constructor(
     private readonly core: RenderCore,
@@ -211,7 +217,15 @@ export class GpuSceneRenderer {
       hash = Math.imul(hash ^ piece.color, 0x01000193);
       hash = Math.imul(hash ^ piece.mesh.id, 0x01000193);
     }
-    for (const extra of extras) hash = Math.imul(hash ^ extra.id, 0x01000193);
+    for (const extra of extras)
+      extra.traverse((object) => {
+        hash = Math.imul(hash ^ object.id, 0x01000193);
+        const renderable = object as THREE.Object3D & {
+          geometry?: THREE.BufferGeometry;
+        };
+        if (renderable.geometry)
+          hash = Math.imul(hash ^ renderable.geometry.id, 0x01000193);
+      });
     return hash >>> 0;
   }
 
@@ -227,7 +241,7 @@ export class GpuSceneRenderer {
       keyPrefix: string,
       root: THREE.Object3D,
       ignoreVisibility: boolean,
-      sourcesForMaterial: (material: THREE.Material) => GpuInstanceSource[],
+      sourcesForMaterial: (material: THREE.Material) => GpuInstanceSourceInput[],
     ) => {
       root.updateMatrixWorld(true);
       inverseRoot.copy(root.matrixWorld).invert();
@@ -250,12 +264,52 @@ export class GpuSceneRenderer {
             const count = Math.min(range.count, total - range.start),
               material = materials[range.materialIndex ?? 0] ?? materials[0];
             if (!material || count < 3) continue;
-            const key = `${keyPrefix}:mesh:${material.uuid}`,
+            materialColor(material, this.color);
+            const overlay = !material.depthTest || !!root.userData.gpuOverlay;
+            if (
+              (material as THREE.Material & { wireframe?: boolean }).wireframe
+            ) {
+              const key = `${keyPrefix}:wire:${this.color.getHexString()}:${overlay}`,
+                group = lines.get(key) ?? {
+                  positions: [],
+                  sources: sourcesForMaterial(material).map((source) => ({
+                    ...source,
+                    color: this.color.clone(),
+                  })),
+                  overlay,
+                },
+                completeCount = count - (count % 3);
+              for (let offset = 0; offset < completeCount; offset += 3) {
+                const triangle = [0, 1, 2].map((corner) =>
+                  geometry.index
+                    ? geometry.index.getX(range.start + offset + corner)
+                    : range.start + offset + corner,
+                );
+                for (const vertex of [
+                  triangle[0],
+                  triangle[1],
+                  triangle[1],
+                  triangle[2],
+                  triangle[2],
+                  triangle[0],
+                ]) {
+                  point.fromBufferAttribute(position, vertex).applyMatrix4(localMatrix);
+                  group.positions.push(point.x, point.y, point.z);
+                }
+              }
+              lines.set(key, group);
+              continue;
+            }
+            const key = `${keyPrefix}:mesh:${this.color.getHexString()}:${overlay}`,
               group = meshes.get(key) ?? {
                 positions: [],
                 normals: [],
                 indices: [],
-                sources: sourcesForMaterial(material),
+                sources: sourcesForMaterial(material).map((source) => ({
+                  ...source,
+                  color: this.color.clone(),
+                })),
+                overlay,
               };
             const completeCount = count - (count % 3),
               geometryNormal = geometry.getAttribute("normal");
@@ -277,7 +331,7 @@ export class GpuSceneRenderer {
             }
             meshes.set(key, group);
           }
-        } else if (object instanceof THREE.LineSegments) {
+        } else if (object instanceof THREE.Line) {
           const geometry = object.geometry;
           if (
             geometry.hasAttribute("control0") &&
@@ -299,18 +353,33 @@ export class GpuSceneRenderer {
             const count = Math.min(range.count, total - range.start),
               material = materials[range.materialIndex ?? 0] ?? materials[0];
             if (!material || count < 2) continue;
-            const key = `${keyPrefix}:line:${material.uuid}`,
+            materialColor(material, this.color);
+            const overlay = !material.depthTest || !!root.userData.gpuOverlay,
+              key = `${keyPrefix}:line:${this.color.getHexString()}:${overlay}`,
               group = lines.get(key) ?? {
                 positions: [],
-                sources: sourcesForMaterial(material),
+                sources: sourcesForMaterial(material).map((source) => ({
+                  ...source,
+                  color: this.color.clone(),
+                })),
+                overlay,
               };
-            const completeCount = count - (count % 2);
-            for (let offset = 0; offset < completeCount; offset++) {
+            const addVertex = (sourceOffset: number) => {
               const sourceIndex = geometry.index
-                ? geometry.index.getX(range.start + offset)
-                : range.start + offset;
+                ? geometry.index.getX(range.start + sourceOffset)
+                : range.start + sourceOffset;
               point.fromBufferAttribute(position, sourceIndex).applyMatrix4(localMatrix);
               group.positions.push(point.x, point.y, point.z);
+            };
+            if (object instanceof THREE.LineSegments) {
+              const completeCount = count - (count % 2);
+              for (let offset = 0; offset < completeCount; offset++)
+                addVertex(offset);
+            } else {
+              for (let offset = 0; offset + 1 < count; offset++) {
+                addVertex(offset);
+                addVertex(offset + 1);
+              }
             }
             lines.set(key, group);
           }
@@ -346,6 +415,7 @@ export class GpuSceneRenderer {
         new Uint32Array(group.indices),
         firstInstance,
         group.sources.length,
+        group.overlay,
       );
     }
     for (const group of lines.values()) {
@@ -355,18 +425,26 @@ export class GpuSceneRenderer {
         new Float32Array(group.positions),
         firstInstance,
         group.sources.length,
+        group.overlay,
       );
     }
     this.instanceValues = new Float32Array(this.instanceSources.length * 20);
   }
 
   resize(cssWidth: number, cssHeight: number, requestedPixelRatio: number) {
-    // Never render below one physical pixel per CSS pixel: sub-native canvas
-    // sizes made the WebGPU viewport visibly blocky even at a healthy FPS.
-    // DPR 2 remains a practical ceiling for high-density/mobile displays.
-    const pixelRatio = Math.min(2, Math.max(1, requestedPixelRatio)),
+    // WebGPU follows the adaptive render scale too. MSAA keeps edges smooth
+    // while a 0.6 floor prevents the emergency mode from becoming unusable.
+    const pixelRatio = Math.min(2, Math.max(0.6, requestedPixelRatio)),
       width = Math.max(1, Math.round(cssWidth * pixelRatio)),
       height = Math.max(1, Math.round(cssHeight * pixelRatio));
+    const nativeRatio = Math.min(devicePixelRatio, 2),
+      qualityScale = Math.min(1, requestedPixelRatio / nativeRatio);
+    if (this.msaaSamples === 4 && qualityScale <= 0.9) this.msaaSamples = 1;
+    else if (this.msaaSamples === 1 && qualityScale >= 0.999)
+      this.msaaSamples = 4;
+    this.core.setMsaaSamples(this.msaaSamples);
+    this.canvas.dataset.pixelRatio = pixelRatio.toFixed(2);
+    this.canvas.dataset.msaaSamples = String(this.msaaSamples);
     this.canvas.style.width = `${cssWidth}px`;
     this.canvas.style.height = `${cssHeight}px`;
     if (this.canvas.width === width && this.canvas.height === height) return;
@@ -394,10 +472,9 @@ export class GpuSceneRenderer {
       const source = this.instanceSources[index],
         offset = index * 20;
       source.object.matrixWorld.toArray(this.instanceValues, offset);
-      materialColor(source.material, this.color);
-      this.instanceValues[offset + 16] = this.color.r;
-      this.instanceValues[offset + 17] = this.color.g;
-      this.instanceValues[offset + 18] = this.color.b;
+      this.instanceValues[offset + 16] = source.color.r;
+      this.instanceValues[offset + 17] = source.color.g;
+      this.instanceValues[offset + 18] = source.color.b;
       this.instanceValues[offset + 19] =
         source.piece && selected.has(source.piece) ? 1 : 0;
     }
