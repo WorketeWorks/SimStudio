@@ -3939,6 +3939,15 @@ export default function Home() {
 
     const pickPiece = () => {
       let best: { piece: Piece; point: THREE.Vector3; distance: number } | undefined;
+      const consider = (
+        piece: Piece | undefined,
+        point: THREE.Vector3,
+        distance: number,
+      ) => {
+        if (!piece || !Number.isFinite(distance)) return;
+        if (!best || distance < best.distance - 1.0e-5)
+          best = { piece, point: point.clone(), distance };
+      };
       const visualHits = ray.intersectObjects(
         [
           ...state.pieces
@@ -3954,16 +3963,8 @@ export default function Home() {
           candidate.instanceId ??
             (candidate as THREE.Intersection & { batchId?: number }).batchId,
         );
-        if (piece) {
-          best = {
-            piece,
-            point: candidate.point.clone(),
-            distance: candidate.distance,
-          };
-          break;
-        }
+        consider(piece, candidate.point, candidate.distance);
       }
-      if (best) return best;
       const unitScale = new THREE.Vector3(1, 1, 1);
       for (const piece of state.pieces) {
         piece.mesh.updateMatrixWorld(true);
@@ -3997,7 +3998,7 @@ export default function Home() {
           if (!localHit) continue;
           const point = localHit.applyMatrix4(primitiveMatrix),
             distance = ray.ray.origin.distanceTo(point);
-          if (!best || distance < best.distance) best = { piece, point, distance };
+          consider(piece, point, distance);
         }
       }
       return best;
