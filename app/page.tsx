@@ -218,6 +218,28 @@ const belongsToDefaultPalette = (part: CatalogPart) =>
 const isGearPart = (p: CatalogPart) =>
   p.gear === true || p.family === "gears" || /\bgear\b/i.test(p.name);
 
+/** Physical rotation axis of a gear, taken from its cylindrical gear collider. */
+const gearAxisForPiece = (piece: Piece) => {
+  piece.mesh.updateMatrixWorld(true);
+  const cylinder = [...piece.gearColliders, ...piece.colliders].find(
+    (primitive) => primitive.shape === "cylinder",
+  );
+  const localAxis = cylinder
+    ? new THREE.Vector3(0, 1, 0).applyQuaternion(cylinder.rotation)
+    : piece.connectors.find((connector) => connector.kind === "axle")?.axis.clone() ??
+      new THREE.Vector3(0, 1, 0);
+  return localAxis.transformDirection(piece.mesh.matrixWorld).normalize();
+};
+
+const normalizeMotorKey = (key: string) => {
+  const value = key.trim();
+  if (/^Key[A-Z]$/i.test(value)) return `Key${value.at(-1)!.toUpperCase()}`;
+  if (/^[A-Z]$/i.test(value)) return `Key${value.toUpperCase()}`;
+  return value || "KeyM";
+};
+
+const motorKeyLabel = (key: string) => key.replace(/^Key/, "");
+
 const isHalfBeamPart = (p: CatalogPart) =>
   /^Technic (Beam|Panel)/i.test(p.name) &&
   /(?:\bx\s*0\.5\b|\b0\.5\b|\bhalf\b)/i.test(p.name);
@@ -1712,10 +1734,7 @@ export default function Home() {
           (object as THREE.BoxHelper).update();
         } else if (data.debugKind === "gear-direction-lock" && piece) {
           piece.mesh.updateMatrixWorld(true);
-          const axis = (data.axis as THREE.Vector3)
-            .clone()
-            .transformDirection(piece.mesh.matrixWorld)
-            .normalize();
+          const axis = gearAxisForPiece(piece).multiplyScalar(piece.gearDirectionLock ?? 1);
           object.position.copy(piece.mesh.getWorldPosition(new THREE.Vector3())).addScaledVector(axis, 0.35);
           (object as THREE.ArrowHelper).setDirection(axis);
         } else if (data.debugKind === "connector-point" && piece)
@@ -1823,11 +1842,9 @@ export default function Home() {
         material.opacity = 0.95;
         debugRoot.add(outline);
         if (selected.gear && selected.gearDirectionLock) {
-          const localAxis = new THREE.Vector3(0, selected.gearDirectionLock > 0 ? 1 : -1, 0),
-            axis = localAxis
-            .clone()
-            .transformDirection(selected.mesh.matrixWorld)
-            .normalize();
+          const axis = gearAxisForPiece(selected).multiplyScalar(
+            selected.gearDirectionLock > 0 ? 1 : -1,
+          );
           const arrow = new THREE.ArrowHelper(
             axis,
             selected.mesh.getWorldPosition(new THREE.Vector3()).addScaledVector(axis, 0.35),
@@ -1836,7 +1853,7 @@ export default function Home() {
             0.18,
             0.12,
           );
-          arrow.userData = { debugKind: "gear-direction-lock", piece: selected, axis: localAxis };
+          arrow.userData = { debugKind: "gear-direction-lock", piece: selected, axis };
           debugRoot.add(arrow);
         }
       }
@@ -5171,7 +5188,9 @@ export default function Home() {
               return;
             }
           } else state.selectedPieces.add(hitPiece);
-        } else if (!state.selectedPieces.has(hitPiece) || state.selectedPieces.size !== 1) {
+        // Preserve an existing multi-selection when the user starts dragging
+        // one of its members; otherwise every group drag collapses to one.
+        } else if (!state.selectedPieces.has(hitPiece)) {
           state.selectedPieces = new Set([hitPiece]);
         }
         moving = hitPiece;
@@ -5203,7 +5222,15 @@ export default function Home() {
               .transformDirection(linearGuide.a.mesh.matrixWorld)
               .normalize()
           : undefined;
-        const ground = ray.intersectObject(floor)[0];
+        const ground =
+          ray.intersectObject(floor)[0] ??
+          (() => {
+            const point = ray.ray.intersectPlane(
+              new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
+              new THREE.Vector3(),
+            );
+            return point ? { point } : undefined;
+          })();
         if (ground)
           moveOffset.set(
             moving.mesh.position.x - ground.point.x,
@@ -5408,7 +5435,15 @@ export default function Home() {
             : movingStartPosition.y - (e.clientY - movingStartPointer.y) * 0.0125;
         else {
           cast(e);
-          const ground = ray.intersectObject(floor)[0];
+          const ground =
+            ray.intersectObject(floor)[0] ??
+            (() => {
+              const point = ray.ray.intersectPlane(
+                new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
+                new THREE.Vector3(),
+              );
+              return point ? { point } : undefined;
+            })();
           if (ground) {
             moving.mesh.position.x = state.gridStep
               ? Math.round((ground.point.x + moveOffset.x) / state.gridStep) *
@@ -5702,7 +5737,10 @@ export default function Home() {
         e.preventDefault();
         return;
       }
-      if (state.running && state.selected?.gear && state.selected.gearMotor?.key === e.code) {
+      if (
+        state.running &&
+        state.pieces.some((piece) => piece.gearMotor?.key === e.code)
+      ) {
         gearMotorHeldKeys.add(e.code);
         e.preventDefault();
         return;
@@ -5988,10 +6026,7 @@ export default function Home() {
           // the gear body itself, separate from shaft/joint motors.
           state.pieces.forEach((piece) => {
             if (!piece.body || !piece.gear) return;
-            piece.mesh.updateMatrixWorld(true);
-            const axis = new THREE.Vector3(0, 1, 0)
-              .transformDirection(piece.mesh.matrixWorld)
-              .normalize();
+            const axis = gearAxisForPiece(piece);
             if (piece.gearMotor && gearMotorHeldKeys.has(piece.gearMotor.key)) {
               const angular = piece.body.angvel(),
                 currentSpeed = new THREE.Vector3(angular.x, angular.y, angular.z).dot(axis),
@@ -7372,6 +7407,7 @@ export default function Home() {
   };
 
   const selected = appRef.current?.selected;
+  const gearMotors = appRef.current?.pieces.filter((piece) => piece.gearMotor) ?? [];
   const selectedCollisionLayer = selected?.gear ? collisionLayer : "normal",
     selectedCollisionPrimitives = selected
       ? selectedCollisionLayer === "gear"
@@ -8888,6 +8924,36 @@ export default function Home() {
         <div className="panel-title">
           <span>{t.properties}</span>
         </div>
+        <div className="connection-editor gear-motor-editor">
+          <label>{language === "es" ? "Motores de engranaje" : "Gear motors"}</label>
+          {gearMotors.length ? (
+            gearMotors.map((piece) => (
+              <div className="connection-card" key={`gear-motor-${piece.id}`}>
+                <div>
+                  <b>{piece.part}</b>
+                  <span>
+                    {motorKeyLabel(piece.gearMotor!.key)} · {piece.gearMotor!.speed} rad/s · {piece.gearMotor!.force} N·m
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  disabled={running}
+                  onClick={() => {
+                    appRef.current?.recordHistory();
+                    piece.gearMotor = undefined;
+                    setConnectionRevision((revision) => revision + 1);
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            ))
+          ) : (
+            <p className="no-connections">
+              {language === "es" ? "No hay motores asignados." : "No motors assigned."}
+            </p>
+          )}
+        </div>
         {selectedId && selected ? (
           <>
             <div className="selected-card">
@@ -9204,16 +9270,29 @@ export default function Home() {
                 </label>
                 <div className="connection-editor gear-motor-editor">
                   <label>{language === "es" ? "Motor del engranaje" : "Gear motor"}</label>
+                  {!selected.gearMotor ? (
+                    <button
+                      type="button"
+                      disabled={running}
+                      onClick={() => {
+                        appRef.current?.recordHistory();
+                        selected.gearMotor = { key: "KeyM", speed: 8, force: 20 };
+                        setConnectionRevision((revision) => revision + 1);
+                      }}
+                    >
+                      {language === "es" ? "Añadir motor a este engranaje" : "Add motor to this gear"}
+                    </button>
+                  ) : <>
                   <div className="data-row">
                     <span>{language === "es" ? "Tecla" : "Key"}</span>
                     <input
-                      value={selected.gearMotor?.key ?? "KeyM"}
+                      value={motorKeyLabel(selected.gearMotor.key)}
                       disabled={running}
                       onChange={(event) => {
                         selected.gearMotor = {
-                          key: event.target.value || "KeyM",
-                          speed: selected.gearMotor?.speed ?? 8,
-                          force: selected.gearMotor?.force ?? 20,
+                          key: normalizeMotorKey(event.target.value),
+                          speed: selected.gearMotor!.speed,
+                          force: selected.gearMotor!.force,
                         };
                         setConnectionRevision((revision) => revision + 1);
                       }}
@@ -9223,18 +9302,47 @@ export default function Home() {
                     <span>{language === "es" ? "Velocidad" : "Speed"}</span>
                     <input
                       type="number"
-                      value={selected.gearMotor?.speed ?? 8}
+                      value={selected.gearMotor.speed}
                       disabled={running}
                       onChange={(event) => {
                         selected.gearMotor = {
-                          key: selected.gearMotor?.key ?? "KeyM",
+                          key: selected.gearMotor!.key,
                           speed: Number(event.target.value) || 0,
-                          force: selected.gearMotor?.force ?? 20,
+                          force: selected.gearMotor!.force,
                         };
                         setConnectionRevision((revision) => revision + 1);
                       }}
                     />
                   </div>
+                  <div className="data-row">
+                    <span>{language === "es" ? "Fuerza" : "Force"}</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={selected.gearMotor.force}
+                      disabled={running}
+                      onChange={(event) => {
+                        selected.gearMotor = {
+                          key: selected.gearMotor!.key,
+                          speed: selected.gearMotor!.speed,
+                          force: Math.max(0, Number(event.target.value) || 0),
+                        };
+                        setConnectionRevision((revision) => revision + 1);
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    disabled={running}
+                    onClick={() => {
+                      appRef.current?.recordHistory();
+                      selected.gearMotor = undefined;
+                      setConnectionRevision((revision) => revision + 1);
+                    }}
+                  >
+                    {language === "es" ? "Quitar motor" : "Remove motor"}
+                  </button>
+                  </>}
                   <small>{language === "es" ? "Mantén la tecla durante la simulación para accionar este engranaje." : "Hold the key during simulation to drive this gear."}</small>
                 </div>
                 {selectedGearLinks.length ? (
