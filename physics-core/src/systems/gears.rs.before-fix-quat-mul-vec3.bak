@@ -1418,11 +1418,11 @@ fn rotate_rigid_component(
 
         let offset = position.translation - pivot;
         position.translation =
-            pivot + delta.mul_vec3(offset);
+            pivot + delta.transform_vector(offset);
         position.rotation = delta * position.rotation;
 
-        let rotated_linear = delta.mul_vec3(linear);
-        let rotated_angular = delta.mul_vec3(angular);
+        let rotated_linear = delta.transform_vector(linear);
+        let rotated_angular = delta.transform_vector(angular);
 
         let body = &mut world.bodies[*handle];
         body.set_position(position, false);

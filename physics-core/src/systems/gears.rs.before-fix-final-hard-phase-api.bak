@@ -95,6 +95,7 @@ pub fn build_gears(
             let rigid_a = world.bodies.get(body_a)?;
             let rigid_b = world.bodies.get(body_b)?;
 
+            let initial_phase = initial_gear_phase(config);
 
             let (initial_angle_a, initial_angle_b) =
                 initial_gear_angles(config);
@@ -1413,16 +1414,15 @@ fn rotate_rigid_component(
         }
 
         let mut position = *body.position();
-        let linear = body.linvel();
-        let angular = body.angvel();
+        let linear = *body.linvel();
+        let angular = *body.angvel();
 
-        let offset = position.translation - pivot;
-        position.translation =
-            pivot + delta.mul_vec3(offset);
+        let offset = position.translation.vector - pivot;
+        position.translation.vector = pivot + delta * offset;
         position.rotation = delta * position.rotation;
 
-        let rotated_linear = delta.mul_vec3(linear);
-        let rotated_angular = delta.mul_vec3(angular);
+        let rotated_linear = delta * linear;
+        let rotated_angular = delta * angular;
 
         let body = &mut world.bodies[*handle];
         body.set_position(position, false);

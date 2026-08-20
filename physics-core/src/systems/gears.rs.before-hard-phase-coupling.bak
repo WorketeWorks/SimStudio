@@ -1,10 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use rapier3d::prelude::*;
 
 use crate::math::{normalized, vector};
-use crate::model::{GearConfig, JointMode};
-use super::joints::JointRuntime;
+use crate::model::GearConfig;
 
 const VELOCITY_SOLVER_PASSES: usize = 1;
 const BEVEL_SOLVER_PASSES: usize = 1;
@@ -95,25 +94,16 @@ pub fn build_gears(
             let rigid_a = world.bodies.get(body_a)?;
             let rigid_b = world.bodies.get(body_b)?;
 
+            let initial_phase = initial_gear_phase(config);
 
             let (initial_angle_a, initial_angle_b) =
                 initial_gear_angles(config);
             let teeth_a = config.teeth_a.max(1.0);
             let teeth_b = config.teeth_b.max(1.0);
             let sign_b = if config.sign_b < 0.0 { -1.0 } else { 1.0 };
-            let initial_raw_phase =
+            let phase_target =
                 teeth_a * initial_angle_a
                     + sign_b * teeth_b * initial_angle_b;
-
-            // Correct any pre-existing misalignment to the nearest valid
-            // tooth engagement instead of preserving the starting error.
-            let phase_target =
-                std::f32::consts::PI
-                    + std::f32::consts::TAU
-                        * ((initial_raw_phase - std::f32::consts::PI)
-                            / std::f32::consts::TAU)
-                            .round();
-
             let initial_phase = wrap_pi(phase_target);
 
             Some(GearRuntime {
@@ -587,43 +577,6 @@ fn solve_spur_contact_impulse(
 }
 
 
-fn hard_phase_contact_bias(
-    gear: &GearRuntime,
-    position_a: Pose,
-    position_b: Pose,
-    radial_a: Vector,
-    radial_b: Vector,
-    pitch_scale: Real,
-    dt: Real,
-) -> Real {
-    if !gear.phase_lock || dt <= 1.0e-6 {
-        return 0.0;
-    }
-
-    let phase_error = unwrapped_phase_error(
-        gear,
-        position_a,
-        position_b,
-        radial_a,
-        radial_b,
-    );
-
-    if phase_error.abs() <= 1.0e-6 {
-        return 0.0;
-    }
-
-    // phase_error * pitch_scale is tangential tooth displacement.
-    //
-    // Near the target we remove the complete error in one substep.
-    // For a badly misaligned imported model, capture progressively to avoid
-    // an unphysical one-frame impulse while still guaranteeing convergence.
-    let desired = phase_error * pitch_scale / dt;
-    let max_capture_speed: Real = 4.0;
-
-    desired.clamp(-max_capture_speed, max_capture_speed)
-}
-
-
 fn unwrapped_phase_error(
     gear: &GearRuntime,
     position_a: Pose,
@@ -679,7 +632,7 @@ pub fn project_exact_no_slip(
     // Repeated forward/reverse Gauss-Seidel sweeps make every gear contact
     // satisfy zero relative tooth velocity. There is no clutch, tolerance,
     // phase spring, or permitted tooth slip.
-    for _ in 0..24 {
+    for _ in 0..16 {
         for gear in gears {
             project_one_exact_no_slip(gear, world);
         }
@@ -798,22 +751,6 @@ fn project_one_exact_no_slip(
     if perpendicular {
         let contact = (point_a + point_b) * 0.5;
 
-        let pitch_scale = 0.5
-            * (
-                radius_a / gear.teeth_a.max(1.0)
-                + radius_b / teeth_b
-            );
-
-        let phase_bias = hard_phase_contact_bias(
-            gear,
-            position_a,
-            position_b,
-            radial_a,
-            radial_b,
-            pitch_scale,
-            world.integration_parameters.dt,
-        );
-
         let (
             relative_speed,
             denominator,
@@ -837,15 +774,13 @@ fn project_one_exact_no_slip(
             (relative_speed, denominator)
         };
 
-        let error = relative_speed - phase_bias;
-
-        if error.abs() <= VELOCITY_EPSILON
+        if relative_speed.abs() <= VELOCITY_EPSILON
             || denominator <= GEOMETRY_EPSILON
         {
             return;
         }
 
-        let lambda = -error / denominator;
+        let lambda = -relative_speed / denominator;
         let impulse = tangent * lambda;
 
         if !fixed_a {
@@ -869,17 +804,6 @@ fn project_one_exact_no_slip(
 
     let surface_sign =
         if gear.signed_teeth_b < 0.0 { -1.0 } else { 1.0 };
-
-    let pitch_scale = distance / total_teeth;
-    let phase_bias = hard_phase_contact_bias(
-        gear,
-        position_a,
-        position_b,
-        radial_a,
-        radial_b,
-        pitch_scale,
-        world.integration_parameters.dt,
-    );
 
     let (
         relative_speed,
@@ -907,15 +831,13 @@ fn project_one_exact_no_slip(
         (relative_speed, denominator)
     };
 
-    let error = relative_speed - phase_bias;
-
-    if error.abs() <= VELOCITY_EPSILON
+    if relative_speed.abs() <= VELOCITY_EPSILON
         || denominator <= GEOMETRY_EPSILON
     {
         return;
     }
 
-    let lambda = -error / denominator;
+    let lambda = -relative_speed / denominator;
 
     if !fixed_a {
         world.bodies[gear.body_a].apply_impulse_at_point(
@@ -1317,265 +1239,6 @@ fn solve_angular_ratio_fallback(
         );
     }
 }
-
-pub fn project_hard_phase_positions(
-    gears: &mut [GearRuntime],
-    joints: &[JointRuntime],
-    world: &mut PhysicsWorld,
-) {
-    // Final positional authority for tooth phase.
-    //
-    // This is intentionally a position projection, not a spring:
-    // any pre-existing or newly-created phase error is removed completely.
-    // Fixed-connected bodies move as one rigid component so axle-cross:fixed
-    // and other fixed joints are not torn apart by the correction.
-    for _ in 0..6 {
-        for gear in gears.iter_mut() {
-            project_one_hard_phase_position(gear, joints, world);
-        }
-
-        for gear in gears.iter_mut().rev() {
-            project_one_hard_phase_position(gear, joints, world);
-        }
-    }
-}
-
-fn fixed_component(
-    root: RigidBodyHandle,
-    joints: &[JointRuntime],
-) -> Vec<RigidBodyHandle> {
-    let mut visited = HashSet::new();
-    let mut stack = vec![root];
-
-    visited.insert(root);
-
-    while let Some(body) = stack.pop() {
-        for joint in joints {
-            if joint.mode != JointMode::Fixed {
-                continue;
-            }
-
-            let other = if joint.body_a == body {
-                Some(joint.body_b)
-            } else if joint.body_b == body {
-                Some(joint.body_a)
-            } else {
-                None
-            };
-
-            if let Some(other) = other {
-                if visited.insert(other) {
-                    stack.push(other);
-                }
-            }
-        }
-    }
-
-    visited.into_iter().collect()
-}
-
-fn component_contains_fixed(
-    component: &[RigidBodyHandle],
-    world: &PhysicsWorld,
-) -> bool {
-    component.iter().any(|handle| {
-        world.bodies
-            .get(*handle)
-            .map_or(true, |body| body.is_fixed())
-    })
-}
-
-fn rotate_rigid_component(
-    component: &[RigidBodyHandle],
-    pivot: Vector,
-    axis: Vector,
-    angle: Real,
-    world: &mut PhysicsWorld,
-) {
-    if angle.abs() <= 1.0e-8 {
-        return;
-    }
-
-    let axis_len2 = axis.length_squared();
-    if axis_len2 <= GEOMETRY_EPSILON {
-        return;
-    }
-
-    let delta = Rotation::from_scaled_axis(axis.normalize() * angle);
-
-    for handle in component {
-        let Some(body) = world.bodies.get(*handle) else {
-            continue;
-        };
-
-        if body.is_fixed() {
-            continue;
-        }
-
-        let mut position = *body.position();
-        let linear = body.linvel();
-        let angular = body.angvel();
-
-        let offset = position.translation - pivot;
-        position.translation =
-            pivot + delta.mul_vec3(offset);
-        position.rotation = delta * position.rotation;
-
-        let rotated_linear = delta.mul_vec3(linear);
-        let rotated_angular = delta.mul_vec3(angular);
-
-        let body = &mut world.bodies[*handle];
-        body.set_position(position, false);
-        body.set_linvel(rotated_linear, false);
-        body.set_angvel(rotated_angular, true);
-    }
-}
-
-fn project_one_hard_phase_position(
-    gear: &mut GearRuntime,
-    joints: &[JointRuntime],
-    world: &mut PhysicsWorld,
-) {
-    if !gear.phase_lock {
-        return;
-    }
-
-    let (position_a, position_b) = {
-        let Some(body_a) = world.bodies.get(gear.body_a) else {
-            return;
-        };
-        let Some(body_b) = world.bodies.get(gear.body_b) else {
-            return;
-        };
-
-        (*body_a.position(), *body_b.position())
-    };
-
-    let axis_a = position_a.rotation * gear.local_axis_a;
-    let axis_b = position_b.rotation * gear.local_axis_b;
-
-    let center_a = position_a.transform_point(gear.local_center_a);
-    let center_b = position_b.transform_point(gear.local_center_b);
-    let center_delta = center_b - center_a;
-
-    let radial_a_raw =
-        center_delta - axis_a * center_delta.dot(axis_a);
-    let radial_b_raw =
-        -center_delta - axis_b * (-center_delta).dot(axis_b);
-
-    if radial_a_raw.length_squared() <= GEOMETRY_EPSILON
-        || radial_b_raw.length_squared() <= GEOMETRY_EPSILON
-    {
-        return;
-    }
-
-    let radial_a = radial_a_raw.normalize();
-    let radial_b = radial_b_raw.normalize();
-
-    // Update the unwrapped geometric angles from the current transforms
-    // BEFORE calculating the correction. This catches external overwrites.
-    let reference_a =
-        position_a.rotation * gear.local_reference_a;
-    let reference_b =
-        position_b.rotation * gear.local_reference_b;
-
-    let ref_a_raw =
-        reference_a - axis_a * reference_a.dot(axis_a);
-    let ref_b_raw =
-        reference_b - axis_b * reference_b.dot(axis_b);
-
-    if ref_a_raw.length_squared() <= GEOMETRY_EPSILON
-        || ref_b_raw.length_squared() <= GEOMETRY_EPSILON
-    {
-        return;
-    }
-
-    let wrapped_a = signed_angle_around_axis(
-        ref_a_raw.normalize(),
-        radial_a,
-        axis_a,
-    );
-    let wrapped_b = signed_angle_around_axis(
-        ref_b_raw.normalize(),
-        radial_b,
-        axis_b,
-    );
-
-    gear.angle_a += wrap_pi(wrapped_a - wrap_pi(gear.angle_a));
-    gear.angle_b += wrap_pi(wrapped_b - wrap_pi(gear.angle_b));
-
-    let phase_error =
-        gear.teeth_a * gear.angle_a
-            + gear.signed_teeth_b * gear.angle_b
-            - gear.phase_target;
-
-    if phase_error.abs() <= 1.0e-6 {
-        return;
-    }
-
-    let component_a = fixed_component(gear.body_a, joints);
-    let component_b = fixed_component(gear.body_b, joints);
-
-    // If both gears belong to the same fixed component, their phase cannot
-    // be corrected by rotating one relative to the other without breaking
-    // that fixed assembly.
-    if component_a.iter().any(|h| component_b.contains(h)) {
-        return;
-    }
-
-    let locked_a = component_contains_fixed(&component_a, world);
-    let locked_b = component_contains_fixed(&component_b, world);
-
-    if locked_a && locked_b {
-        return;
-    }
-
-    let teeth_a = gear.teeth_a.max(1.0);
-    let signed_teeth_b = if gear.signed_teeth_b.abs() <= 1.0e-6 {
-        return;
-    } else {
-        gear.signed_teeth_b
-    };
-
-    // C = Na*thetaA + signedNb*thetaB - target = 0
-    //
-    // Remove C completely. If both rigid components are free, split the
-    // correction equally in phase-space. If one is anchored, the other
-    // receives the full correction.
-    let (delta_a, delta_b) = if locked_a {
-        (0.0, -phase_error / signed_teeth_b)
-    } else if locked_b {
-        (-phase_error / teeth_a, 0.0)
-    } else {
-        (
-            -0.5 * phase_error / teeth_a,
-            -0.5 * phase_error / signed_teeth_b,
-        )
-    };
-
-    if delta_a != 0.0 {
-        rotate_rigid_component(
-            &component_a,
-            center_a,
-            axis_a,
-            delta_a,
-            world,
-        );
-        gear.angle_a += delta_a;
-    }
-
-    if delta_b != 0.0 {
-        rotate_rigid_component(
-            &component_b,
-            center_b,
-            axis_b,
-            delta_b,
-            world,
-        );
-        gear.angle_b += delta_b;
-    }
-}
-
 
 pub fn accumulate_angles(
     gears: &mut [GearRuntime],

@@ -261,25 +261,6 @@ impl PhysicsEngine {
             }
         }
         self.clamp_motion(self.elapsed_seconds);
-        // FINAL GEAR AUTHORITY:
-        // anything that changed gear motion earlier in the frame (forces,
-        // motors, Rapier, clamps, or state overwrites) is corrected here.
-        gears::accumulate_angles(
-            &mut self.gears,
-            &mut self.previous_gear_rotations,
-            &self.world,
-        );
-        gears::project_hard_phase_positions(
-            &mut self.gears,
-            &self.joints,
-            &mut self.world,
-        );
-        gears::project_exact_no_slip(&self.gears, &mut self.world);
-        gears::accumulate_angles(
-            &mut self.gears,
-            &mut self.previous_gear_rotations,
-            &self.world,
-        );
         self.collect_transforms();
 
         self.stats.substeps = substeps;
