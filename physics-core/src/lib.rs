@@ -13,7 +13,7 @@ use math::{clamp_length, pose, rotation_to_array, vector};
 use model::{
     ColliderConfig, ColliderShape, GearConfig, JointConfig, PhysicsCommand, SceneConfig, StepStats,
 };
-use systems::{forces, gears, joints, stops};
+use systems::{differentials, forces, gears, joints, stops};
 
 const TRANSFORM_STRIDE: usize = 15;
 
@@ -80,6 +80,7 @@ pub struct PhysicsEngine {
     joints: Vec<joints::JointRuntime>,
     joint_ids: HashMap<String, usize>,
     gears: Vec<gears::GearRuntime>,
+    differentials: Vec<differentials::DifferentialRuntime>,
     axial_stops: Vec<stops::AxialStopRuntime>,
     previous_gear_rotations: HashMap<RigidBodyHandle, Rotation>,
     contact_filter: ContactFilter,
@@ -184,6 +185,8 @@ impl PhysicsEngine {
         }
 
         let runtime_gears = gears::build_gears(&config.gears, &body_ids, &world);
+        let runtime_differentials =
+            differentials::build(&config.differentials, &body_ids, &world);
         let axial_stops = stops::build(&config.axial_stops, &body_ids, &world);
         let previous_gear_rotations = ordered_bodies
             .iter()
@@ -197,8 +200,8 @@ impl PhysicsEngine {
                 .count(),
             sleeping_bodies: 0,
             joints: runtime_joints.len(),
-            gears: runtime_gears.len(),
-            substeps: if runtime_gears.is_empty() { 1 } else { 4 },
+            gears: runtime_gears.len() + runtime_differentials.len(),
+            substeps: if runtime_gears.is_empty() && runtime_differentials.is_empty() { 1 } else { 4 },
             max_spring_force: 0.0,
         };
 
@@ -209,6 +212,7 @@ impl PhysicsEngine {
             joints: runtime_joints,
             joint_ids,
             gears: runtime_gears,
+            differentials: runtime_differentials,
             axial_stops,
             previous_gear_rotations,
             contact_filter,
@@ -225,8 +229,24 @@ impl PhysicsEngine {
     pub fn step(&mut self, delta_seconds: f32, commands: JsValue) -> Result<Float32Array, JsValue> {
         let commands: Vec<PhysicsCommand> = serde_wasm_bindgen::from_value(commands)
             .map_err(|error| js_error(format!("Invalid physics commands: {error}")))?;
+        let driven_bodies: HashSet<_> = commands
+            .iter()
+            .filter_map(|command| {
+                let body = match command {
+                    PhysicsCommand::Spring { body, .. }
+                    | PhysicsCommand::Impulse { body, .. }
+                    | PhysicsCommand::TorqueImpulse { body, .. }
+                    | PhysicsCommand::SetTranslation { body, .. }
+                    | PhysicsCommand::SetRotation { body, .. }
+                    | PhysicsCommand::SetLinearVelocity { body, .. }
+                    | PhysicsCommand::SetAngularVelocity { body, .. } => *body,
+                    _ => return None,
+                };
+                self.body_ids.get(&body).copied()
+            })
+            .collect();
         let timestep = delta_seconds.clamp(1.0 / 240.0, 1.0 / 60.0);
-        let substeps = if self.gears.is_empty() { 1 } else { 6 };
+        let substeps = if self.gears.is_empty() && self.differentials.is_empty() { 1 } else { 6 };
 
         self.stats.max_spring_force =
             forces::apply_commands(&commands, &self.body_ids, &mut self.world, timestep);
@@ -238,9 +258,18 @@ impl PhysicsEngine {
         self.world.integration_parameters.dt = substep_dt;
         self.world.integration_parameters.warmstart_coefficient = if startup { 0.0 } else { 0.65 };
         for _ in 0..substeps {
+            differentials::project_velocities(
+                &self.differentials,
+                &driven_bodies,
+                &mut self.world,
+            );
             gears::project_velocities(&self.gears, &mut self.world, substep_dt);
-            gears::project_exact_no_slip(&self.gears, &mut self.world);
             self.world.step_with_events(&self.contact_filter, &());
+            differentials::project_velocities(
+                &self.differentials,
+                &driven_bodies,
+                &mut self.world,
+            );
             gears::project_exact_no_slip(&self.gears, &mut self.world);
         }
         gears::accumulate_angles(
@@ -269,6 +298,11 @@ impl PhysicsEngine {
             &self.world,
         );
         gears::project_exact_no_slip(&self.gears, &mut self.world);
+        differentials::project_velocities(
+            &self.differentials,
+            &driven_bodies,
+            &mut self.world,
+        );
         gears::accumulate_angles(
             &mut self.gears,
             &mut self.previous_gear_rotations,
@@ -335,13 +369,38 @@ impl PhysicsEngine {
     pub fn replace_gears(&mut self, gears: JsValue) -> Result<(), JsValue> {
         let configs: Vec<GearConfig> = serde_wasm_bindgen::from_value(gears)
             .map_err(|error| js_error(format!("Invalid gear graph: {error}")))?;
-        self.gears = systems::gears::build_gears(&configs, &self.body_ids, &self.world);
+        let previous: HashMap<_, _> = self
+            .gears
+            .drain(..)
+            .map(|gear| (gear.id.clone(), gear))
+            .collect();
+        let mut rebuilt = systems::gears::build_gears(&configs, &self.body_ids, &self.world);
+        for gear in &mut rebuilt {
+            let Some(old) = previous.get(&gear.id) else {
+                continue;
+            };
+            if old.body_a != gear.body_a
+                || old.body_b != gear.body_b
+                || (old.teeth_a - gear.teeth_a).abs() > 1.0e-6
+                || (old.signed_teeth_b - gear.signed_teeth_b).abs() > 1.0e-6
+            {
+                continue;
+            }
+            // Dynamic overlap scans must not redefine which tooth is engaged.
+            // Rebase the newly measured wrapped angles onto the old continuous
+            // coordinates and retain the original tooth-gap target.
+            gear.angle_a = old.angle_a + systems::gears::wrapped_delta(gear.angle_a, old.angle_a);
+            gear.angle_b = old.angle_b + systems::gears::wrapped_delta(gear.angle_b, old.angle_b);
+            gear.initial_phase = old.initial_phase;
+            gear.phase_target = old.phase_target;
+        }
+        self.gears = rebuilt;
         self.previous_gear_rotations = self
             .ordered_bodies
             .iter()
             .map(|(_, handle)| (*handle, *self.world.bodies[*handle].rotation()))
             .collect();
-        self.stats.gears = self.gears.len();
+        self.stats.gears = self.gears.len() + self.differentials.len();
         Ok(())
     }
 
@@ -374,11 +433,18 @@ impl PhysicsEngine {
 
 impl PhysicsEngine {
     fn clamp_motion(&mut self, elapsed_seconds: f32) {
-        let geared: HashSet<_> = self
+        let mut geared: HashSet<_> = self
             .gears
             .iter()
             .flat_map(|gear| [gear.body_a, gear.body_b])
             .collect();
+        for differential in &self.differentials {
+            geared.extend([
+                differential.left,
+                differential.right,
+                differential.carrier,
+            ]);
+        }
         for (_, handle) in &self.ordered_bodies {
             let body = &mut self.world.bodies[*handle];
             if body.is_fixed() {

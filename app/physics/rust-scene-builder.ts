@@ -19,6 +19,7 @@ import type {
   RustBodyConfig,
   RustAxialStopConfig,
   RustColliderConfig,
+  RustDifferentialConfig,
   RustGearConfig,
   RustJointConfig,
   RustPhysicsScene,
@@ -177,12 +178,24 @@ export function buildRustJointConfig(
 export function buildRustGearConfigs(
   gearLinks: RuntimeGearLink[],
   bodyIdByPiece: Map<Piece, number>,
-  _connections?: Connection[],
+  connections: Connection[] = [],
 ): RustGearConfig[] {
+  const connectedPieces = [...new Set(
+    connections.flatMap((connection) => [connection.a, connection.b]),
+  )];
+  const differentialSidePairs = new Set(
+    buildRustDifferentialConfigs(connectedPieces, connections, bodyIdByPiece)
+      .map(({ leftBody, rightBody }) =>
+        [leftBody, rightBody].sort((a, b) => a - b).join(":"),
+      ),
+  );
   return gearLinks.flatMap((link) => {
     const bodyA = bodyIdByPiece.get(link.a.value);
     const bodyB = bodyIdByPiece.get(link.b.value);
     if (!bodyA || !bodyB || bodyA === bodyB) return [];
+    if (differentialSidePairs.has(
+      [bodyA, bodyB].sort((a, b) => a - b).join(":"),
+    )) return [];
 
     const referenceFor = (piece: Piece, axis: THREE.Vector3): RustVec3 => {
       piece.mesh.updateMatrixWorld(true);
@@ -208,6 +221,7 @@ export function buildRustGearConfigs(
     };
 
     const phaseLock =
+      !link.perpendicular &&
       link.ratioOverride === undefined &&
       Number.isInteger(link.a.spec.teeth) &&
       Number.isInteger(link.b.spec.teeth) &&
@@ -233,6 +247,53 @@ export function buildRustGearConfigs(
         phaseLock,
       },
     ];
+  });
+}
+
+/** Builds a real three-body differential from its two lateral axle sockets. */
+export function buildRustDifferentialConfigs(
+  pieces: Piece[],
+  connections: Connection[],
+  bodyIdByPiece: Map<Piece, number>,
+): RustDifferentialConfig[] {
+  const differentialRefs = new Set(["6573", "62821"]);
+  const isCarrier = (piece: Piece) =>
+    [piece.part, piece.modelPart, piece.resolvedPart]
+      .filter(Boolean)
+      .some((ref) => differentialRefs.has(ref!.toLowerCase()));
+
+  return pieces.filter(isCarrier).flatMap((carrier) => {
+    const carrierBody = bodyIdByPiece.get(carrier);
+    if (!carrierBody) return [];
+    carrier.mesh.updateMatrixWorld(true);
+    const center = carrier.mesh.localToWorld(new THREE.Vector3());
+    const sides = connections.flatMap((connection) => {
+      if (connection.profile !== "axle-round") return [];
+      const other = connection.a === carrier
+        ? connection.b
+        : connection.b === carrier
+          ? connection.a
+          : undefined;
+      const body = other && bodyIdByPiece.get(other);
+      if (!body || body === carrierBody) return [];
+      const axis = connection.axis.clone().normalize();
+      return [{ body, axis, offset: connection.point.clone().sub(center).dot(axis) }];
+    });
+
+    const unique = new Map<number, (typeof sides)[number]>();
+    for (const side of sides) unique.set(side.body, side);
+    const outputs = [...unique.values()].sort((a, b) => a.offset - b.offset);
+    if (outputs.length !== 2) return [];
+
+    const axis = outputs[0].axis.clone();
+    if (axis.dot(outputs[1].axis) < 0) outputs[1].axis.negate();
+    return [{
+      id: `differential:${carrier.id}`,
+      leftBody: outputs[0].body,
+      rightBody: outputs[1].body,
+      carrierBody,
+      axis: vec3(axis),
+    }];
   });
 }
 
@@ -520,6 +581,13 @@ export function buildRustPhysicsScene(options: RustSceneBuildOptions): RustScene
     return joint ? [joint] : [];
   });
 
+  const differentials = buildRustDifferentialConfigs(
+    pieces,
+    connections,
+    bodyIdByPiece,
+  );
+  // The explicit three-body constraint replaces the internal bevel contact;
+  // buildRustGearConfigs applies the same exclusion during dynamic rescans.
   const gears = buildRustGearConfigs(gearLinks, bodyIdByPiece, connections);
 
   // Bushes/nuts touching a socket act as axial hard stops. Their correction
@@ -607,6 +675,7 @@ export function buildRustPhysicsScene(options: RustSceneBuildOptions): RustScene
       bodies,
       joints,
       gears,
+      differentials,
       axialStops,
       excludedColliderPairs,
     },

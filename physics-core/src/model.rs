@@ -15,6 +15,8 @@ pub struct SceneConfig {
     #[serde(default)]
     pub gears: Vec<GearConfig>,
     #[serde(default)]
+    pub differentials: Vec<DifferentialConfig>,
+    #[serde(default)]
     pub axial_stops: Vec<AxialStopConfig>,
     #[serde(default)]
     // JavaScript sends editor ids as Number values. Some legacy ids include a
@@ -120,6 +122,7 @@ pub struct JointConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GearConfig {
+    pub id: String,
     pub body_a: u32,
     pub body_b: u32,
 
@@ -132,12 +135,25 @@ pub struct GearConfig {
     pub axis_b: Vec3,
     pub center_a: Vec3,
     pub center_b: Vec3,
+    #[serde(default)]
     pub reference_a: Vec3,
+    #[serde(default)]
     pub reference_b: Vec3,
     pub teeth_a: f32,
     pub teeth_b: f32,
     pub sign_b: f32,
+    #[serde(default)]
     pub phase_lock: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DifferentialConfig {
+    pub id: String,
+    pub left_body: u32,
+    pub right_body: u32,
+    pub carrier_body: u32,
+    pub axis: Vec3,
 }
 
 #[derive(Debug, Clone, Deserialize)]

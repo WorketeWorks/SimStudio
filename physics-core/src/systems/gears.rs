@@ -15,13 +15,16 @@ const REST_ANGULAR_SPEED: Real = 2.0e-5;
 const REST_CONTACT_SPEED: Real = 2.0e-5;
 const REST_LINEAR_SPEED: Real = 2.0e-5;
 
-const PHASE_BAUMGARTE: Real = 0.12;
-const MAX_PHASE_CORRECTION_SPEED: Real = 0.35;
+const PHASE_BAUMGARTE: Real = 0.35;
+const MAX_PHASE_CORRECTION_SPEED: Real = 1.5;
 
 #[derive(Clone)]
 pub struct GearRuntime {
+    pub id: String,
     pub body_a: RigidBodyHandle,
     pub body_b: RigidBodyHandle,
+    pub carrier_body: Option<RigidBodyHandle>,
+    pub local_carrier_axis: Option<Vector>,
     pub local_axis_a: Vector,
     pub local_axis_b: Vector,
     pub local_center_a: Vector,
@@ -94,6 +97,17 @@ pub fn build_gears(
 
             let rigid_a = world.bodies.get(body_a)?;
             let rigid_b = world.bodies.get(body_b)?;
+            let carrier_body = config
+                .carrier_body
+                .and_then(|id| bodies.get(&id).copied());
+            let local_carrier_axis = config.carrier_axis.and_then(|axis| {
+                carrier_body.and_then(|handle| {
+                    world
+                        .bodies
+                        .get(handle)
+                        .map(|carrier| carrier.position().inverse_transform_vector(normalized(axis)))
+                })
+            });
 
 
             let (initial_angle_a, initial_angle_b) =
@@ -117,8 +131,11 @@ pub fn build_gears(
             let initial_phase = wrap_pi(phase_target);
 
             Some(GearRuntime {
+                id: config.id.clone(),
                 body_a,
                 body_b,
+                carrier_body,
+                local_carrier_axis,
                 local_axis_a: rigid_a
                     .position()
                     .inverse_transform_vector(normalized(config.axis_a)),
@@ -409,7 +426,7 @@ fn solve_gear_velocity(
     if perpendicular {
         let contact = (pitch_point_a + pitch_point_b) * 0.5;
 
-        let _phase_bias = bevel_phase_velocity_bias(
+        let phase_bias = bevel_phase_velocity_bias(
             gear,
             world,
             radial_a,
@@ -424,7 +441,7 @@ fn solve_gear_velocity(
             world,
             contact,
             tangent,
-            0.0,
+            phase_bias,
         );
         return;
     }
@@ -455,7 +472,7 @@ fn solve_gear_velocity(
     );
 
     let pitch_scale = distance / total_teeth;
-    let _phase_bias = if gear.phase_lock && dt > 1.0e-6 {
+    let phase_bias = if gear.phase_lock && dt > 1.0e-6 {
         (phase_error * pitch_scale * PHASE_BAUMGARTE / dt)
             .clamp(-MAX_PHASE_CORRECTION_SPEED, MAX_PHASE_CORRECTION_SPEED)
     } else {
@@ -472,7 +489,7 @@ fn solve_gear_velocity(
         pitch_point_b,
         tangent,
         surface_sign,
-        0.0,
+        phase_bias,
     );
 }
 
@@ -522,7 +539,7 @@ fn solve_spur_contact_impulse(
     point_b: Vector,
     tangent: Vector,
     _surface_sign: Real,
-    _phase_bias: Real,
+    phase_bias: Real,
 ) {
     // A single common contact point is essential for frame invariance.
     // If the whole mechanism translates or rotates rigidly, both bodies have
@@ -560,13 +577,15 @@ fn solve_spur_contact_impulse(
         )
     };
 
-    if relative_speed.abs() <= VELOCITY_EPSILON
+    let error = relative_speed - phase_bias;
+
+    if error.abs() <= VELOCITY_EPSILON
         || denominator <= GEOMETRY_EPSILON
     {
         return;
     }
 
-    let lambda = -relative_speed / denominator;
+    let lambda = -error / denominator;
     let impulse = tangent * lambda;
 
     if !fixed_a {
@@ -800,6 +819,16 @@ fn project_one_exact_no_slip(
     // cannot be mistaken for tooth slip.
     let contact = (point_a + point_b) * 0.5;
 
+    // Bevel gears have skew tooth tangents.  A point impulse at the averaged
+    // tangent introduces an artificial axial/ejection force, especially when
+    // the gear is blocked by a joint.  Keep the exact post-step projection
+    // consistent with the velocity solver and enforce the constraint as a
+    // pure reaction torque around each gear axis.
+    if perpendicular {
+        solve_bevel_contact_impulse(gear, world, contact, tangent, 0.0);
+        return;
+    }
+
     let (
         relative_speed,
         denominator,
@@ -876,16 +905,22 @@ fn point_impulse_denominator(
 fn solve_bevel_contact_impulse(
     gear: &GearRuntime,
     world: &mut PhysicsWorld,
-    contact: Vector,
-    tangent: Vector,
+    _contact: Vector,
+    _tangent: Vector,
     phase_bias: Real,
 ) {
-    let (
-        relative_speed,
-        denominator,
-        fixed_a,
-        fixed_b,
-    ) = {
+    if gear.carrier_body.is_some() && gear.local_carrier_axis.is_some() {
+        solve_differential_impulse(gear, world);
+        return;
+    }
+
+    // A bevel mesh does not have one common tangent in world space: the two
+    // tooth tangents are generally skew. Averaging them creates an axial
+    // force, which can eject the bevel gear from its axle (as in the reported
+    // differential log). The ideal bevel constraint is a pure reaction torque
+    // around each gear axis; that torque is still applied to the complete
+    // rigid body, so connected structures receive the transmitted load.
+    let (axis_a, axis_b, angular_a, angular_b, inverse_a, inverse_b, fixed_a, fixed_b) = {
         let Some(body_a) = world.bodies.get(gear.body_a) else {
             return;
         };
@@ -894,24 +929,29 @@ fn solve_bevel_contact_impulse(
             return;
         };
 
-        let relative_speed =
-            (body_a.velocity_at_point(contact)
-                - body_b.velocity_at_point(contact))
-                .dot(tangent);
-
-        let denominator =
-            point_impulse_denominator(body_a, contact, tangent)
-            + point_impulse_denominator(body_b, contact, tangent);
-
+        let position_a = *body_a.position();
+        let position_b = *body_b.position();
+        let axis_a = (position_a.rotation * gear.local_axis_a).normalize();
+        let axis_b = (position_b.rotation * gear.local_axis_b).normalize();
+        let m_a = body_a.mass_properties();
+        let m_b = body_b.mass_properties();
         (
-            relative_speed,
-            denominator,
+            axis_a,
+            axis_b,
+            body_a.angvel(),
+            body_b.angvel(),
+            axis_a.dot(m_a.effective_world_inv_inertia * axis_a),
+            axis_b.dot(m_b.effective_world_inv_inertia * axis_b),
             body_a.is_fixed(),
             body_b.is_fixed(),
         )
     };
 
-    let error = relative_speed - phase_bias;
+    let error = gear.teeth_a * angular_a.dot(axis_a)
+        + gear.signed_teeth_b * angular_b.dot(axis_b)
+        - phase_bias;
+    let denominator = gear.teeth_a * gear.teeth_a * inverse_a
+        + gear.signed_teeth_b * gear.signed_teeth_b * inverse_b;
 
     if error.abs() < VELOCITY_EPSILON {
         return;
@@ -922,23 +962,78 @@ fn solve_bevel_contact_impulse(
     }
 
     let lambda = -error / denominator;
-    let impulse = tangent * lambda;
 
     if !fixed_a {
-        world.bodies[gear.body_a].apply_impulse_at_point(
-            impulse,
-            contact,
-            true,
-        );
+        world.bodies[gear.body_a]
+            .apply_torque_impulse(axis_a * (lambda * gear.teeth_a), true);
     }
 
     if !fixed_b {
-        world.bodies[gear.body_b].apply_impulse_at_point(
-            -impulse,
-            contact,
+        world.bodies[gear.body_b].apply_torque_impulse(
+            axis_b * (lambda * gear.signed_teeth_b),
             true,
         );
     }
+}
+
+/// Temporary ideal differential model.  The two side shafts are constrained
+/// relative to the carrier, so with equal side gears:
+/// `ω_left + ω_right = 2 * ω_carrier`.
+/// The impulse is a pure torque triplet; therefore a locked side shaft sends
+/// its share of the carrier torque to the other side, while two locked sides
+/// also lock the carrier.
+fn solve_differential_impulse(gear: &GearRuntime, world: &mut PhysicsWorld) {
+    let (Some(carrier_handle), Some(local_carrier_axis)) =
+        (gear.carrier_body, gear.local_carrier_axis)
+    else {
+        return;
+    };
+    let ta = gear.teeth_a.abs().max(1.0);
+    let tb = gear.signed_teeth_b.abs().max(1.0);
+    let ca = ta;
+    let cb = tb;
+    let cc = -(ta + tb);
+    let (axis_a, axis_b, axis_c, wa, wb, wc, ia, ib, ic, fixed_a, fixed_b, fixed_c) = {
+        let Some(body_a) = world.bodies.get(gear.body_a) else { return; };
+        let Some(body_b) = world.bodies.get(gear.body_b) else { return; };
+        let Some(carrier) = world.bodies.get(carrier_handle) else { return; };
+        let axis_a = (body_a.position().rotation * gear.local_axis_a).normalize();
+        // Measure both side shafts with the same outward-positive convention.
+        // Imported connector axes can point in opposite world directions; if
+        // left untouched, an inverse differential appears as equal world
+        // angular velocities even though its scalar relation is correct.
+        let mut axis_b = (body_b.position().rotation * gear.local_axis_b).normalize();
+        if axis_a.dot(axis_b) < -0.2 {
+            axis_b = -axis_b;
+        }
+        let mut axis_c = (carrier.position().rotation * local_carrier_axis).normalize();
+        if axis_a.dot(axis_c) < -0.2 {
+            axis_c = -axis_c;
+        }
+        (
+            axis_a,
+            axis_b,
+            axis_c,
+            body_a.angvel().dot(axis_a),
+            body_b.angvel().dot(axis_b),
+            carrier.angvel().dot(axis_c),
+            axis_a.dot(body_a.mass_properties().effective_world_inv_inertia * axis_a),
+            axis_b.dot(body_b.mass_properties().effective_world_inv_inertia * axis_b),
+            axis_c.dot(carrier.mass_properties().effective_world_inv_inertia * axis_c),
+            body_a.is_fixed(),
+            body_b.is_fixed(),
+            carrier.is_fixed(),
+        )
+    };
+    let error = ca * wa + cb * wb + cc * wc;
+    let denominator = ca * ca * ia + cb * cb * ib + cc * cc * ic;
+    if error.abs() < VELOCITY_EPSILON || denominator <= GEOMETRY_EPSILON {
+        return;
+    }
+    let lambda = -error / denominator;
+    if !fixed_a { world.bodies[gear.body_a].apply_torque_impulse(axis_a * (lambda * ca), true); }
+    if !fixed_b { world.bodies[gear.body_b].apply_torque_impulse(axis_b * (lambda * cb), true); }
+    if !fixed_c { world.bodies[carrier_handle].apply_torque_impulse(axis_c * (lambda * cc), true); }
 }
 
 fn settle_near_rest(gear: &GearRuntime, world: &mut PhysicsWorld) {
@@ -1179,6 +1274,11 @@ fn signed_angle_around_axis(from: Vector, to: Vector, axis: Vector) -> Real {
 fn wrap_pi(value: Real) -> Real {
     let two_pi = std::f32::consts::TAU;
     (value + std::f32::consts::PI).rem_euclid(two_pi) - std::f32::consts::PI
+}
+
+/** Returns the shortest signed angular delta from an unwrapped reference. */
+pub fn wrapped_delta(value: Real, reference: Real) -> Real {
+    wrap_pi(value - wrap_pi(reference))
 }
 
 fn solve_angular_ratio_fallback(

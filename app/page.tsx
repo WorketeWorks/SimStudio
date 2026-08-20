@@ -3290,26 +3290,10 @@ export default function Home() {
       // 20-rad/s kick into a 12-tooth gear.
       detectedGearLinks.forEach((link) => {
         const previous = previousLinksByKey.get(gearLinkKey(link));
-        if (!previous) {
-          for (const [piece, axis] of [
-            [link.a.value, link.axisA],
-            [link.b.value, link.axisB],
-          ] as [Piece, THREE.Vector3][]) {
-            const rotation = piece.body?.rotation();
-            if (!rotation) continue;
-            axis
-              .applyQuaternion(
-                new THREE.Quaternion(
-                  rotation.x,
-                  rotation.y,
-                  rotation.z,
-                  rotation.w,
-                ).invert(),
-              )
-              .normalize();
-          }
-          return;
-        }
+        // RustGearConfig axes are world-space. Converting only newly engaged
+        // pairs to body-local space made build_gears() apply the inverse body
+        // rotation a second time, producing an invalid bevel axis and phase.
+        if (!previous) return;
         const sameOrder = previous.a.value === link.a.value;
         link.axisA.copy(sameOrder ? previous.axisA : previous.axisB);
         link.axisB.copy(sameOrder ? previous.axisB : previous.axisA);

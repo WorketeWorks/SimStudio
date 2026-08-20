@@ -134,9 +134,12 @@ test("gear ratios and motor joints are solved inside Rust", () => {
         axisB: [0, 1, 0],
         centerA: [2, 3, 0],
         centerB: [4, 3, 0],
+        referenceA: [0, 0, 1],
+        referenceB: [0, 0, 1],
         teethA: 20,
         teethB: 10,
         signB: 1,
+        phaseLock: false,
       },
     ],
     differentials: [],
@@ -150,11 +153,185 @@ test("gear ratios and motor joints are solved inside Rust", () => {
   const stride = engine.transform_stride();
   const gearA = transforms[12];
   const gearB = transforms[stride + 12];
+  const contactVelocityA = transforms[10] - gearA * (4 / 3);
+  const contactVelocityB = transforms[stride + 10] + gearB * (2 / 3);
   const motor = transforms[stride * 3 + 12];
-  assert.ok(Math.abs(20 * gearA + 10 * gearB) < 0.01);
+  assert.ok(
+    Math.abs(contactVelocityA - contactVelocityB) < 0.01,
+    `the two pitch surfaces must have zero relative velocity: ${contactVelocityA} vs ${contactVelocityB}; ${JSON.stringify(Array.from(transforms))}`,
+  );
   assert.ok(
     Math.abs(motor) > 0.1,
     `the native motor should rotate its body: ${JSON.stringify(Array.from(transforms))}`,
+  );
+  engine.free();
+});
+
+test("three-body differential routes motion through every free member", () => {
+  const body = (id, fixed = false) => ({
+    id,
+    fixed,
+    position: [id * 2, 0, 0],
+    rotation: [0, 0, 0, 1],
+    mass: 1,
+    linearDamping: 0,
+    angularDamping: 0,
+    additionalSolverIterations: 2,
+    ccd: false,
+    colliders: [{
+      ownerId: 500 + id,
+      center: [0, 0, 0],
+      rotation: [0, 0, 0, 1],
+      friction: 0,
+      density: 1,
+      collisionGroup: 1,
+      collisionMask: 0,
+      shape: { kind: "box", halfExtents: [0.5, 0.5, 0.5] },
+    }],
+  });
+  const run = (fixedLeft, fixedRight, fixedCarrier, drivenBody) => {
+    const engine = new PhysicsEngine({
+      gravity: [0, 0, 0],
+      settings,
+      bodies: [body(1, fixedLeft), body(2, fixedRight), body(3, fixedCarrier)],
+      joints: [],
+      gears: [],
+      differentials: [{
+        id: "diff",
+        leftBody: 1,
+        rightBody: 2,
+        carrierBody: 3,
+        axis: [0, 0, 1],
+      }],
+      excludedColliderPairs: [],
+    });
+    const transforms = engine.step(1 / 60, [
+      { kind: "setAngularVelocity", body: drivenBody, velocity: [0, 0, 6] },
+    ]);
+    const stride = engine.transform_stride();
+    const result = [transforms[13], transforms[stride + 13], transforms[stride * 2 + 13]];
+    engine.free();
+    return result;
+  };
+
+  const [left, right, fixedCarrier] = run(false, false, true, 1);
+  assert.ok(left * right < 0, `fixed carrier must invert the outputs: ${left}, ${right}`);
+  assert.ok(Math.abs(left + right) < 1e-4);
+
+  const [driven, fixedRight, carrier] = run(false, true, false, 1);
+  assert.ok(Math.abs(fixedRight) < 1e-6);
+  assert.ok(carrier > 0, `a blocked output must route motion to the carrier: ${carrier}`);
+  assert.ok(Math.abs(driven - 2 * carrier) < 1e-4);
+
+  const [freeInput, restingSide, routedCarrier] = run(false, false, false, 1);
+  assert.ok(Math.abs(freeInput - 6) < 1e-4, `active side input must not be damped: ${freeInput}`);
+  assert.ok(Math.abs(restingSide) < 1e-4);
+  assert.ok(Math.abs(routedCarrier - 3) < 1e-4);
+
+  const [carrierLeft, carrierRight, drivenCarrier] = run(false, false, false, 3);
+  assert.ok(Math.abs(drivenCarrier - 6) < 1e-4, `carrier input must remain easy to turn: ${drivenCarrier}`);
+  assert.ok(Math.abs(carrierLeft - 6) < 1e-4 && Math.abs(carrierRight - 6) < 1e-4);
+
+  const [, , blockedCarrier] = run(true, true, false, 3);
+  assert.ok(Math.abs(blockedCarrier) < 1e-5, `two blocked outputs must lock the carrier: ${blockedCarrier}`);
+});
+
+test("tooth phase captures an initially tooth-on-tooth gear into a valid gap", () => {
+  const body = (id, fixed, position) => ({
+    id,
+    fixed,
+    position,
+    rotation: [0, 0, 0, 1],
+    mass: 1,
+    linearDamping: 0.15,
+    angularDamping: 0.15,
+    additionalSolverIterations: 4,
+    ccd: false,
+    colliders: [{
+      ownerId: id + 500,
+      center: [0, 0, 0],
+      rotation: [0, 0, 0, 1],
+      friction: 0,
+      density: 1,
+      collisionGroup: 1,
+      collisionMask: 0,
+      shape: { kind: "box", halfExtents: [0.25, 0.25, 0.25] },
+    }],
+  });
+  const gearConfig = {
+    id: "phase-1:2",
+    nodeA: 1,
+    nodeB: 2,
+    bodyA: 1,
+    bodyB: 2,
+    axisA: [0, 1, 0],
+    axisB: [0, 1, 0],
+    centerA: [0, 0, 0],
+    centerB: [2, 0, 0],
+    referenceA: [1, 0, 0],
+    referenceB: [1, 0, 0],
+    teethA: 16,
+    teethB: 16,
+    signB: 1,
+    phaseLock: true,
+  };
+  const engine = new PhysicsEngine({
+    gravity: [0, 0, 0],
+    settings,
+    bodies: [body(1, true, [0, 0, 0]), body(2, false, [2, 0, 0]), body(3, true, [2, 0, 0])],
+    joints: [{
+      id: "gear-b-axle",
+      bodyA: 3,
+      bodyB: 2,
+      mode: "rotation",
+      worldAnchorA: [2, 0, 0],
+      worldAnchorB: [2, 0, 0],
+      worldAxisA: [0, 1, 0],
+      worldAxisB: [0, 1, 0],
+      travel: 0,
+      motorSpeed: 0,
+      motorForce: 0,
+      passiveMotorForce: 0,
+      dynamicAxle: false,
+    }],
+    gears: [gearConfig],
+    excludedColliderPairs: [],
+  });
+
+  let transforms;
+  for (let frame = 0; frame < 30; frame++) transforms = engine.step(1 / 60, []);
+  const stride = engine.transform_stride();
+  const y = transforms[stride + 5];
+  const w = transforms[stride + 7];
+  const angle = 2 * Math.atan2(y, w);
+  const halfToothPitch = Math.PI / 16;
+  assert.ok(
+    Math.abs(Math.abs(angle) - halfToothPitch) < 0.04,
+    `expected half-tooth capture (${halfToothPitch}), got ${angle}`,
+  );
+
+  // A dynamic topology refresh must retain the same engaged tooth. Simulate
+  // an external one-tooth overwrite immediately before replace_gears().
+  const toothPitch = Math.PI / 8;
+  transforms = engine.step(1 / 60, [{
+    kind: "setRotation",
+    body: 2,
+    rotation: [0, Math.sin((angle + toothPitch) / 2), 0, Math.cos((angle + toothPitch) / 2)],
+  }]);
+  const overwrittenAngle = 2 * Math.atan2(
+    transforms[stride + 5],
+    transforms[stride + 7],
+  );
+  engine.replace_gears([{
+    ...gearConfig,
+    referenceB: [Math.cos(overwrittenAngle), 0, -Math.sin(overwrittenAngle)],
+  }]);
+  for (let frame = 0; frame < 120; frame++) transforms = engine.step(1 / 60, []);
+  const finalAngle = 2 * Math.atan2(transforms[stride + 5], transforms[stride + 7]);
+  const retainedError = Math.atan2(Math.sin(finalAngle - angle), Math.cos(finalAngle - angle));
+  assert.ok(
+    Math.abs(retainedError) < 0.05,
+    `dynamic refresh changed the engaged tooth: ${angle} -> ${finalAngle}`,
   );
   engine.free();
 });

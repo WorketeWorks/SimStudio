@@ -181,6 +181,21 @@ export const detectGearLinks = (
         ) {
           continue;
         }
+      } else {
+        // A collider overlap is not sufficient for bevel gears: the axle
+        // lines must be perpendicular and intersect at both pitch radii.
+        if (
+          a.spec.kind === "spur" ||
+          b.spec.kind === "spur" ||
+          axisAlignment > 0.1
+        )
+          continue;
+        const cross = new THREE.Vector3().crossVectors(axisA, axisB).normalize(),
+          lineSeparation = Math.abs(delta.dot(cross)),
+          errorA = Math.abs(Math.abs(delta.dot(axisA)) - b.spec.pitchRadius),
+          errorB = Math.abs(Math.abs(delta.dot(axisB)) - a.spec.pitchRadius);
+        if (lineSeparation > 0.2 || errorA > 0.32 || errorB > 0.32)
+          continue;
       }
 
       const centerDistance = new THREE.Vector3(...a.center).distanceTo(

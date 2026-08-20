@@ -80,6 +80,15 @@ export type RustGearConfig = {
   phaseLock: boolean;
 };
 
+export type RustDifferentialConfig = {
+  id: string;
+  leftBody: number;
+  rightBody: number;
+  carrierBody: number;
+  /** Common world-space axle direction used for all three angular speeds. */
+  axis: RustVec3;
+};
+
 export type RustAxialStopConfig = {
   bodyA: number;
   bodyB: number;
@@ -104,6 +113,7 @@ export type RustPhysicsScene = {
   bodies: RustBodyConfig[];
   joints: RustJointConfig[];
   gears: RustGearConfig[];
+  differentials: RustDifferentialConfig[];
   axialStops: RustAxialStopConfig[];
   excludedColliderPairs: [number, number][];
 };
