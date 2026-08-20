@@ -6,6 +6,7 @@ use crate::math::{normalized, vector};
 use crate::model::GearConfig;
 
 const VELOCITY_SOLVER_PASSES: usize = 16;
+const BEVEL_SOLVER_PASSES: usize = 1;
 const VELOCITY_EPSILON: Real = 1.0e-6;
 const GEOMETRY_EPSILON: Real = 1.0e-8;
 
@@ -82,14 +83,53 @@ pub fn build_gears(
         .collect()
 }
 
-pub fn project_velocities(gears: &[GearRuntime], world: &mut PhysicsWorld, dt: Real) {
+pub fn project_velocities(
+    gears: &[GearRuntime],
+    world: &mut PhysicsWorld,
+    dt: Real,
+) {
+    /*
+     * Spur gears:
+     *
+     * Estos no dependen de que Rapier redistribuya una fuerza
+     * física mediante joints, así que pueden iterarse varias veces.
+     */
     for _ in 0..VELOCITY_SOLVER_PASSES {
         for gear in gears {
-            solve_gear_velocity(gear, world, dt);
+            if !gear_is_perpendicular(gear, world) {
+                solve_gear_velocity(gear, world, dt);
+            }
         }
 
         for gear in gears.iter().rev() {
-            solve_gear_velocity(gear, world, dt);
+            if !gear_is_perpendicular(gear, world) {
+                solve_gear_velocity(gear, world, dt);
+            }
+        }
+    }
+
+    /*
+     * Bevel gears:
+     *
+     * Muy pocas iteraciones.
+     *
+     * Después de esto vuelve lib.rs y ejecuta:
+     *
+     *     world.step_with_events(...)
+     *
+     * Rapier puede entonces transmitir la reacción por los joints.
+     */
+    for _ in 0..BEVEL_SOLVER_PASSES {
+        for gear in gears {
+            if gear_is_perpendicular(gear, world) {
+                solve_gear_velocity(gear, world, dt);
+            }
+        }
+
+        for gear in gears.iter().rev() {
+            if gear_is_perpendicular(gear, world) {
+                solve_gear_velocity(gear, world, dt);
+            }
         }
     }
 
@@ -98,6 +138,26 @@ pub fn project_velocities(gears: &[GearRuntime], world: &mut PhysicsWorld, dt: R
     }
 }
 
+fn gear_is_perpendicular(
+    gear: &GearRuntime,
+    world: &PhysicsWorld,
+) -> bool {
+    let Some(body_a) = world.bodies.get(gear.body_a) else {
+        return false;
+    };
+
+    let Some(body_b) = world.bodies.get(gear.body_b) else {
+        return false;
+    };
+
+    let axis_a =
+        body_a.position().rotation * gear.local_axis_a;
+
+    let axis_b =
+        body_b.position().rotation * gear.local_axis_b;
+
+    axis_a.dot(axis_b).abs() < 0.2
+}
 fn solve_gear_velocity(
     gear: &GearRuntime,
     world: &mut PhysicsWorld,
