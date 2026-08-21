@@ -6,7 +6,12 @@ use crate::math::{normalized, vector};
 use crate::model::{GearConfig, JointMode};
 use super::joints::JointRuntime;
 
-const VELOCITY_SOLVER_PASSES: usize = 1;
+// One forward/reverse sweep only propagates a driven velocity across roughly
+// one neighbouring contact before Rapier runs. Longer gear trains therefore
+// entered the step with mutually inconsistent velocities and could eject the
+// whole chain. Four cheap gear-only sweeps converge chains without adding
+// more Rapier substeps.
+const VELOCITY_SOLVER_PASSES: usize = 4;
 const BEVEL_SOLVER_PASSES: usize = 1;
 const VELOCITY_EPSILON: Real = 1.0e-6;
 const GEOMETRY_EPSILON: Real = 1.0e-8;

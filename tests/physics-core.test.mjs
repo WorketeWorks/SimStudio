@@ -167,6 +167,92 @@ test("gear ratios and motor joints are solved inside Rust", () => {
   engine.free();
 });
 
+test("a seven-gear train remains bounded and transmits through the whole chain", () => {
+  const gearBody = (id) => ({
+    id,
+    fixed: false,
+    position: [(id - 1) * 2, 0, 0],
+    rotation: [0, 0, 0, 1],
+    mass: 1,
+    linearDamping: 0,
+    angularDamping: 0,
+    additionalSolverIterations: 2,
+    ccd: false,
+    colliders: [{
+      ownerId: 700 + id,
+      center: [0, 0, 0],
+      rotation: [0, 0, 0, 1],
+      friction: 0,
+      density: 1,
+      collisionGroup: 1,
+      collisionMask: 0,
+      shape: { kind: "box", halfExtents: [0.4, 0.2, 0.4] },
+    }],
+  });
+  const support = {
+    ...gearBody(100),
+    fixed: true,
+    position: [0, 0, 0],
+  };
+  const gears = Array.from({ length: 6 }, (_, index) => ({
+    id: `${index + 1}:${index + 2}`,
+    nodeA: index + 1,
+    nodeB: index + 2,
+    bodyA: index + 1,
+    bodyB: index + 2,
+    axisA: [0, 1, 0],
+    axisB: [0, 1, 0],
+    centerA: [index * 2, 0, 0],
+    centerB: [(index + 1) * 2, 0, 0],
+    referenceA: [0, 0, 1],
+    referenceB: [0, 0, 1],
+    teethA: 16,
+    teethB: 16,
+    signB: 1,
+    phaseLock: false,
+  }));
+  const joints = Array.from({ length: 7 }, (_, index) => ({
+    id: `axle-${index + 1}`,
+    bodyA: 100,
+    bodyB: index + 1,
+    mode: "rotation",
+    worldAnchorA: [index * 2, 0, 0],
+    worldAnchorB: [index * 2, 0, 0],
+    worldAxisA: [0, 1, 0],
+    worldAxisB: [0, 1, 0],
+    travel: 0,
+    motorSpeed: 0,
+    motorForce: 0,
+    passiveMotorForce: 0,
+    dynamicAxle: false,
+  }));
+  const engine = new PhysicsEngine({
+    gravity: [0, 0, 0],
+    settings,
+    bodies: [...Array.from({ length: 7 }, (_, index) => gearBody(index + 1)), support],
+    joints,
+    gears,
+    differentials: [],
+    excludedColliderPairs: [],
+  });
+  let transforms = engine.step(1 / 60, [
+    { kind: "setAngularVelocity", body: 1, velocity: [0, 4, 0] },
+  ]);
+  for (let frame = 0; frame < 60; frame++) transforms = engine.step(1 / 60, []);
+  const stride = engine.transform_stride();
+  const angular = Array.from({ length: 7 }, (_, index) => transforms[index * stride + 12]);
+  for (let index = 0; index < angular.length - 1; index++)
+    assert.ok(
+      Math.abs(angular[index] + angular[index + 1]) < 0.05,
+      `neighbouring gears must remain inverse: ${angular.join(", ")}`,
+    );
+  assert.ok(
+    angular.every((speed) => Number.isFinite(speed) && Math.abs(speed) <= 80),
+    `gear train velocity must stay bounded: ${angular.join(", ")}`,
+  );
+  engine.free();
+});
+
 test("three-body differential routes motion through every free member", () => {
   const body = (id, fixed = false) => ({
     id,

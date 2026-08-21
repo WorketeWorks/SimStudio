@@ -320,6 +320,11 @@ impl PhysicsEngine {
             &mut self.previous_gear_rotations,
             &self.world,
         );
+        // The final no-slip projection can redistribute a large velocity
+        // through an entire chain. Clamp after that authority as well; doing
+        // it only beforehand allowed the returned state to exceed the safety
+        // limit (92 rad/s in log 51) and tear every contact apart at once.
+        self.clamp_motion(self.elapsed_seconds);
         self.collect_transforms();
 
         self.stats.substeps = substeps;
