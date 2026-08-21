@@ -43,3 +43,7 @@ yarn-error.log*
 # Rust build caches. The generated browser WASM modules under app are committed.
 /physics-core/target/
 /render-core/target/
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
