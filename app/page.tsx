@@ -104,6 +104,7 @@ import type {
   PieceKind,
   PreparedImportPlacement,
   RotationSnapStep,
+  RuntimeGearLink,
   StructuralMode,
   ViewportRendererPreference,
 } from "./editor/types";
@@ -3497,7 +3498,7 @@ export default function Home() {
     };
     state.verifyConnections = verifyConnections;
     state.verifyConnectionsAsync = verifyConnectionsAsync;
-    const verifyPieceConnections = (movedPiece: Piece) => {
+    const verifyPieceConnections = (movedPiece: Piece, notify = true) => {
       const started = performance.now(),
         previousPartners = state.connections
           .filter(
@@ -3577,10 +3578,22 @@ export default function Home() {
         ensurePieceRotationPivot(piece, state.connections),
       );
       state.pendingConnectionMs += performance.now() - started;
-      setConnectionRevision((value) => value + 1);
-      refreshDebug();
+      if (notify) {
+        setConnectionRevision((value) => value + 1);
+        refreshDebug();
+      }
       return state.connections.length;
     };
+
+    let activeGearContacts = new Map<
+      string,
+      { a: Piece; b: Piece; links: RuntimeGearLink[] }
+    >();
+    let exclusionSignature = "";
+    const pendingGearContactChanges = new Map<
+      string,
+      { a: Piece; b: Piece; links: RuntimeGearLink[]; touching: boolean }
+    >();
 
     const updateDynamicMechanisms = () => {
       const dynamicScanStarted = performance.now();
@@ -3588,11 +3601,23 @@ export default function Home() {
         previousLinksByKey = new Map(
           state.gearLinks.map((link) => [gearLinkKey(link), link]),
         ),
-        detectedGearLinks = detectGearLinks(
+        changedGearPairs = new Set(pendingGearContactChanges.keys()),
+        detectedGearLinks = state.gearLinks.filter(
+          (link) =>
+            !changedGearPairs.has(contactPairKey(link.a.value, link.b.value)),
+        ),
+        excludedGearPairs = differentialCarrierGearExclusions(
           state.pieces,
-          state.rigidIslandByPiece,
-          differentialCarrierGearExclusions(state.pieces, state.connections),
+          state.connections,
         );
+      // Rapier's broadphase has already identified the two colliding owners.
+      // Validate only newly-entered green gear envelopes; stopped pairs simply
+      // lose their existing link. No all-gears O(n²) scan happens here.
+      pendingGearContactChanges.forEach(({ links, touching }, key) => {
+        if (!touching || excludedGearPairs.has(key)) return;
+        detectedGearLinks.push(...links);
+      });
+      pendingGearContactChanges.clear();
       // Dynamic overlap scans must not redefine the reference axes or the
       // transmission direction of a pair that is already engaged. On bevel
       // gears a numerically ambiguous tangent can otherwise flip sign between
@@ -3613,8 +3638,14 @@ export default function Home() {
           ? -link.ratioOverride / link.signB
           : -link.a.spec.teeth / (link.signB * link.b.spec.teeth);
       });
+      const gearTopologyChanged =
+        changedGearPairs.size > 0 &&
+        (previousGearLinks !== detectedGearLinks.length ||
+          detectedGearLinks.some(
+            (link) => !previousLinksByKey.has(gearLinkKey(link)),
+          ));
       state.gearLinks = detectedGearLinks;
-      if (state.world) {
+      if (state.world && gearTopologyChanged) {
         const bodyIds = new Map(
           state.pieces.flatMap((piece) =>
             piece.physicsBodyId ? ([[piece, piece.physicsBodyId]] as const) : [],
@@ -3640,7 +3671,7 @@ export default function Home() {
         return;
       }
 
-      let changed = previousGearLinks !== state.gearLinks.length;
+      let changed = gearTopologyChanged;
       const retained: Connection[] = [],
         removedPairs: { a: Piece; b: Piece }[] = [];
       for (const connection of state.connections) {
@@ -3807,14 +3838,18 @@ export default function Home() {
           ...state.contactExclusions,
           ...state.dynamicNoContactPairs,
         ]);
-        state.world.setExcludedColliderPairs(
-          [...allExclusions].flatMap((key) => {
-            const [left, right] = key.split(":").map(Number);
-            return Number.isFinite(left) && Number.isFinite(right)
-              ? ([[left, right]] as [number, number][])
-              : [];
-          }),
-        );
+        const nextExclusionSignature = [...allExclusions].sort().join("|");
+        if (nextExclusionSignature !== exclusionSignature) {
+          exclusionSignature = nextExclusionSignature;
+          state.world.setExcludedColliderPairs(
+            [...allExclusions].flatMap((key) => {
+              const [left, right] = key.split(":").map(Number);
+              return Number.isFinite(left) && Number.isFinite(right)
+                ? ([[left, right]] as [number, number][])
+                : [];
+            }),
+          );
+        }
       }
       if (changed) {
         setConnectionRevision((value) => value + 1);
@@ -3822,6 +3857,9 @@ export default function Home() {
       }
       state.pendingConnectionMs += performance.now() - dynamicScanStarted;
     };
+
+    const dynamicMechanismsNeedScan = () =>
+      pendingGearContactChanges.size > 0 || state.contactCandidates.size > 0;
 
     const connect = (piece: Piece) => {
       if (!AUTO_CONNECTIONS_ENABLED) return;
@@ -5935,10 +5973,10 @@ export default function Home() {
       altCandidate = undefined;
       const movedPiece = moving;
       if (moving && moved) {
-        if (!movedAxially) {
-          for (const piece of movingGroup) connect(piece);
-        }
-        for (const piece of movingGroup) verifyPieceConnections(piece);
+        // verifyPieceConnections already detects every compatible connector
+        // involving the moved piece. Calling connect() first repeated the same
+        // search, and notifying per piece rebuilt debug/GPU data repeatedly.
+        for (const piece of movingGroup) verifyPieceConnections(piece, false);
       }
       moving = undefined;
       movingGroup = [];
@@ -5946,10 +5984,16 @@ export default function Home() {
       movingPrepared = false;
       movingLinearAxis = undefined;
       movedAxially = false;
-      if (movedPiece?.renderBatched && moved) state.rebuildRenderBatches();
-      setConnectionRevision((value) => value + 1);
-      refreshDebug();
-      if (toggledFixed || (movedPiece && moved)) scheduleRecoverySave();
+      const editorChanged = toggledFixed || Boolean(movedPiece && moved);
+      if (movedPiece?.renderBatched && moved) state.renderBatchesDirty = true;
+      if (editorChanged) setConnectionRevision((value) => value + 1);
+      if (state.debug.colliders || state.debug.connectors || state.debug.physics)
+        refreshDebug();
+      else {
+        refreshSelectionOutlines();
+        updateDebug();
+      }
+      if (editorChanged) scheduleRecoverySave();
     };
 
     const drop = (e: DragEvent) => {
@@ -6387,10 +6431,29 @@ export default function Home() {
           const rustStats = state.world.stats();
           activeBodies = rustStats.activeBodies;
           sleepingBodies = rustStats.sleepingBodies;
-          const piecesById = new Map(state.pieces.map((piece) => [piece.id, piece]));
+          const piecesById = new Map(state.pieces.map((piece) => [piece.id, piece])),
+            currentGearContacts = new Map<
+              string,
+              { a: Piece; b: Piece; links: RuntimeGearLink[] }
+            >();
           state.world.takeContactPairs().forEach(([leftId, rightId]) => {
             const left = piecesById.get(leftId),
               right = piecesById.get(rightId);
+            if (left?.gear && right?.gear) {
+              // Rapier limits candidates to collider pairs. The local two-item
+              // test then answers whether their green engagement envelopes
+              // actually overlap; no unrelated gear is inspected.
+              const links = detectGearLinks(
+                [left, right],
+                state.rigidIslandByPiece,
+              );
+              if (links.length)
+                currentGearContacts.set(contactPairKey(left, right), {
+                  a: left,
+                  b: right,
+                  links,
+                });
+            }
             if (
               left &&
               right &&
@@ -6401,6 +6464,19 @@ export default function Home() {
                 b: right,
               });
           });
+          currentGearContacts.forEach((pair, key) => {
+            if (!activeGearContacts.has(key))
+              pendingGearContactChanges.set(key, { ...pair, touching: true });
+          });
+          activeGearContacts.forEach((pair, key) => {
+            if (!currentGearContacts.has(key))
+              pendingGearContactChanges.set(key, {
+                ...pair,
+                links: [],
+                touching: false,
+              });
+          });
+          activeGearContacts = currentGearContacts;
           if (spring?.dragged) {
             spring.force = rustStats.maxSpringForce;
             if (state.simLog)
@@ -6433,7 +6509,12 @@ export default function Home() {
             }
           });
           state.dynamicConnectionFrame++;
-          if (state.dynamicConnectionFrame % 8 === 0) updateDynamicMechanisms();
+          if (
+            pendingGearContactChanges.size > 0 ||
+            (state.dynamicConnectionFrame % 8 === 0 &&
+              dynamicMechanismsNeedScan())
+          )
+            updateDynamicMechanisms();
           syncMs = performance.now() - phaseStarted;
           phaseStarted = performance.now();
           if (state.simLog) {
@@ -6548,7 +6629,11 @@ export default function Home() {
         floorMaterial.needsUpdate = true;
       }
       const gpuExtras: THREE.Object3D[] = [
-        state.floor,
+        // The WebGPU mesh pipeline currently renders opaque RGB only. When
+        // looking from below, uploading the floor would therefore still
+        // occlude the scene even though the WebGL material is translucent.
+        // Omit it for that view until alpha materials are supported there.
+        ...(viewingFloorFromBelow ? [] : [state.floor]),
         state.grid,
         // WebGPU already highlights selected geometry through the per-instance
         // selected flag. The Three.js BoxHelper is the legacy WebGL selection

@@ -466,8 +466,12 @@ export class GpuSceneRenderer {
       this.rebuild(visiblePieces, extras);
       this.sceneSignature = signature;
     }
-    visiblePieces.forEach((piece) => piece.mesh.updateMatrixWorld(true));
-    extras.forEach((object) => object.updateMatrixWorld(true));
+    // Do not force a full subtree traversal every frame. Three.js marks the
+    // changed object (and its descendants) dirty when a transform changes;
+    // forcing `true` here rebuilt all 712 piece hierarchies even while the
+    // editor was idle and caused the 100–300 ms render spikes in the profile.
+    visiblePieces.forEach((piece) => piece.mesh.updateMatrixWorld(false));
+    extras.forEach((object) => object.updateMatrixWorld(false));
     for (let index = 0; index < this.instanceSources.length; index++) {
       const source = this.instanceSources[index],
         offset = index * 20;

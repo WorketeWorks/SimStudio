@@ -401,7 +401,11 @@ export function buildRustPhysicsScene(options: RustSceneBuildOptions): RustScene
   });
 
   const stiffnessRatio = structuralStiffness / 100;
-  const largeSimulation = rigidIslands.length > 250 || pieces.length > 800;
+  // 700-piece scenes were still taking the expensive normal solver path even
+  // though the frame profile already shows 40+ ms world steps. Use the tuned
+  // large-scene budget before that cliff; it lowers solver iterations and
+  // enables the sleeping/batching shortcuts without changing small scenes.
+  const largeSimulation = rigidIslands.length > 250 || pieces.length > 600;
   const solverIterations = largeSimulation
     ? 5 + Math.round(stiffnessRatio * 5)
     : 4 + Math.round(stiffnessRatio * 12);
