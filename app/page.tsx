@@ -3853,6 +3853,19 @@ export default function Home() {
 
     const connect = (piece: Piece) => {
       if (!AUTO_CONNECTIONS_ENABLED) return;
+      const captureMargin = 0.9,
+        pieceReach =
+          (piece.mesh.userData.connectorReach as number | undefined) ??
+          connectorMapReach(piece.connectors),
+        nearbyPieces = state.pieces.filter((candidate) => {
+          if (candidate === piece) return false;
+          const candidateReach =
+              (candidate.mesh.userData.connectorReach as number | undefined) ??
+              connectorMapReach(candidate.connectors),
+            maximumReach = pieceReach + candidateReach + captureMargin;
+          return piece.mesh.position.distanceToSquared(candidate.mesh.position) <=
+            maximumReach * maximumReach;
+        });
       if (isRod(piece)) {
         type Match = {
           host: Piece;
@@ -3861,7 +3874,7 @@ export default function Home() {
           score: number;
         };
         let best: Match | undefined;
-        for (const host of state.pieces.filter((part) => part !== piece))
+        for (const host of nearbyPieces)
           for (const socket of host.connectors.filter(
             (connector) => connector.role === "socket",
           ))
@@ -3889,7 +3902,7 @@ export default function Home() {
                   radial = delta.clone().addScaledVector(axis, -along).length();
                 score = radial + Math.max(0, Math.abs(along) - (shaft.length ?? 0.5) / 2);
               }
-              if (score < 0.75 && (!best || score < best.score))
+              if (score < captureMargin && (!best || score < best.score))
                 best = { host, socket, shaft, score };
             }
         if (best) {
@@ -3929,9 +3942,7 @@ export default function Home() {
         score: number;
       };
       let best: HostMatch | undefined;
-      for (const rod of state.pieces.filter(
-        (candidate) => candidate !== piece && isRod(candidate),
-      ))
+      for (const rod of nearbyPieces.filter(isRod))
         for (const socket of piece.connectors.filter(
           (connector) => connector.role === "socket",
         ))
@@ -3959,7 +3970,7 @@ export default function Home() {
                 radial = delta.clone().addScaledVector(axis, -along).length();
               score = radial + Math.max(0, Math.abs(along) - (shaft.length ?? 0.5) / 2);
             }
-            if (score < 0.75 && (!best || score < best.score))
+            if (score < captureMargin && (!best || score < best.score))
               best = { rod, socket, shaft, score };
           }
       if (!best) return;
@@ -5963,9 +5974,10 @@ export default function Home() {
       altCandidate = undefined;
       const movedPiece = moving;
       if (moving && moved) {
-        // verifyPieceConnections already detects every compatible connector
-        // involving the moved piece. Calling connect() first repeated the same
-        // search, and notifying per piece rebuilt debug/GPU data repeatedly.
+        // A single moved piece first snaps to the best nearby compatible
+        // connector; the strict verifier then records every connection at the
+        // resulting pose. Multi-selection keeps its relative layout intact.
+        if (movingGroup.length === 1 && !movedAxially) connect(moving);
         for (const piece of movingGroup) verifyPieceConnections(piece, false);
       }
       moving = undefined;
