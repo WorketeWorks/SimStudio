@@ -2276,6 +2276,41 @@ export default function Home() {
       gpuSceneRenderer?.invalidate();
     };
 
+    // Selection-only changes must not invalidate and rebuild every WebGPU
+    // geometry batch. WebGL keeps its BoxHelper; WebGPU uses the per-instance
+    // selected flag and filters this helper out of its extras.
+    const refreshSelectionOutlines = () => {
+      debugRoot.children
+        .filter((object) => object.userData.debugKind === "selection-outline")
+        .forEach((object) => {
+          debugRoot.remove(object);
+          object.traverse((child) => {
+            if (!(child instanceof THREE.Mesh) && !(child instanceof THREE.Line)) return;
+            child.geometry.dispose();
+            const materials = Array.isArray(child.material)
+              ? child.material
+              : [child.material];
+            materials.forEach((material) => material.dispose());
+          });
+        });
+      for (const selected of state.selectedPieces) {
+        selected.mesh.updateMatrixWorld(true);
+        const outline = new THREE.BoxHelper(
+          selected.mesh,
+          selected === state.selected ? 0x2b8cff : 0xffa51f,
+        );
+        outline.userData = { debugKind: "selection-outline", piece: selected };
+        outline.renderOrder = 96;
+        outline.frustumCulled = false;
+        const material = outline.material as THREE.LineBasicMaterial;
+        material.depthTest = false;
+        material.depthWrite = false;
+        material.transparent = true;
+        material.opacity = 0.95;
+        debugRoot.add(outline);
+      }
+    };
+
     const disposeRenderBatches = () => {
       state.renderBatchItems?.forEach(({ mesh }) => {
         if (mesh.userData.ownedBatchMaterial) (mesh.material as THREE.Material).dispose();
@@ -3471,6 +3506,10 @@ export default function Home() {
           .map((connection) =>
             connection.a === movedPiece ? connection.b : connection.a,
           );
+      // Moving one piece invalidates only its own links and the pivots of the
+      // pieces that were attached to it. Keep this set local; the full
+      // rebalance is reserved for import/reset operations.
+      const affectedPieces = new Set<Piece>([movedPiece, ...previousPartners]);
       state.connections = state.connections.filter(
         (connection) => connection.a !== movedPiece && connection.b !== movedPiece,
       );
@@ -3526,7 +3565,13 @@ export default function Home() {
           }
       }
       state.bulkConnecting = false;
-      rebalanceAllSmartDefaults(state);
+      state.connections.forEach((connection) => {
+        if (connection.a === movedPiece || connection.b === movedPiece) {
+          affectedPieces.add(connection.a);
+          affectedPieces.add(connection.b);
+        }
+      });
+      affectedPieces.forEach((piece) => rebalanceSmartDefaults(state, piece));
       ensurePieceRotationPivot(movedPiece, state.connections);
       previousPartners.forEach((piece) =>
         ensurePieceRotationPivot(piece, state.connections),
@@ -3968,6 +4013,8 @@ export default function Home() {
           line: SVGPolylineElement;
           label: HTMLDivElement;
           cursorScreen: { x: number; y: number };
+          startScreen: { x: number; y: number };
+          dragged: boolean;
           force: number;
         }
       | undefined;
@@ -5321,16 +5368,33 @@ export default function Home() {
         return;
       }
       if (state.running) {
+        // A click on the floor is still a valid selection action while the
+        // simulation is running. Clear the editor selection instead of
+        // returning with the previous piece highlighted.
+        if (!hitPiece) {
+          state.selected = undefined;
+          state.selectedPieces.clear();
+          setSelectedId(null);
+          refreshSelectionOutlines();
+          return;
+        }
         if (hit && hitPiece && !hitPiece.physicsIslandFixed && hitPiece.body) {
           state.selected = hitPiece;
           state.selectedPieces = new Set([hitPiece]);
           setSelectedId(hitPiece.id);
+          refreshSelectionOutlines();
           const overlay = document.createElementNS("http://www.w3.org/2000/svg", "svg"),
             line = document.createElementNS("http://www.w3.org/2000/svg", "polyline"),
-            component = connectedPieces(hitPiece),
             label = document.createElement("div"),
             canvasBounds = canvas.getBoundingClientRect();
           overlay.classList.add("spring-overlay");
+          // Explicitly keep the pointer-force line above both the WebGL and
+          // WebGPU canvases. Some browsers create a separate stacking context
+          // for the active WebGPU canvas.
+          overlay.style.position = "absolute";
+          overlay.style.inset = "0";
+          overlay.style.zIndex = "6";
+          overlay.style.pointerEvents = "none";
           overlay.setAttribute(
             "viewBox",
             `0 0 ${canvas.clientWidth} ${canvas.clientHeight}`,
@@ -5342,11 +5406,13 @@ export default function Home() {
           line.setAttribute("stroke-linecap", "round");
           overlay.appendChild(line);
           label.className = "spring-force-label";
+          overlay.style.display = "none";
+          label.style.display = "none";
           host.appendChild(overlay);
           host.appendChild(label);
           spring = {
             piece: hitPiece,
-            component,
+            component: [hitPiece],
             anchor: hitPiece.mesh.worldToLocal(hit.point.clone()),
             target: hit.point.clone(),
             plane: new THREE.Plane().setFromNormalAndCoplanarPoint(
@@ -5360,13 +5426,13 @@ export default function Home() {
               x: e.clientX - canvasBounds.left,
               y: e.clientY - canvasBounds.top,
             },
+            startScreen: {
+              x: e.clientX - canvasBounds.left,
+              y: e.clientY - canvasBounds.top,
+            },
+            dragged: false,
             force: 0,
           };
-          if (state.simLog)
-            state.simLog.events.push(
-              `[${((Date.now() - Date.parse(state.simLog.startedAt)) / 1000).toFixed(3)}s] drag-start ${hitPiece.part}; componente ${component.map((p) => p.part).join(",")}`,
-            );
-          updateSpring();
         }
         return;
       }
@@ -5515,14 +5581,33 @@ export default function Home() {
         return;
       }
       if (spring) {
-        moved = true;
-        cast(e);
-        const anchor = spring.piece.mesh.localToWorld(spring.anchor.clone()),
-          canvasBounds = canvas.getBoundingClientRect();
-        spring.cursorScreen = {
+        const canvasBounds = canvas.getBoundingClientRect(),
+          cursorScreen = {
           x: e.clientX - canvasBounds.left,
           y: e.clientY - canvasBounds.top,
         };
+        if (
+          !spring.dragged &&
+          Math.hypot(
+            cursorScreen.x - spring.startScreen.x,
+            cursorScreen.y - spring.startScreen.y,
+          ) <= 5
+        )
+          return;
+        if (!spring.dragged) {
+          spring.dragged = true;
+          spring.component = connectedPieces(spring.piece);
+          spring.overlay.style.display = "";
+          spring.label.style.display = "";
+          if (state.simLog)
+            state.simLog.events.push(
+              `[${((Date.now() - Date.parse(state.simLog.startedAt)) / 1000).toFixed(3)}s] drag-start ${spring.piece.part}; componente ${spring.component.map((piece) => piece.part).join(",")}`,
+            );
+        }
+        moved = true;
+        cast(e);
+        const anchor = spring.piece.mesh.localToWorld(spring.anchor.clone());
+        spring.cursorScreen = cursorScreen;
         spring.target.copy(
           ray.ray.at(camera.position.distanceTo(anchor), new THREE.Vector3()),
         );
@@ -5581,11 +5666,16 @@ export default function Home() {
           movingPrepared = true;
           moved = true;
           const movingSet = new Set(movingGroup);
+          const affectedPieces = new Set<Piece>(movingGroup);
+          state.connections.forEach((connection) => {
+            if (movingSet.has(connection.a)) affectedPieces.add(connection.b);
+            if (movingSet.has(connection.b)) affectedPieces.add(connection.a);
+          });
           state.connections = state.connections.filter(
             (connection) =>
               !movingSet.has(connection.a) && !movingSet.has(connection.b),
           );
-          rebalanceAllSmartDefaults(state);
+          affectedPieces.forEach((piece) => rebalanceSmartDefaults(state, piece));
           setConnectionRevision((value) => value + 1);
         } else moved = true;
         // Shift's axial/vertical drag mode is intentionally single-selection
@@ -5812,22 +5902,28 @@ export default function Home() {
       }
       if (spring) {
         const released = spring;
-        const releasedBodies = new Set<NonNullable<Piece["body"]>>();
-        released.component.forEach((p) => {
-          if (p.body && !p.physicsIslandFixed && !releasedBodies.has(p.body)) {
-            releasedBodies.add(p.body);
-            clampMotion(p, 3.5, 4.5);
-            p.body.setLinearDamping(0.35);
-            p.body.setAngularDamping(0.65);
-          }
-        });
-        if (state.simLog)
-          state.simLog.events.push(
-            `[${((Date.now() - Date.parse(state.simLog.startedAt)) / 1000).toFixed(3)}s] drag-end ${released.piece.part}; fuerza y par eliminados, velocidades limitadas`,
-          );
+        if (released.dragged) {
+          const releasedBodies = new Set<NonNullable<Piece["body"]>>();
+          released.component.forEach((p) => {
+            if (p.body && !p.physicsIslandFixed && !releasedBodies.has(p.body)) {
+              releasedBodies.add(p.body);
+              clampMotion(p, 3.5, 4.5);
+              p.body.setLinearDamping(0.35);
+              p.body.setAngularDamping(0.65);
+            }
+          });
+          if (state.simLog)
+            state.simLog.events.push(
+              `[${((Date.now() - Date.parse(state.simLog.startedAt)) / 1000).toFixed(3)}s] drag-end ${released.piece.part}; fuerza y par eliminados, velocidades limitadas`,
+            );
+        }
         released.overlay.remove();
         released.label.remove();
         spring = undefined;
+        // Selection is already reflected by the per-instance flag. Avoid the
+        // generic tail below: it rebuilds every debug object and invalidates
+        // all WebGPU geometry batches on a simple simulation click.
+        return;
       }
       const toggledFixed = Boolean(orbit && !moved && altCandidate);
       if (toggledFixed && altCandidate) {
@@ -5922,6 +6018,13 @@ export default function Home() {
         host.clientHeight,
         nativePixelRatio * renderScale,
       );
+      if (spring) {
+        spring.overlay.setAttribute(
+          "viewBox",
+          `0 0 ${canvas.clientWidth} ${canvas.clientHeight}`,
+        );
+        updateSpring();
+      }
     };
     state.setAdaptiveRendering = (enabled) => {
       adaptiveRenderingEnabled = enabled;
@@ -6145,9 +6248,11 @@ export default function Home() {
       if (frameStarted - fpsWindowStarted >= 500) {
         const fps = (fpsFrames * 1000) / (frameStarted - fpsWindowStarted),
           counter = fpsRef.current;
-        const webGpuQualityActive = !!gpuSceneRenderer,
-          lowerFpsThreshold = webGpuQualityActive ? 52 : 15,
-          upperFpsThreshold = webGpuQualityActive ? 58 : 30;
+          const webGpuQualityActive = !!gpuSceneRenderer,
+          // WebGPU keeps native quality while it can sustain 30 FPS. Once it
+          // drops below that floor, reduce the scale; above it, restore 100%.
+          lowerFpsThreshold = webGpuQualityActive ? 30 : 15,
+          upperFpsThreshold = webGpuQualityActive ? 30 : 30;
         let nextScale = renderScale;
         if (!adaptiveRenderingEnabled) {
           nextScale = 1;
@@ -6163,7 +6268,10 @@ export default function Home() {
         } else if (fps > upperFpsThreshold) {
           lowFpsWindows = 0;
           healthyFpsWindows++;
-          if (healthyFpsWindows >= 4) {
+          // Binary WebGPU policy: once above 30 FPS, do not remain at a
+          // degraded scale after a transient slow period.
+          nextScale = webGpuQualityActive ? 1 : renderScale;
+          if (!webGpuQualityActive && healthyFpsWindows >= 4) {
             nextScale = Math.min(1, renderScale + 0.05);
             healthyFpsWindows = 0;
           }
@@ -6221,7 +6329,7 @@ export default function Home() {
           });
           forceResetMs = performance.now() - phaseStarted;
           phaseStarted = performance.now();
-          if (spring?.piece.body && !spring.piece.physicsIslandFixed) {
+          if (spring?.dragged && spring.piece.body && !spring.piece.physicsIslandFixed) {
             const anchor = spring.piece.mesh.localToWorld(spring.anchor.clone()),
               delta = spring.target.clone().sub(anchor);
             if (delta.length() > 3.5) delta.setLength(3.5);
@@ -6293,7 +6401,7 @@ export default function Home() {
                 b: right,
               });
           });
-          if (spring) {
+          if (spring?.dragged) {
             spring.force = rustStats.maxSpringForce;
             if (state.simLog)
               state.simLog.maxSpringForce = Math.max(
@@ -6442,7 +6550,12 @@ export default function Home() {
       const gpuExtras: THREE.Object3D[] = [
         state.floor,
         state.grid,
-        ...debugRoot.children,
+        // WebGPU already highlights selected geometry through the per-instance
+        // selected flag. The Three.js BoxHelper is the legacy WebGL selection
+        // outline; uploading it as an extra produced the second blue box.
+        ...debugRoot.children.filter(
+          (object) => object.userData.debugKind !== "selection-outline",
+        ),
       ];
       state.pieces.forEach((piece) => {
         if (piece.lockSprite?.visible) gpuExtras.push(piece.lockSprite);
