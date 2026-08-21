@@ -201,7 +201,13 @@ impl PhysicsEngine {
             sleeping_bodies: 0,
             joints: runtime_joints.len(),
             gears: runtime_gears.len() + runtime_differentials.len(),
-            substeps: if runtime_gears.is_empty() && runtime_differentials.is_empty() { 1 } else { 4 },
+            substeps: if runtime_gears.is_empty() && runtime_differentials.is_empty() {
+                1
+            } else if config.settings.large_simulation {
+                2
+            } else {
+                6
+            },
             max_spring_force: 0.0,
         };
 
@@ -246,7 +252,13 @@ impl PhysicsEngine {
             })
             .collect();
         let timestep = delta_seconds.clamp(1.0 / 240.0, 1.0 / 60.0);
-        let substeps = if self.gears.is_empty() && self.differentials.is_empty() { 1 } else { 6 };
+        let substeps = if self.gears.is_empty() && self.differentials.is_empty() {
+            1
+        } else if self.settings.large_simulation {
+            2
+        } else {
+            6
+        };
 
         self.stats.max_spring_force =
             forces::apply_commands(&commands, &self.body_ids, &mut self.world, timestep);
@@ -343,6 +355,24 @@ impl PhysicsEngine {
                 editor_id(left, "excluded collider owner id")?,
                 editor_id(right, "excluded collider owner id")?,
             ));
+        }
+        Ok(())
+    }
+
+    pub fn set_excluded_collider_pair(
+        &mut self,
+        left: f64,
+        right: f64,
+        excluded: bool,
+    ) -> Result<(), JsValue> {
+        let key = pair_key(
+            editor_id(left, "excluded collider owner id")?,
+            editor_id(right, "excluded collider owner id")?,
+        );
+        if excluded {
+            self.contact_filter.excluded.insert(key);
+        } else {
+            self.contact_filter.excluded.remove(&key);
         }
         Ok(())
     }

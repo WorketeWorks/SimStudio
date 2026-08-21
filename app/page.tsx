@@ -2977,6 +2977,9 @@ export default function Home() {
       state.gpuRenderer = gpuRenderer;
       state.gpuVendor = gpuVendor;
       state.gpuTimerSupported = !!gpuTimerExtension;
+      // WebGL batches are deliberately left stale while WebGPU is active.
+      // Refresh them once if the fallback becomes necessary.
+      state.renderBatchesDirty = true;
       setViewportRenderer("WebGL");
       if (error)
         console.warn("WebGPU viewport unavailable; continuing with WebGL:", error);
@@ -3589,7 +3592,7 @@ export default function Home() {
       string,
       { a: Piece; b: Piece; links: RuntimeGearLink[] }
     >();
-    let exclusionSignature = "";
+    const missedGearContactFrames = new Map<string, number>();
     const pendingGearContactChanges = new Map<
       string,
       { a: Piece; b: Piece; links: RuntimeGearLink[]; touching: boolean }
@@ -3690,12 +3693,14 @@ export default function Home() {
           along = delta.dot(shaftWorld.axis),
           radial = delta.clone().addScaledVector(shaftWorld.axis, -along).length(),
           halfShaft = (connection.shaft.length ?? 0.5) / 2,
+          // Disconnect farther out than the entry test (surface + 0.12).
+          // The previous smaller threshold made a connection valid for entry
+          // and invalid for retention on the next scan, causing frame-by-frame
+          // connect/disconnect oscillation.
           entranceAllowance =
-            connection.socket.kind === "axle"
-              ? 0.12
-              : socketSurfaceHalfThickness(connection.a, connection.socket) + 0.08,
+            socketSurfaceHalfThickness(connection.a, connection.socket) + 0.2,
           engaged =
-            alignment >= 0.94 &&
+            alignment >= 0.9 &&
             radial <= 0.2 &&
             Math.abs(along) <= halfShaft + entranceAllowance;
         if (engaged) {
@@ -3726,7 +3731,11 @@ export default function Home() {
             (connection.a === a && connection.b === b) ||
             (connection.a === b && connection.b === a),
         );
-        if (!stillConnected) state.dynamicNoContactPairs.delete(contactPairKey(a, b));
+        if (!stillConnected) {
+          const key = contactPairKey(a, b);
+          if (state.dynamicNoContactPairs.delete(key) && !state.contactExclusions.has(key))
+            state.world!.setExcludedColliderPair(a.id, b.id, false);
+        }
       });
 
       const existingIds = new Set(state.connections.map((connection) => connection.id));
@@ -3779,7 +3788,11 @@ export default function Home() {
           connection.b.dynamicAxleConnections;
         if (!dynamicAxle) continue;
         accepted.push(connection);
-        state.dynamicNoContactPairs.add(contactPairKey(connection.a, connection.b));
+        const exclusionKey = contactPairKey(connection.a, connection.b);
+        if (!state.dynamicNoContactPairs.has(exclusionKey)) {
+          state.dynamicNoContactPairs.add(exclusionKey);
+          state.world.setExcludedColliderPair(connection.a.id, connection.b.id, true);
+        }
         const hostBody = connection.a.body,
           axleBody = connection.b.body;
         if (hostBody && axleBody && hostBody !== axleBody) {
@@ -3826,34 +3839,11 @@ export default function Home() {
         );
       }
       state.connections = accepted;
-      if (changed && state.rigidIslandByPiece) {
-        const refreshed = buildConnectorContactExclusions(
-          state.connections,
-          state.rigidIslandByPiece,
-          detectShaftTraversals(state.pieces),
-        );
-        state.contactExclusions.clear();
-        refreshed.forEach((key) => state.contactExclusions.add(key));
-        const allExclusions = new Set([
-          ...state.contactExclusions,
-          ...state.dynamicNoContactPairs,
-        ]);
-        const nextExclusionSignature = [...allExclusions].sort().join("|");
-        if (nextExclusionSignature !== exclusionSignature) {
-          exclusionSignature = nextExclusionSignature;
-          state.world.setExcludedColliderPairs(
-            [...allExclusions].flatMap((key) => {
-              const [left, right] = key.split(":").map(Number);
-              return Number.isFinite(left) && Number.isFinite(right)
-                ? ([[left, right]] as [number, number][])
-                : [];
-            }),
-          );
-        }
-      }
       if (changed) {
         setConnectionRevision((value) => value + 1);
-        refreshDebug();
+        if (state.debug.colliders || state.debug.connectors || state.debug.physics)
+          refreshDebug();
+        else updateDebug();
       }
       state.pendingConnectionMs += performance.now() - dynamicScanStarted;
     };
@@ -6447,12 +6437,19 @@ export default function Home() {
                 [left, right],
                 state.rigidIslandByPiece,
               );
+              const key = contactPairKey(left, right),
+                retained = activeGearContacts.get(key);
               if (links.length)
-                currentGearContacts.set(contactPairKey(left, right), {
+                currentGearContacts.set(key, {
                   a: left,
                   b: right,
                   links,
                 });
+              else if (retained)
+                // Once engaged, keep the same link until Rapier reports that
+                // the pair has actually left contact. Borderline envelope
+                // measurements must not toggle the gear topology every frame.
+                currentGearContacts.set(key, retained);
             }
             if (
               left &&
@@ -6465,16 +6462,24 @@ export default function Home() {
               });
           });
           currentGearContacts.forEach((pair, key) => {
+            missedGearContactFrames.delete(key);
             if (!activeGearContacts.has(key))
               pendingGearContactChanges.set(key, { ...pair, touching: true });
           });
           activeGearContacts.forEach((pair, key) => {
-            if (!currentGearContacts.has(key))
-              pendingGearContactChanges.set(key, {
-                ...pair,
-                links: [],
-                touching: false,
-              });
+            if (currentGearContacts.has(key)) return;
+            const misses = (missedGearContactFrames.get(key) ?? 0) + 1;
+            if (misses < 3) {
+              missedGearContactFrames.set(key, misses);
+              currentGearContacts.set(key, pair);
+              return;
+            }
+            missedGearContactFrames.delete(key);
+            pendingGearContactChanges.set(key, {
+              ...pair,
+              links: [],
+              touching: false,
+            });
           });
           activeGearContacts = currentGearContacts;
           if (spring?.dragged) {
@@ -6587,7 +6592,11 @@ export default function Home() {
         }
       } else clock.getDelta();
       let phaseStarted = performance.now();
-      if (state.running || state.renderBatchesDirty) state.updateRenderBatches();
+      // WebGPU uploads piece matrices directly. Updating the hidden WebGL
+      // instance batches as well cost another 3–4 ms on every simulation
+      // frame. Keep them current only when WebGL is actually presenting.
+      if ((!gpuSceneRenderer && state.running) || state.renderBatchesDirty)
+        state.updateRenderBatches();
       batchMs = performance.now() - phaseStarted;
       phaseStarted = performance.now();
       state.updateDebug();

@@ -81,6 +81,24 @@ export class PhysicsEngine {
         }
     }
     /**
+     * @param {number} left
+     * @param {number} right
+     * @param {boolean} excluded
+     */
+    set_excluded_collider_pair(left, right, excluded) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.physicsengine_set_excluded_collider_pair(retptr, this.__wbg_ptr, left, right, excluded);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * @param {any} pairs
      */
     set_excluded_collider_pairs(pairs) {

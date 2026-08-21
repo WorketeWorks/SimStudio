@@ -305,6 +305,10 @@ export class RustPhysicsRuntime {
     this.engine.set_excluded_collider_pairs(pairs);
   }
 
+  setExcludedColliderPair(left: number, right: number, excluded: boolean) {
+    this.engine.set_excluded_collider_pair(left, right, excluded);
+  }
+
   takeContactPairs() {
     return this.engine.take_contact_pairs() as [number, number][];
   }

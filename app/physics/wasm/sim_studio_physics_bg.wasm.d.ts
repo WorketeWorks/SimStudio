@@ -6,6 +6,7 @@ export const physicsengine_add_joint: (a: number, b: number, c: number) => void;
 export const physicsengine_new: (a: number, b: number) => void;
 export const physicsengine_remove_joint: (a: number, b: number, c: number) => number;
 export const physicsengine_replace_gears: (a: number, b: number, c: number) => void;
+export const physicsengine_set_excluded_collider_pair: (a: number, b: number, c: number, d: number, e: number) => void;
 export const physicsengine_set_excluded_collider_pairs: (a: number, b: number, c: number) => void;
 export const physicsengine_stats: (a: number, b: number) => void;
 export const physicsengine_step: (a: number, b: number, c: number, d: number) => void;

@@ -12,6 +12,7 @@ export class PhysicsEngine {
     constructor(scene: any);
     remove_joint(id: string): boolean;
     replace_gears(gears: any): void;
+    set_excluded_collider_pair(left: number, right: number, excluded: boolean): void;
     set_excluded_collider_pairs(pairs: any): void;
     stats(): any;
     /**
@@ -38,6 +39,7 @@ export interface InitOutput {
     readonly physicsengine_new: (a: number, b: number) => void;
     readonly physicsengine_remove_joint: (a: number, b: number, c: number) => number;
     readonly physicsengine_replace_gears: (a: number, b: number, c: number) => void;
+    readonly physicsengine_set_excluded_collider_pair: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly physicsengine_set_excluded_collider_pairs: (a: number, b: number, c: number) => void;
     readonly physicsengine_stats: (a: number, b: number) => void;
     readonly physicsengine_step: (a: number, b: number, c: number, d: number) => void;
