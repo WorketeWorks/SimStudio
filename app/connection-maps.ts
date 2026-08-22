@@ -10,113 +10,21 @@ export type StoredConnector = {
 
 // Generated from the reviewed maps exported by Sim Studio's map editor.
 export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
-  "45590": [
+  "2736": [
     {
       "local": [
-        0,
+        0.5,
         0,
         0
       ],
       "axis": [
-        0,
-        0,
-        1
-      ],
-      "kind": "axle",
-      "role": "socket",
-      "diameter": 0.6,
-      "length": 1
-    },
-    {
-      "local": [
         1,
         0,
-        0
-      ],
-      "axis": [
-        0,
-        0,
-        1
-      ],
-      "kind": "axle",
-      "role": "socket",
-      "diameter": 0.6,
-      "length": 1
-    }
-  ],
-  // Differential side outputs are pin sockets. Its central axle stud is a
-  // point-mounted rotating output: it cannot slide along its axis.
-    "6573": [
-    {
-      "local": [
-        0,
-        0,
-        -1.5
-      ],
-      "axis": [
-        0,
-        0,
-        1
-      ],
-      "kind": "round",
-      "role": "socket",
-      "diameter": 0.8,
-      "length": 0.5
-    },
-    {
-      "local": [
-        0,
-        0,
-        1.5
-      ],
-      "axis": [
-        0,
-        0,
-        1
-      ],
-      "kind": "round",
-      "role": "socket",
-      "diameter": 0.8,
-      "length": 0.5
-    },
-    {
-      "local": [
-        0,
-        -0.75,
-        0
-      ],
-      "axis": [
-        0,
-        1,
         0
       ],
       "kind": "axle",
       "role": "shaft",
-      "diameter": 0.6,
-      "rotationOnly": true
-    }
-  ],
-  "62821": [
-    { local: [0, 0, -1.25], axis: [0, 0, 1], kind: "round", role: "socket", diameter: 0.8, length: 0.5 },
-    { local: [0, 0, 1.25], axis: [0, 0, 1], kind: "round", role: "socket", diameter: 0.8, length: 0.5 }
-  ],
-  "32198": [
-    {
-      "local": [0, 0, 0.1],
-      "axis": [0, 0, 1],
-      "kind": "axle",
-      "role": "socket",
-      "diameter": 0.6,
-      "length": 0.5
-    }
-  ],
-  "3649": [
-    {
-      "local": [0, 0, 0],
-      "axis": [0, 0, 1],
-      "kind": "axle",
-      "role": "socket",
-      "diameter": 0.6,
+      "diameter": 0.8000000000000002,
       "length": 1
     }
   ],
@@ -259,6 +167,24 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
       "kind": "axle",
       "role": "socket",
       "diameter": 0.8,
+      "length": 1
+    }
+  ],
+  "3649": [
+    {
+      "local": [
+        0,
+        0,
+        0
+      ],
+      "axis": [
+        0,
+        0,
+        1
+      ],
+      "kind": "axle",
+      "role": "socket",
+      "diameter": 0.6,
       "length": 1
     }
   ],
@@ -421,6 +347,40 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
       "length": 1
     }
   ],
+  "4274": [
+    {
+      "local": [
+        -0.5,
+        0,
+        0
+      ],
+      "axis": [
+        1,
+        0,
+        0
+      ],
+      "kind": "round",
+      "role": "shaft",
+      "diameter": 0.8000000000000002,
+      "length": 0.5
+    },
+    {
+      "local": [
+        0.25,
+        0,
+        0
+      ],
+      "axis": [
+        1,
+        0,
+        0
+      ],
+      "kind": "half",
+      "role": "shaft",
+      "diameter": 0.8000000000000002,
+      "length": 0.564
+    }
+  ],
   "6536": [
     {
       "local": [
@@ -502,6 +462,74 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
       "role": "shaft",
       "diameter": 0.8000531196594239,
       "length": 1.41
+    }
+  ],
+  "6573": [
+    {
+      "local": [
+        0,
+        0,
+        -1.5
+      ],
+      "axis": [
+        0,
+        0,
+        1
+      ],
+      "kind": "round",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 0.5
+    },
+    {
+      "local": [
+        0,
+        0,
+        1.5
+      ],
+      "axis": [
+        0,
+        0,
+        1
+      ],
+      "kind": "round",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 0.5
+    },
+    {
+      "local": [
+        0,
+        -0.75,
+        0
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "axle",
+      "role": "shaft",
+      "diameter": 0.6,
+      "rotationOnly": true
+    }
+  ],
+  "6628": [
+    {
+      "local": [
+        0.5,
+        0,
+        0
+      ],
+      "axis": [
+        1,
+        0,
+        0
+      ],
+      "kind": "round",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 1
     }
   ],
   "6632": [
@@ -935,6 +963,40 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
       "length": 1
     }
   ],
+  "32002": [
+    {
+      "local": [
+        -0.5,
+        0,
+        0
+      ],
+      "axis": [
+        1,
+        0,
+        0
+      ],
+      "kind": "round",
+      "role": "shaft",
+      "diameter": 0.8000000000000002,
+      "length": 0.705
+    },
+    {
+      "local": [
+        0.25,
+        0,
+        0
+      ],
+      "axis": [
+        1,
+        0,
+        0
+      ],
+      "kind": "half",
+      "role": "shaft",
+      "diameter": 0.8000000000000002,
+      "length": 0.705
+    }
+  ],
   "32013": [
     {
       "local": [
@@ -1107,6 +1169,40 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
       "kind": "axle",
       "role": "socket",
       "diameter": 0.6000000000000001
+    }
+  ],
+  "32039": [
+    {
+      "local": [
+        0,
+        0,
+        0
+      ],
+      "axis": [
+        0,
+        0,
+        1
+      ],
+      "kind": "axle",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 1
+    },
+    {
+      "local": [
+        0,
+        0,
+        1
+      ],
+      "axis": [
+        1,
+        0,
+        0
+      ],
+      "kind": "axle",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 1
     }
   ],
   "32054": [
@@ -1630,6 +1726,24 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
       "length": 1
     }
   ],
+  "32198": [
+    {
+      "local": [
+        0,
+        0,
+        0.1
+      ],
+      "axis": [
+        0,
+        0,
+        1
+      ],
+      "kind": "axle",
+      "role": "socket",
+      "diameter": 0.6,
+      "length": 0.5
+    }
+  ],
   "32269": [
     {
       "local": [
@@ -1998,6 +2112,148 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
       "length": 1.0000000000000007
     }
   ],
+  "39793": [
+    {
+      "local": [
+        1,
+        -1.1102230246251565e-16,
+        -1
+      ],
+      "axis": [
+        1,
+        0,
+        0
+      ],
+      "kind": "round",
+      "role": "socket",
+      "diameter": 0.6000000000000001
+    },
+    {
+      "local": [
+        1,
+        1.1102230246251565e-16,
+        1
+      ],
+      "axis": [
+        1,
+        0,
+        0
+      ],
+      "kind": "round",
+      "role": "socket",
+      "diameter": 0.6000000000000001
+    },
+    {
+      "local": [
+        -1,
+        -1.1102230246251565e-16,
+        -1
+      ],
+      "axis": [
+        1,
+        0,
+        0
+      ],
+      "kind": "round",
+      "role": "socket",
+      "diameter": 0.6000000000000001
+    },
+    {
+      "local": [
+        -1,
+        1.1102230246251565e-16,
+        1
+      ],
+      "axis": [
+        1,
+        0,
+        0
+      ],
+      "kind": "round",
+      "role": "socket",
+      "diameter": 0.6000000000000001
+    },
+    {
+      "local": [
+        0,
+        0,
+        0
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "round",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 1.0000000000000004
+    },
+    {
+      "local": [
+        1,
+        0,
+        0
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "round",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 1.0000000000000004
+    },
+    {
+      "local": [
+        0,
+        0,
+        -1
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "round",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 1.0000000000000004
+    },
+    {
+      "local": [
+        0,
+        0,
+        1
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "round",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 1.0000000000000004
+    },
+    {
+      "local": [
+        -1,
+        0,
+        0
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "round",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 1.0000000000000004
+    }
+  ],
   "41677": [
     {
       "local": [
@@ -2216,6 +2472,85 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
       "kind": "round",
       "role": "socket",
       "diameter": 0.8
+    }
+  ],
+  "48496": [
+    {
+      "local": [
+        0,
+        0.25,
+        -2.7755575615628914e-17
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "half",
+      "role": "socket",
+      "diameter": 0.8
+    },
+    {
+      "local": [
+        0,
+        1.5,
+        -1.25
+      ],
+      "axis": [
+        0,
+        0,
+        1
+      ],
+      "kind": "half",
+      "role": "socket",
+      "diameter": 0.6
+    },
+    {
+      "local": [
+        0,
+        1.5000000000000004,
+        1.25
+      ],
+      "axis": [
+        0,
+        0,
+        1
+      ],
+      "kind": "half",
+      "role": "socket",
+      "diameter": 0.6
+    },
+    {
+      "local": [
+        0,
+        -0.5,
+        1
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "round",
+      "role": "shaft",
+      "diameter": 0.8,
+      "length": 1
+    },
+    {
+      "local": [
+        0,
+        -0.5,
+        -1
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "kind": "round",
+      "role": "shaft",
+      "diameter": 0.8,
+      "length": 1
     }
   ],
   "48989": [
@@ -2524,6 +2859,102 @@ export const preloadedConnectionMaps: Record<string, StoredConnector[]> = {
       "role": "socket",
       "diameter": 0.24,
       "length": 0.5
+    }
+  ],
+  "62821": [
+    {
+      "local": [
+        0,
+        0,
+        -1.25
+      ],
+      "axis": [
+        0,
+        0,
+        1
+      ],
+      "kind": "round",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 0.5
+    },
+    {
+      "local": [
+        0,
+        0,
+        1.25
+      ],
+      "axis": [
+        0,
+        0,
+        1
+      ],
+      "kind": "round",
+      "role": "socket",
+      "diameter": 0.8,
+      "length": 0.5
+    }
+  ],
+  "63869": [
+    {
+      "local": [
+        0,
+        0,
+        0
+      ],
+      "axis": [
+        1,
+        0,
+        0
+      ],
+      "kind": "axle",
+      "role": "socket",
+      "diameter": 0.7000000000000001
+    },
+    {
+      "local": [
+        0,
+        -1,
+        0
+      ],
+      "axis": [
+        0,
+        0,
+        1
+      ],
+      "kind": "round",
+      "role": "socket",
+      "diameter": 0.8
+    },
+    {
+      "local": [
+        -1,
+        -1,
+        0
+      ],
+      "axis": [
+        0,
+        0,
+        1
+      ],
+      "kind": "round",
+      "role": "socket",
+      "diameter": 0.8
+    },
+    {
+      "local": [
+        1,
+        -1,
+        0
+      ],
+      "axis": [
+        0,
+        0,
+        1
+      ],
+      "kind": "round",
+      "role": "socket",
+      "diameter": 0.8
     }
   ],
   "87082": [

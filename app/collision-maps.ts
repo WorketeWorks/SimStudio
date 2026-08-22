@@ -9,234 +9,8 @@ export type StoredCollisionPrimitive = {
   gearRatio?: number;
 };
 
-/** Parts whose engagement must be selected by ratio-tagged collision zones. */
-export const preloadedSpecialGearParts = new Set(["6573"]);
-
 // Generated from the reviewed maps exported by Sim Studio's collider editor.
 export const preloadedCollisionMaps: Record<string, StoredCollisionPrimitive[]> = {
-  "94925": [
-    {
-      "shape": "cylinder",
-      "center": [
-        0,
-        0,
-        0
-      ],
-      "radius": 1.08,
-      "halfHeight": 0.25,
-      "rotation": [
-        0.7071067811865475,
-        0,
-        0,
-        0.7071067811865475
-      ]
-    },
-    {
-      "shape": "cylinder",
-      "center": [
-        0,
-        0,
-        0
-      ],
-      "radius": 0.6,
-      "halfHeight": 0.5,
-      "rotation": [
-        0.7071067811865475,
-        0,
-        0,
-        0.7071067811865476
-      ]
-    }
-  ],
-  "3649": [
-    {
-      "shape": "cylinder",
-      "center": [
-        0,
-        0,
-        0
-      ],
-      "radius": 2.6,
-      "halfHeight": 0.25,
-      "rotation": [
-        0.7071067811865475,
-        0,
-        0,
-        0.7071067811865476
-      ]
-    },
-    {
-      "shape": "cylinder",
-      "center": [
-        0,
-        0,
-        0
-      ],
-      "radius": 2.0,
-      "halfHeight": 0.4,
-      "rotation": [
-        0.7071067811865475,
-        0,
-        0,
-        0.7071067811865476
-      ]
-    },
-    {
-      "shape": "cylinder",
-      "center": [
-        0,
-        0,
-        0
-      ],
-      "radius": 0.6,
-      "halfHeight": 0.5,
-      "rotation": [
-        0.7071067811865475,
-        0,
-        0,
-        0.7071067811865476
-      ]
-    }
-  ],
-  "32498": [
-    {
-      "shape": "cylinder",
-      "center": [
-        0,
-        0,
-        0
-      ],
-      "radius": 2.35,
-      "halfHeight": 0.5,
-      "rotation": [
-        0.7071067811865475,
-        0,
-        0,
-        0.7071067811865475
-      ]
-    }
-  ],
-  "10928": [
-    {
-      "shape": "cylinder",
-      "center": [
-        0,
-        0,
-        0
-      ],
-      "radius": 0.65,
-      "halfHeight": 0.5,
-      "rotation": [
-        0.7071067811865475,
-        0,
-        0,
-        0.7071067811865475
-      ]
-    }
-  ],
-  "6573": [
-    { shape: "cylinder", center: [0, 0, -1.25], radius: 1.25, halfHeight: 0.25, rotation: [0.7071067811865475, 0, 0, 0.7071067811865476], gearCollision: true },
-    { shape: "cylinder", center: [0, 0, -1.75], radius: 0.85, halfHeight: 0.25, rotation: [0.7071067811865475, 0, 0, 0.7071067811865476], gearCollision: true },
-    { shape: "cylinder", center: [0, 0, -1.5], radius: 1.6, halfHeight: 0.25, rotation: [0.7071067811865475, 0, 0, 0.7071067811865476], gearCollision: false, gearRatio: 1.5 },
-    { shape: "box", center: [0, 1.075, 0], size: [1, 0.15, 2], rotation: [0, 0, 0, 1], gearCollision: true },
-    { shape: "box", center: [0, -1.075, 0], size: [1, 0.15, 2], rotation: [0, 0, 0, 1], gearCollision: true },
-    { shape: "cylinder", center: [0, 0, 1.5], radius: 1.1, halfHeight: 0.25, rotation: [0.7071067811865475, 0, 0, 0.7071067811865476], gearCollision: false, gearRatio: 1 },
-    { shape: "cylinder", center: [0, 0, 1.12], radius: 1.25, halfHeight: 0.12, rotation: [0.7071067811865475, 0, 0, 0.7071067811865476], gearCollision: true },
-    { shape: "cylinder", center: [0, 0, 1.875], radius: 0.85, halfHeight: 0.125, rotation: [0.7071067811865475, 0, 0, 0.7071067811865476], gearCollision: true }
-  ],
-    "6589": [
-    {
-      "shape": "cylinder",
-      "center": [
-        0,
-        0,
-        -0.1
-      ],
-      "radius": 0.6,
-      "halfHeight": 0.25,
-      "rotation": [
-        0.7071067811865475,
-        0,
-        0,
-        0.7071067811865476
-      ]
-    },
-    {
-      "shape": "cylinder",
-      "center": [
-        0,
-        0,
-        -0.175
-      ],
-      "radius": 0.8,
-      "halfHeight": 0.175,
-      "rotation": [
-        0.7071067811865475,
-        0,
-        0,
-        0.7071067811865476
-      ]
-    }
-  ],
-  "3648": [
-    {
-      "shape": "cylinder",
-      "center": [0, 0, 0],
-      "radius": 1.6,
-      "halfHeight": 0.25,
-      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865476]
-    },
-    {
-      "shape": "cylinder",
-      "center": [0, 0, 0],
-      "radius": 0.45,
-      "halfHeight": 0.48,
-      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865476]
-    }
-  ],
-  "46372": [
-    {
-      "shape": "cylinder",
-      "center": [0, 0, 0],
-      "radius": 1.85,
-      "halfHeight": 0.5,
-      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865475]
-    }
-  ],
-  "32198": [
-    {
-      "shape": "cylinder",
-      "center": [0, 0, 0.175],
-      "radius": 1.3,
-      "halfHeight": 0.175,
-      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865475]
-    },
-    {
-      "shape": "cylinder",
-      "center": [0, 0, 0],
-      "radius": 0.6,
-      "halfHeight": 0.15,
-      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865476]
-    }
-  ],
-  "32270": [
-    {
-      "shape": "cylinder",
-      "center": [0, 0, 0],
-      "radius": 0.85,
-      "halfHeight": 0.5,
-      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865475]
-    }
-  ],
-  "32269": [
-    {
-      "shape": "cylinder",
-      "center": [0, 0, 0],
-      "radius": 1.35,
-      "halfHeight": 0.5,
-      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865475]
-    }
-  ],
   "2825": [
     {
       "shape": "box",
@@ -290,6 +64,40 @@ export const preloadedCollisionMaps: Record<string, StoredCollisionPrimitive[]> 
       ]
     }
   ],
+  "3648": [
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        0
+      ],
+      "radius": 1.6,
+      "halfHeight": 0.25,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
+      ]
+    },
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        0
+      ],
+      "radius": 0.45,
+      "halfHeight": 0.48,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
+      ]
+    }
+  ],
   "3713": [
     {
       "shape": "cylinder",
@@ -305,6 +113,186 @@ export const preloadedCollisionMaps: Record<string, StoredCollisionPrimitive[]> 
         0.5,
         -0.5,
         0.5000000000000001
+      ]
+    }
+  ],
+  "6573": [
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        -1.25
+      ],
+      "radius": 1.25,
+      "halfHeight": 0.25,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
+      ],
+      "gearCollision": true
+    },
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        -1.75
+      ],
+      "radius": 0.85,
+      "halfHeight": 0.25,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
+      ],
+      "gearCollision": true
+    },
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        -1.5
+      ],
+      "radius": 1.6,
+      "halfHeight": 0.25,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
+      ],
+      "gearCollision": false,
+      "gearRatio": 1.5
+    },
+    {
+      "shape": "box",
+      "center": [
+        0,
+        1.075,
+        0
+      ],
+      "size": [
+        1,
+        0.15,
+        2
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "gearCollision": true
+    },
+    {
+      "shape": "box",
+      "center": [
+        0,
+        -1.075,
+        0
+      ],
+      "size": [
+        1,
+        0.15,
+        2
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "gearCollision": true
+    },
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        1.5
+      ],
+      "radius": 1.1,
+      "halfHeight": 0.25,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
+      ],
+      "gearCollision": false,
+      "gearRatio": 1
+    },
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        1.12
+      ],
+      "radius": 1.25,
+      "halfHeight": 0.12,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
+      ],
+      "gearCollision": true
+    },
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        1.875
+      ],
+      "radius": 0.85,
+      "halfHeight": 0.125,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
+      ],
+      "gearCollision": true
+    }
+  ],
+  "6589": [
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        -0.1
+      ],
+      "radius": 0.6,
+      "halfHeight": 0.25,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
+      ]
+    },
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        -0.175
+      ],
+      "radius": 0.8,
+      "halfHeight": 0.175,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
       ]
     }
   ],
@@ -440,6 +428,40 @@ export const preloadedCollisionMaps: Record<string, StoredCollisionPrimitive[]> 
         0.7071067811865475,
         0,
         0,
+        0.7071067811865476
+      ]
+    }
+  ],
+  "32039": [
+    {
+      "shape": "cylinder",
+      "center": [
+        -1.7763568394002505e-15,
+        5.551115123125783e-17,
+        0.25
+      ],
+      "radius": 0.45,
+      "halfHeight": 0.75,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
+      ]
+    },
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        1
+      ],
+      "radius": 0.45,
+      "halfHeight": 0.5,
+      "rotation": [
+        0,
+        0,
+        0.7071067811865475,
         0.7071067811865476
       ]
     }
@@ -603,6 +625,76 @@ export const preloadedCollisionMaps: Record<string, StoredCollisionPrimitive[]> 
       ]
     }
   ],
+  "32198": [
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        0.175
+      ],
+      "radius": 1.3,
+      "halfHeight": 0.175,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865475
+      ]
+    },
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        0
+      ],
+      "radius": 0.6,
+      "halfHeight": 0.15,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
+      ]
+    }
+  ],
+  "32269": [
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        0
+      ],
+      "radius": 1.35,
+      "halfHeight": 0.5,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865475
+      ]
+    }
+  ],
+  "32270": [
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        0
+      ],
+      "radius": 0.85,
+      "halfHeight": 0.5,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865475
+      ]
+    }
+  ],
   "32271": [
     {
       "shape": "box",
@@ -691,7 +783,25 @@ export const preloadedCollisionMaps: Record<string, StoredCollisionPrimitive[]> 
       ]
     }
   ],
-    "45590": [
+  "32556": [
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        0
+      ],
+      "radius": 0.32800000000000007,
+      "halfHeight": 1.41,
+      "rotation": [
+        0,
+        0,
+        -0.7071067811865475,
+        0.7071067811865475
+      ]
+    }
+  ],
+  "45590": [
     {
       "shape": "cylinder",
       "center": [
@@ -722,6 +832,179 @@ export const preloadedCollisionMaps: Record<string, StoredCollisionPrimitive[]> 
         0,
         0,
         0.7071067811865476
+      ]
+    }
+  ],
+  "46372": [
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        0
+      ],
+      "radius": 1.85,
+      "halfHeight": 0.5,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865475
+      ]
+    }
+  ],
+  "48496": [
+    {
+      "shape": "box",
+      "center": [
+        0,
+        0.25,
+        0
+      ],
+      "size": [
+        0.9,
+        0.5,
+        2
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        -0.5,
+        1
+      ],
+      "radius": 0.3,
+      "halfHeight": 0.5,
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        -0.5,
+        -1
+      ],
+      "radius": 0.3,
+      "halfHeight": 0.5,
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0.25,
+        -1
+      ],
+      "radius": 0.45,
+      "halfHeight": 0.25,
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0.25,
+        1
+      ],
+      "radius": 0.45,
+      "halfHeight": 0.25,
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        1.5,
+        1.25
+      ],
+      "radius": 0.45,
+      "halfHeight": 0.25,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
+      ]
+    },
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        1.5,
+        -1.25
+      ],
+      "radius": 0.45,
+      "halfHeight": 0.25,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
+      ]
+    },
+    {
+      "shape": "box",
+      "center": [
+        0,
+        1,
+        1.125
+      ],
+      "size": [
+        0.7,
+        1,
+        0.25
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "shape": "box",
+      "center": [
+        0,
+        1,
+        -1.125
+      ],
+      "size": [
+        0.7,
+        1,
+        0.25
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
       ]
     }
   ],
@@ -978,6 +1261,94 @@ export const preloadedCollisionMaps: Record<string, StoredCollisionPrimitive[]> 
         0,
         0,
         1
+      ]
+    }
+  ],
+  "63869": [
+    {
+      "shape": "box",
+      "center": [
+        0,
+        -0.5,
+        0
+      ],
+      "size": [
+        1,
+        1,
+        0.9
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "shape": "box",
+      "center": [
+        0,
+        -1,
+        0
+      ],
+      "size": [
+        2,
+        0.9,
+        0.9
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        0
+      ],
+      "radius": 0.45,
+      "halfHeight": 0.5,
+      "rotation": [
+        0.5,
+        -0.4999999999999999,
+        0.5,
+        0.5000000000000001
+      ]
+    },
+    {
+      "shape": "cylinder",
+      "center": [
+        1,
+        -1,
+        0
+      ],
+      "radius": 0.45,
+      "halfHeight": 0.5,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
+      ]
+    },
+    {
+      "shape": "cylinder",
+      "center": [
+        -1,
+        -1,
+        0
+      ],
+      "radius": 0.45,
+      "halfHeight": 0.5,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
       ]
     }
   ],
@@ -1378,7 +1749,8 @@ export const preloadedCollisionMaps: Record<string, StoredCollisionPrimitive[]> 
 
 // Optional second layer used exclusively for gear-to-gear contacts.
 export const preloadedGearCollisionMaps: Record<string, StoredCollisionPrimitive[]> = {
-  "94925": [
+  "2825": [],
+  "3648": [
     {
       "shape": "cylinder",
       "center": [
@@ -1386,42 +1758,8 @@ export const preloadedGearCollisionMaps: Record<string, StoredCollisionPrimitive
         0,
         0
       ],
-      "radius": 0.85,
-      "halfHeight": 0.25,
-      "rotation": [
-        0.7071067811865475,
-        0,
-        0,
-        0.7071067811865476
-      ]
-    },
-    {
-      "shape": "cylinder",
-      "center": [
-        0,
-        0,
-        0
-      ],
-      "radius": 0.5,
-      "halfHeight": 0.5,
-      "rotation": [
-        0.7071067811865475,
-        0,
-        0,
-        0.7071067811865476
-      ]
-    }
-  ],
-  "3649": [
-    {
-      "shape": "cylinder",
-      "center": [
-        0,
-        -0.1337499976158143,
-        0
-      ],
-      "radius": 2.35,
-      "halfHeight": 0.25,
+      "radius": 1.3539019744873046,
+      "halfHeight": 0.4389000000000002,
       "rotation": [
         0.7071067811865475,
         0,
@@ -1430,61 +1768,41 @@ export const preloadedGearCollisionMaps: Record<string, StoredCollisionPrimitive
       ]
     }
   ],
-  "32498": [
-    {
-      "shape": "cylinder",
-      "center": [
-        0,
-        0,
-        0
-      ],
-      "radius": 2.0,
-      "halfHeight": 0.5,
-      "rotation": [
-        0.7071067811865475,
-        0,
-        0,
-        0.7071067811865475
-      ]
-    }
-  ],
-  "10928": [
-    {
-      "shape": "cylinder",
-      "center": [
-        0,
-        0,
-        0
-      ],
-      "radius": 0.4,
-      "halfHeight": 0.5,
-      "rotation": [
-        0.7071067811865475,
-        0,
-        0,
-        0.7071067811865475
-      ]
-    }
-  ],
-  // Physical tooth-contact envelopes. Ratio selection uses the green tagged
-  // zones above; these magenta volumes continue to prevent tooth overlap.
   "6573": [
     {
       "shape": "cylinder",
-      "center": [0, 0, -1.5],
+      "center": [
+        0,
+        0,
+        -1.5
+      ],
       "radius": 1.3,
       "halfHeight": 0.25,
-      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865476]
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
+      ]
     },
     {
       "shape": "cylinder",
-      "center": [0, 0, 1.5],
+      "center": [
+        0,
+        0,
+        1.5
+      ],
       "radius": 0.8,
       "halfHeight": 0.25,
-      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865476]
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865476
+      ]
     }
   ],
-    "6589": [
+  "6589": [
     {
       "shape": "cylinder",
       "center": [
@@ -1492,7 +1810,7 @@ export const preloadedGearCollisionMaps: Record<string, StoredCollisionPrimitive
         0,
         -0.1
       ],
-      "radius": 0.5,
+      "radius": 0.55,
       "halfHeight": 0.25,
       "rotation": [
         0.7071067811865475,
@@ -1506,26 +1824,10 @@ export const preloadedGearCollisionMaps: Record<string, StoredCollisionPrimitive
       "center": [
         0,
         0,
-        -0.024
+        -0.05
       ],
       "radius": 0.8,
-      "halfHeight": 0.024,
-      "rotation": [
-        0.7071067811865475,
-        0,
-        0,
-        0.7071067811865476
-      ]
-    },
-    {
-      "shape": "cylinder",
-      "center": [
-        0,
-        0,
-        -0.03
-      ],
-      "radius": 0.78,
-      "halfHeight": 0.03,
+      "halfHeight": 0.05,
       "rotation": [
         0.7071067811865475,
         0,
@@ -1534,59 +1836,91 @@ export const preloadedGearCollisionMaps: Record<string, StoredCollisionPrimitive
       ]
     }
   ],
-  "3648": [
-    {
-      "shape": "cylinder",
-      "center": [0, 0, 0],
-      "radius": 1.3539019744873046,
-      "halfHeight": 0.25,
-      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865475]
-    }
-  ],
-  "46372": [
-    {
-      "shape": "cylinder",
-      "center": [0, 0, 0],
-      "radius": 1.5,
-      "halfHeight": 0.5,
-      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865475]
-    }
-  ],
+  "32039": [],
+  "32062": [],
+  "32184": [],
   "32198": [
     {
       "shape": "cylinder",
-      "center": [0, 0, 0.175],
+      "center": [
+        0,
+        0,
+        0.175
+      ],
       "radius": 1,
       "halfHeight": 0.175,
-      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865475]
-    }
-  ],
-  "32270": [
-    {
-      "shape": "cylinder",
-      "center": [0, 0, 0],
-      "radius": 0.5,
-      "halfHeight": 0.5,
-      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865475]
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865475
+      ]
     }
   ],
   "32269": [
     {
       "shape": "cylinder",
-      "center": [0, 0, 0],
+      "center": [
+        0,
+        0,
+        0
+      ],
       "radius": 1,
       "halfHeight": 0.5,
-      "rotation": [0.7071067811865475, 0, 0, 0.7071067811865475]
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865475
+      ]
     }
   ],
-  "2825": [],
-  "32062": [],
-  "32184": [],
+  "32270": [
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        0
+      ],
+      "radius": 0.5,
+      "halfHeight": 0.5,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865475
+      ]
+    }
+  ],
   "32271": [],
-    "45590": [],
+  "32556": [],
+  "45590": [],
+  "46372": [
+    {
+      "shape": "cylinder",
+      "center": [
+        0,
+        0,
+        0
+      ],
+      "radius": 1.5383235221862794,
+      "halfHeight": 0.4560000000000002,
+      "rotation": [
+        0.7071067811865475,
+        0,
+        0,
+        0.7071067811865475
+      ]
+    }
+  ],
+  "48496": [],
   "55615": [],
   "60484": [],
+  "63869": [],
   "64179": [],
   "99773": [],
   "4265c": []
 };
+
+export const preloadedSpecialGearParts = new Set(["6573"]);

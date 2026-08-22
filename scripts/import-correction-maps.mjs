@@ -1,5 +1,6 @@
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const [correctionsArg, outputArg] = process.argv.slice(2);
 if (!correctionsArg || !outputArg)
@@ -10,7 +11,25 @@ const correctionsDir = resolve(correctionsArg),
   files = (await readdir(correctionsDir)).sort(),
   connectionMaps = {},
   collisionMaps = {},
-  gearCollisionMaps = {};
+  gearCollisionMaps = {},
+  specialGearParts = new Set();
+
+const readExport = async (file, name, fallback) => {
+  try {
+    const module = await import(`${pathToFileURL(resolve(outputDir, file)).href}?v=${Date.now()}`);
+    return module[name] ?? fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+Object.assign(connectionMaps, await readExport("connection-maps.ts", "preloadedConnectionMaps", {}));
+Object.assign(collisionMaps, await readExport("collision-maps.ts", "preloadedCollisionMaps", {}));
+Object.assign(gearCollisionMaps, await readExport("collision-maps.ts", "preloadedGearCollisionMaps", {}));
+try {
+  const existing = await readExport("collision-maps.ts", "preloadedSpecialGearParts", new Set());
+  existing.forEach((part) => specialGearParts.add(part));
+} catch {}
 
 for (const file of files) {
   const connectionMatch = file.match(/^(.+)-connections\.json$/i),
@@ -30,6 +49,7 @@ for (const file of files) {
     collisionMaps[part] = payload.colliders;
     if (Array.isArray(payload.gearColliders))
       gearCollisionMaps[part] = payload.gearColliders;
+    if (payload.specialGear === true) specialGearParts.add(part);
   }
 }
 
@@ -40,6 +60,7 @@ const connectionSource = `export type StoredConnector = {
   role: "socket" | "shaft";
   diameter: number;
   length?: number;
+  rotationOnly?: boolean;
 };
 
 // Generated from the reviewed maps exported by Sim Studio's map editor.
@@ -53,6 +74,8 @@ const collisionSource = `export type StoredCollisionPrimitive = {
   radius?: number;
   halfHeight?: number;
   rotation: [number, number, number, number];
+  gearCollision?: boolean;
+  gearRatio?: number;
 };
 
 // Generated from the reviewed maps exported by Sim Studio's collider editor.
@@ -60,6 +83,8 @@ export const preloadedCollisionMaps: Record<string, StoredCollisionPrimitive[]> 
 
 // Optional second layer used exclusively for gear-to-gear contacts.
 export const preloadedGearCollisionMaps: Record<string, StoredCollisionPrimitive[]> = ${JSON.stringify(gearCollisionMaps, null, 2)};
+
+export const preloadedSpecialGearParts = new Set(${JSON.stringify([...specialGearParts])});
 `;
 
 await Promise.all([
