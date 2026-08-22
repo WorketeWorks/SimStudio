@@ -167,5 +167,7 @@ export const palettePreviewFilter = (color = 71) => {
       "sepia(1) saturate(3.2) hue-rotate(334deg) brightness(.45) contrast(1.3)" + shadow
     );
   if (color === 72) return "grayscale(1) brightness(.56) contrast(1.28)" + shadow;
+  if (color === 78)
+    return "sepia(1) saturate(2.2) hue-rotate(325deg) brightness(1.08) contrast(1.05)" + shadow;
   return "grayscale(1) brightness(.78) contrast(1.2)" + shadow;
 };

@@ -186,6 +186,7 @@ const categories = [
   { id: "connectors", icon: "⌘" },
   { id: "gears", icon: "⚙" },
   { id: "wheels", icon: "◉" },
+  { id: "rubber", icon: "◌" },
   { id: "imported", icon: "↓" },
 ] as const;
 
@@ -1381,38 +1382,36 @@ export default function Home() {
         axis: connector.axis.clone(),
       }));
     const analyzePart = (wrapper: THREE.Object3D, p: CatalogPart) => {
-      let connectors: MeshConnector[] | undefined = straightAxleConnectors(p.name),
+      let connectors: MeshConnector[] | undefined,
         hasSavedConnectorMap = false,
         specialGear =
           p.specialGear === true ||
           preloadedSpecialGearParts.has(p.part.toLowerCase()) ||
           localStorage.getItem(`sim-special-gear-v1:${p.part}`) === "true";
+      try {
+        const saved = localStorage.getItem(`sim-connectors-v4:${p.part}`);
+        if (saved) {
+          hasSavedConnectorMap = true;
+          connectors = (
+            JSON.parse(saved) as {
+              local: number[];
+              axis: number[];
+              kind: "round" | "axle" | "half";
+              role?: "socket" | "shaft";
+              diameter: number;
+              length?: number;
+              rotationOnly?: boolean;
+            }[]
+          ).map((connector) => ({
+            ...connector,
+            role: connector.role ?? "socket",
+            local: new THREE.Vector3().fromArray(connector.local),
+            axis: new THREE.Vector3().fromArray(connector.axis).normalize(),
+          }));
+        }
+      } catch {}
       if (!connectors)
-        try {
-          const saved = localStorage.getItem(`sim-connectors-v4:${p.part}`),
-            savedIsCurrent =
-              localStorage.getItem(`sim-connectors-revision:${p.part}`) ===
-              CORRECTION_MAP_REVISION;
-          if (saved && (!preloadedConnectionMaps[p.part] || savedIsCurrent)) {
-            hasSavedConnectorMap = true;
-            connectors = (
-              JSON.parse(saved) as {
-                local: number[];
-                axis: number[];
-                kind: "round" | "axle" | "half";
-                role?: "socket" | "shaft";
-                diameter: number;
-                length?: number;
-                rotationOnly?: boolean;
-              }[]
-            ).map((connector) => ({
-              ...connector,
-              role: connector.role ?? "socket",
-              local: new THREE.Vector3().fromArray(connector.local),
-              axis: new THREE.Vector3().fromArray(connector.axis).normalize(),
-            }));
-          }
-        } catch {}
+        connectors = straightAxleConnectors(p.name);
       if (!connectors && preloadedConnectionMaps[p.part])
         connectors = preloadedConnectionMaps[p.part].map((connector) => ({
           ...connector,
@@ -1483,11 +1482,8 @@ export default function Home() {
       );
       if (!colliders)
         try {
-          const saved = localStorage.getItem(`sim-colliders-v1:${p.part}`),
-            savedIsCurrent =
-              localStorage.getItem(`sim-colliders-revision:${p.part}`) ===
-              collisionMapRevision(p.part);
-          if (saved && (!preloadedCollisionMaps[p.part] || savedIsCurrent)) {
+          const saved = localStorage.getItem(`sim-colliders-v1:${p.part}`);
+          if (saved) {
             const stored = JSON.parse(saved) as {
               shape: "box" | "cylinder";
               center: number[];
@@ -9372,6 +9368,13 @@ export default function Home() {
                   <img
                     src={p.thumb}
                     alt={p.name}
+                    onError={(event) => {
+                      if (p.sourceThumb && event.currentTarget.src !== p.sourceThumb) {
+                        event.currentTarget.src = p.sourceThumb;
+                      } else {
+                        event.currentTarget.style.display = "none";
+                      }
+                    }}
                     style={{
                       filter: p.rawThumb
                         ? palettePreviewFilter(p.color)

@@ -1,6 +1,92 @@
 {
   "version": 1,
   "parts": {
+    "2736": {
+      "name": "Technic Axle Towball",
+      "family": "connectors",
+      "modelPart": "2736",
+      "modelFile": "parts/2736.dat",
+      "connectors": [
+        {
+          "local": [
+            -0.07499999999999996,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "axle",
+          "role": "shaft",
+          "diameter": 0.8000000000000002,
+          "length": 1.7389999999999999
+        },
+        {
+          "local": [
+            0.3,
+            4.163336342344337e-17,
+            -0.0008087515830993638
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.36162874698638914
+        },
+        {
+          "local": [
+            -0.3,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "round",
+          "role": "socket",
+          "diameter": 0.8
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "cylinder",
+          "center": [
+            -0.07499999999999996,
+            0,
+            0
+          ],
+          "radius": 0.32800000000000007,
+          "halfHeight": 0.8694999999999999,
+          "rotation": [
+            0,
+            0,
+            -0.7071067811865475,
+            0.7071067811865475
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -1,
+          -0.4000000000000001,
+          -0.4000000000000001
+        ],
+        "max": [
+          0.8500000000000001,
+          0.4000000000000001,
+          0.4000000000000001
+        ]
+      }
+    },
     "2780": {
       "name": "Technic Pin with Friction and Slots",
       "family": "pins",
@@ -1163,6 +1249,78 @@
         ]
       }
     },
+    "4274": {
+      "name": "Technic Pin 1/2",
+      "family": "pins",
+      "modelPart": "4274",
+      "modelFile": "parts/4274.dat",
+      "connectors": [
+        {
+          "local": [
+            -0.9,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "round",
+          "role": "shaft",
+          "diameter": 0.8000000000000002,
+          "length": 0.564
+        },
+        {
+          "local": [
+            0.09999999999999998,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "round",
+          "role": "shaft",
+          "diameter": 0.8000000000000002,
+          "length": 0.564
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "cylinder",
+          "center": [
+            -0.4,
+            0,
+            0
+          ],
+          "radius": 0.32800000000000007,
+          "halfHeight": 0.564,
+          "rotation": [
+            0,
+            0,
+            -0.7071067811865475,
+            0.7071067811865475
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -1,
+          -0.4000000000000001,
+          -0.4000000000000001
+        ],
+        "max": [
+          0.2,
+          0.4000000000000001,
+          0.4000000000000001
+        ]
+      }
+    },
     "4519": {
       "name": "Technic Axle 3",
       "family": "axles",
@@ -1630,6 +1788,124 @@
           0.8,
           0.8,
           0.15000000000000013
+        ]
+      }
+    },
+    "6628": {
+      "name": "Technic Pin Towball with Friction",
+      "family": "connectors",
+      "modelPart": "6628",
+      "modelFile": "parts/6628.dat",
+      "connectors": [
+        {
+          "local": [
+            -0.45,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "round",
+          "role": "shaft",
+          "diameter": 0.8000000000000002,
+          "length": 0.8929999999999999
+        },
+        {
+          "local": [
+            0.55,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "round",
+          "role": "shaft",
+          "diameter": 0.8000000000000002,
+          "length": 0.8929999999999999
+        },
+        {
+          "local": [
+            -0.25,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "round",
+          "role": "socket",
+          "diameter": 0.8
+        },
+        {
+          "local": [
+            -0.08,
+            4.163336342344337e-17,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.4
+        },
+        {
+          "local": [
+            1,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6,
+          "length": 0.8000000000000002
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "cylinder",
+          "center": [
+            0.04999999999999999,
+            0,
+            0
+          ],
+          "radius": 0.32800000000000007,
+          "halfHeight": 0.8929999999999999,
+          "rotation": [
+            0,
+            0,
+            -0.7071067811865475,
+            0.7071067811865475
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -0.9,
+          -0.4000000000000001,
+          -0.4000000000000001
+        ],
+        "max": [
+          1,
+          0.4000000000000001,
+          0.4000000000000001
         ]
       }
     },
@@ -3737,6 +4013,109 @@
         ]
       }
     },
+    "32002": {
+      "name": "Technic Pin 3/4",
+      "family": "connectors",
+      "modelPart": "32002",
+      "modelFile": "parts/32002.dat",
+      "connectors": [
+        {
+          "local": [
+            -0.75,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "round",
+          "role": "shaft",
+          "diameter": 0.8000000000000002,
+          "length": 0.705
+        },
+        {
+          "local": [
+            0.25,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "round",
+          "role": "shaft",
+          "diameter": 0.8000000000000002,
+          "length": 0.705
+        },
+        {
+          "local": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "round",
+          "role": "socket",
+          "diameter": 0.8
+        },
+        {
+          "local": [
+            -1,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6,
+          "length": 0.8000000000000002
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "cylinder",
+          "center": [
+            -0.25,
+            0,
+            0
+          ],
+          "radius": 0.32800000000000007,
+          "halfHeight": 0.705,
+          "rotation": [
+            0,
+            0,
+            -0.7071067811865475,
+            0.7071067811865475
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -1,
+          -0.4000000000000001,
+          -0.4000000000000001
+        ],
+        "max": [
+          0.5,
+          0.4000000000000001,
+          0.4000000000000001
+        ]
+      }
+    },
     "32013": {
       "name": "Technic Angle Connector #1",
       "family": "connectors",
@@ -4282,6 +4661,122 @@
           0.5,
           0.4500000000000002,
           1.50002498626709
+        ]
+      }
+    },
+    "32039": {
+      "name": "Technic Connector (Axle/Bush) Type 1",
+      "family": "connectors",
+      "modelPart": "32039",
+      "modelFile": "parts/32039.dat",
+      "connectors": [
+        {
+          "local": [
+            0,
+            0,
+            1
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6,
+          "length": 1
+        },
+        {
+          "local": [
+            0.4,
+            1.1102230246251565e-16,
+            0.9999999880790711
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6500089049339295
+        },
+        {
+          "local": [
+            -0.4,
+            1.1102230246251565e-16,
+            0.9999999880790711
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6500089049339295
+        },
+        {
+          "local": [
+            0,
+            0,
+            -0.1
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.65
+        },
+        {
+          "local": [
+            0,
+            -5.551115123125783e-17,
+            -0.4
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6500089168548584
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "cylinder",
+          "center": [
+            0,
+            5.551115123125783e-17,
+            0.4750000000000001
+          ],
+          "radius": 0.92625,
+          "halfHeight": 0.4275000000000001,
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -0.5,
+          -0.45000000000000007,
+          -0.5
+        ],
+        "max": [
+          0.5,
+          0.4500000000000002,
+          1.4500000000000002
         ]
       }
     },
@@ -4982,6 +5477,94 @@
         ]
       }
     },
+    "32138": {
+      "name": "Technic Pin 3L Double with Axlehole",
+      "family": "connectors",
+      "modelPart": "32138",
+      "modelFile": "parts/32138.dat",
+      "connectors": [
+        {
+          "local": [
+            -1,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "round",
+          "role": "shaft",
+          "diameter": 1.9000000000000001,
+          "length": 1.41
+        },
+        {
+          "local": [
+            1,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "round",
+          "role": "shaft",
+          "diameter": 1.9000000000000001,
+          "length": 1.41
+        },
+        {
+          "local": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6,
+          "length": 0.9000000000000002
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "cylinder",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "radius": 0.3690000000000001,
+          "halfHeight": 1.41,
+          "rotation": [
+            0,
+            0,
+            -0.7071067811865475,
+            0.7071067811865475
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -1.5,
+          -0.9500000000000001,
+          -0.4500000000000001
+        ],
+        "max": [
+          1.5,
+          0.9500000000000001,
+          0.4500000000000001
+        ]
+      }
+    },
     "32140": {
       "name": "Technic Beam 2 x 4 Bent 90°",
       "family": "beams",
@@ -5453,6 +6036,228 @@
           1.3300512052059172,
           1.3300512052059172,
           0.3500000000000002
+        ]
+      }
+    },
+    "32250": {
+      "name": "Technic Beam 3 x 5 x 0.5 Liftarm Bent 90 Quarter Ellipse",
+      "family": "beams",
+      "modelPart": "32250",
+      "modelFile": "parts/32250.dat",
+      "connectors": [
+        {
+          "local": [
+            0,
+            -2.498001805406602e-16,
+            -3
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "kind": "half",
+          "role": "socket",
+          "diameter": 0.8,
+          "length": 0.5000000000000007
+        },
+        {
+          "local": [
+            0,
+            -2.498001805406602e-16,
+            -2
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "kind": "half",
+          "role": "socket",
+          "diameter": 0.8,
+          "length": 0.5000000000000007
+        },
+        {
+          "local": [
+            0,
+            -2.498001805406602e-16,
+            -1
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "kind": "half",
+          "role": "socket",
+          "diameter": 0.8,
+          "length": 0.5000000000000007
+        },
+        {
+          "local": [
+            1,
+            -2.498001805406602e-16,
+            0
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "kind": "half",
+          "role": "socket",
+          "diameter": 0.8,
+          "length": 0.5000000000000007
+        },
+        {
+          "local": [
+            0,
+            -2.498001805406602e-16,
+            -4
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6,
+          "length": 0.5000000000000007
+        },
+        {
+          "local": [
+            0,
+            -2.498001805406602e-16,
+            0
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6,
+          "length": 0.5000000000000007
+        },
+        {
+          "local": [
+            2,
+            -2.498001805406602e-16,
+            0
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6,
+          "length": 0.5000000000000007
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "box",
+          "center": [
+            0,
+            -2.498001805406602e-16,
+            -2
+          ],
+          "size": [
+            4,
+            0.5,
+            0.9
+          ],
+          "rotation": [
+            0,
+            -0.7071067811865475,
+            0,
+            0.7071067811865476
+          ]
+        },
+        {
+          "shape": "box",
+          "center": [
+            1,
+            -2.498001805406602e-16,
+            0
+          ],
+          "size": [
+            2,
+            0.5,
+            0.9
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        {
+          "shape": "cylinder",
+          "center": [
+            0,
+            -2.498001805406602e-16,
+            -4
+          ],
+          "radius": 0.45,
+          "halfHeight": 0.25,
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        {
+          "shape": "cylinder",
+          "center": [
+            0,
+            -2.498001805406602e-16,
+            0
+          ],
+          "radius": 0.45,
+          "halfHeight": 0.25,
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        {
+          "shape": "cylinder",
+          "center": [
+            2,
+            -2.498001805406602e-16,
+            0
+          ],
+          "radius": 0.45,
+          "halfHeight": 0.25,
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -0.45,
+          -0.25000000000000056,
+          -4.45
+        ],
+        "max": [
+          2.45,
+          0.25000000000000006,
+          0.45000000000000007
         ]
       }
     },
@@ -8045,6 +8850,292 @@
         ]
       }
     },
+    "32557": {
+      "name": "Technic Cross Block 2 x 3 (Pin/Pin/Twin Pin)",
+      "family": "connectors",
+      "modelPart": "32557",
+      "modelFile": "parts/32557.dat",
+      "connectors": [
+        {
+          "local": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "round",
+          "role": "socket",
+          "diameter": 0.8
+        },
+        {
+          "local": [
+            0,
+            1,
+            -1.1102230246251565e-16
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "round",
+          "role": "socket",
+          "diameter": 0.8
+        },
+        {
+          "local": [
+            0.5,
+            -1,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "round",
+          "role": "socket",
+          "diameter": 0.8000000000000002
+        },
+        {
+          "local": [
+            -0.5,
+            -1,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "round",
+          "role": "socket",
+          "diameter": 0.8000000000000002
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "box",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "size": [
+            1.6720000000000002,
+            2.5520000000000005,
+            0.8800000000000004
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -0.9500000000000001,
+          -1.4500000000000002,
+          -0.5000000000000002
+        ],
+        "max": [
+          0.9500000000000001,
+          1.4500000000000002,
+          0.5000000000000002
+        ]
+      }
+    },
+    "39793": {
+      "name": "Technic Connector Block 3 x 3 with 9 Perpendicular Holes",
+      "family": "connectors",
+      "modelPart": "39793",
+      "modelFile": "parts/39793.dat",
+      "connectors": [
+        {
+          "local": [
+            1,
+            -1.1102230246251565e-16,
+            -1
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6000000000000001
+        },
+        {
+          "local": [
+            1,
+            1.1102230246251565e-16,
+            1
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6000000000000001
+        },
+        {
+          "local": [
+            -1,
+            -1.1102230246251565e-16,
+            -1
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6000000000000001
+        },
+        {
+          "local": [
+            -1,
+            1.1102230246251565e-16,
+            1
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6000000000000001
+        },
+        {
+          "local": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "kind": "round",
+          "role": "socket",
+          "diameter": 0.8,
+          "length": 1.0000000000000004
+        },
+        {
+          "local": [
+            1,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "kind": "round",
+          "role": "socket",
+          "diameter": 0.8,
+          "length": 1.0000000000000004
+        },
+        {
+          "local": [
+            0,
+            0,
+            -1
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "kind": "round",
+          "role": "socket",
+          "diameter": 0.8,
+          "length": 1.0000000000000004
+        },
+        {
+          "local": [
+            0,
+            0,
+            1
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "kind": "round",
+          "role": "socket",
+          "diameter": 0.8,
+          "length": 1.0000000000000004
+        },
+        {
+          "local": [
+            -1,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "kind": "round",
+          "role": "socket",
+          "diameter": 0.8,
+          "length": 1.0000000000000004
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "box",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "size": [
+            2.64,
+            0.8800000000000004,
+            2.5520000000000005
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -1.5,
+          -0.5000000000000002,
+          -1.4500000000000002
+        ],
+        "max": [
+          1.5,
+          0.5000000000000002,
+          1.4500000000000002
+        ]
+      }
+    },
     "40490": {
       "name": "Technic Beam 9",
       "family": "beams",
@@ -8521,6 +9612,81 @@
         ]
       }
     },
+    "41669": {
+      "name": "Technic Tooth 1 x 3 with Axlehole with Rounded Bottom Cavity",
+      "family": "connectors",
+      "modelPart": "41669",
+      "modelFile": "parts/41669.dat",
+      "connectors": [
+        {
+          "local": [
+            0,
+            1.6653345369377348e-16,
+            0
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6,
+          "length": 1.0000000000000004
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "box",
+          "center": [
+            0,
+            1.6653345369377348e-16,
+            0.9750000000000001
+          ],
+          "size": [
+            0.738,
+            0.8200000000000003,
+            2.337
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        {
+          "shape": "cylinder",
+          "center": [
+            0,
+            1.6653345369377348e-16,
+            0
+          ],
+          "radius": 0.41759999999999997,
+          "halfHeight": 0.34559999999999996,
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -0.45,
+          -0.5,
+          -0.45000000000000007
+        ],
+        "max": [
+          0.45,
+          0.5000000000000003,
+          2.4000000000000004
+        ]
+      }
+    },
     "41677": {
       "name": "Technic Beam 2 x 0.5 Liftarm",
       "family": "beams",
@@ -8858,6 +10024,62 @@
         ]
       }
     },
+    "42610": {
+      "name": "Wheel Rim 8 x 11.2 with Centre Groove",
+      "family": "wheels",
+      "modelPart": "42610",
+      "modelFile": "parts/42610.dat",
+      "connectors": [
+        {
+          "local": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "round",
+          "role": "socket",
+          "diameter": 0.8,
+          "length": 1.0000000000000002
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "cylinder",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "radius": 0.6650000000000001,
+          "halfHeight": 0.4750000000000001,
+          "rotation": [
+            0.7071067811865475,
+            0,
+            0,
+            0.7071067811865475
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -0.7000000000000001,
+          -0.7000000000000002,
+          -0.5000000000000001
+        ],
+        "max": [
+          0.7000000000000001,
+          0.7000000000000002,
+          0.5000000000000001
+        ]
+      }
+    },
     "43093": {
       "name": "Technic Axle Pin with Friction",
       "family": "pins",
@@ -9107,6 +10329,95 @@
         ]
       }
     },
+    "44809": {
+      "name": "Technic Cross Block 2 x 2 Bent 90 (Pin/Pin/Pin)",
+      "family": "connectors",
+      "modelPart": "44809",
+      "modelFile": "parts/44809.dat",
+      "connectors": [
+        {
+          "local": [
+            -0.04999999999999999,
+            0.012500000000000108,
+            1.0039387464523317
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.8164387464523315
+        },
+        {
+          "local": [
+            0,
+            5.551115123125783e-17,
+            0
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "kind": "round",
+          "role": "socket",
+          "diameter": 0.8,
+          "length": 1.0000000000000004
+        },
+        {
+          "local": [
+            1.0039387464523317,
+            0.012499999999999997,
+            -0.04999999999999999
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.8164387464523315
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "box",
+          "center": [
+            0.4750000000000001,
+            5.551115123125783e-17,
+            0.47500000000000003
+          ],
+          "size": [
+            1.7160000000000002,
+            0.8800000000000004,
+            1.7160000000000002
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -0.5,
+          -0.5000000000000001,
+          -0.5000000000000001
+        ],
+        "max": [
+          1.4500000000000002,
+          0.5000000000000002,
+          1.4500000000000002
+        ]
+      }
+    },
     "45590": {
       "name": "Technic Axle Joiner Double Flexible",
       "family": "connectors",
@@ -9327,6 +10638,126 @@
         ]
       }
     },
+    "48496": {
+      "name": "Technic Connector Toggle Joint Smooth Double with 2 Pins",
+      "family": "connectors",
+      "modelPart": "48496",
+      "modelFile": "parts/48496.dat",
+      "connectors": [
+        {
+          "local": [
+            0,
+            0.25,
+            -2.7755575615628914e-17
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "kind": "round",
+          "role": "socket",
+          "diameter": 0.8
+        },
+        {
+          "local": [
+            0,
+            1.5,
+            -1.25
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6
+        },
+        {
+          "local": [
+            0,
+            1.5000000000000004,
+            1.25
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6
+        },
+        {
+          "local": [
+            0,
+            -1,
+            -1
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6,
+          "length": 0.9
+        },
+        {
+          "local": [
+            0,
+            1,
+            -1
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6,
+          "length": 0.9
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "box",
+          "center": [
+            0,
+            0.4750000000000001,
+            0
+          ],
+          "size": [
+            0.792,
+            2.5960000000000005,
+            2.6400000000000006
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -0.45,
+          -1.0000000000000002,
+          -1.5000000000000002
+        ],
+        "max": [
+          0.45,
+          1.9500000000000004,
+          1.5000000000000002
+        ]
+      }
+    },
     "48989": {
       "name": "Technic Cross Block 1 x 3 with 4 Pins",
       "family": "connectors",
@@ -9440,6 +10871,45 @@
           0.5,
           1.4500000000000004,
           1.5000000000000002
+        ]
+      }
+    },
+    "50951": {
+      "name": "Tyre 6/30 x 11",
+      "family": "wheels",
+      "modelPart": "50951",
+      "modelFile": "parts/50951.dat",
+      "connectors": [],
+      "colliders": [
+        {
+          "shape": "cylinder",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "radius": 0.902538040280342,
+          "halfHeight": 0.38003799887374073,
+          "rotation": [
+            0.7071067811865475,
+            0,
+            0,
+            0.7071067811865475
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -0.9500400424003601,
+          -0.9500400424003601,
+          -0.40003999881446395
+        ],
+        "max": [
+          0.9500400424003601,
+          0.9500400424003601,
+          0.40003999881446395
         ]
       }
     },
@@ -9699,6 +11169,61 @@
           0.5,
           2.45,
           1.5000000000000002
+        ]
+      }
+    },
+    "56904": {
+      "name": "Wheel Rim 14 x 30 with 6 Spokes and No Pegholes",
+      "family": "wheels",
+      "modelPart": "56904",
+      "modelFile": "parts/56904.dat",
+      "connectors": [
+        {
+          "local": [
+            0,
+            5.551115123125783e-17,
+            0.5
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6000000000000001
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "cylinder",
+          "center": [
+            0,
+            1.1102230246251565e-16,
+            0.04999999999999999
+          ],
+          "radius": 1.8050000000000002,
+          "halfHeight": 0.9025000000000001,
+          "rotation": [
+            0.7071067811865475,
+            0,
+            0,
+            0.7071067811865475
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -1.9000000000000001,
+          -1.9000000000000001,
+          -0.9000000000000002
+        ],
+        "max": [
+          1.9000000000000001,
+          1.9000000000000004,
+          1.0000000000000002
         ]
       }
     },
@@ -10079,6 +11604,93 @@
           4.5,
           0.3000000000000001,
           0.3000000000000001
+        ]
+      }
+    },
+    "62462": {
+      "name": "Technic Pin Joiner Round with Slot",
+      "family": "connectors",
+      "modelPart": "62462",
+      "modelFile": "parts/62462.dat",
+      "connectors": [
+        {
+          "local": [
+            -0.5,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "round",
+          "role": "shaft",
+          "diameter": 1.0000000000000002,
+          "length": 0.94
+        },
+        {
+          "local": [
+            0.5,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "round",
+          "role": "shaft",
+          "diameter": 1.0000000000000002,
+          "length": 0.94
+        },
+        {
+          "local": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6000000000000001
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "cylinder",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "radius": 0.4100000000000001,
+          "halfHeight": 0.94,
+          "rotation": [
+            0,
+            0,
+            -0.7071067811865475,
+            0.7071067811865475
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -1,
+          -0.5000000000000001,
+          -0.5000000000000001
+        ],
+        "max": [
+          1,
+          0.5000000000000001,
+          0.5000000000000001
         ]
       }
     },
@@ -12164,6 +13776,317 @@
         ]
       }
     },
+    "85543": {
+      "name": "Rubber Belt Round 15 / 1.6",
+      "family": "rubber",
+      "modelPart": "85543",
+      "modelFile": "parts/85543.dat",
+      "connectors": [],
+      "colliders": [
+        {
+          "shape": "box",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "size": [
+            1.8333149313926698,
+            1.8333149313926698,
+            0.1833150051534178
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -1.0416562110185623,
+          -1.0416562110185623,
+          -0.1041562529280783
+        ],
+        "max": [
+          1.0416562110185623,
+          1.0416562110185623,
+          0.1041562529280783
+        ]
+      }
+    },
+    "85544": {
+      "name": "Train Wheel Large Traction Band",
+      "family": "rubber",
+      "modelPart": "85544",
+      "modelFile": "parts/85544.dat",
+      "connectors": [
+        {
+          "local": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.8,
+          "length": 0.1500000000000005
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "cylinder",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "radius": 1.8772116701862722,
+          "halfHeight": 0.07125000000000023,
+          "rotation": [
+            0.7071067811865475,
+            0,
+            0,
+            0.7071067811865475
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -1.9760122844066024,
+          -1.9760122844066024,
+          -0.07500000000000025
+        ],
+        "max": [
+          1.9760122844066024,
+          1.9760122844066024,
+          0.07500000000000025
+        ]
+      }
+    },
+    "85545": {
+      "name": "Rubber Belt Round 26 / 1.6",
+      "family": "rubber",
+      "modelPart": "85545",
+      "modelFile": "parts/85545.dat",
+      "connectors": [],
+      "colliders": [
+        {
+          "shape": "box",
+          "center": [
+            0,
+            0,
+            -1.942890293094024e-16
+          ],
+          "size": [
+            3.03875,
+            3.03875,
+            0.1787500000000007
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -1.7265625,
+          -1.7265625,
+          -0.1015625000000006
+        ],
+        "max": [
+          1.7265625,
+          1.7265625,
+          0.10156250000000021
+        ]
+      }
+    },
+    "85546": {
+      "name": "Rubber Belt Round 33 / 1.6",
+      "family": "rubber",
+      "modelPart": "85546",
+      "modelFile": "parts/85546.dat",
+      "connectors": [
+        {
+          "local": [
+            -2,
+            -1,
+            -2.42861286636753e-16
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6,
+          "length": 0.19057499896735053
+        },
+        {
+          "local": [
+            -2,
+            1,
+            -2.42861286636753e-16
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6,
+          "length": 0.19057499896735053
+        },
+        {
+          "local": [
+            -1,
+            -2,
+            -2.42861286636753e-16
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6,
+          "length": 0.19057499896735053
+        },
+        {
+          "local": [
+            -1,
+            2,
+            -2.42861286636753e-16
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6,
+          "length": 0.19057499896735053
+        },
+        {
+          "local": [
+            1,
+            -2,
+            -2.42861286636753e-16
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6,
+          "length": 0.19057499896735053
+        },
+        {
+          "local": [
+            1,
+            2,
+            -2.42861286636753e-16
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6,
+          "length": 0.19057499896735053
+        },
+        {
+          "local": [
+            2,
+            -1,
+            -2.42861286636753e-16
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6,
+          "length": 0.19057499896735053
+        },
+        {
+          "local": [
+            2,
+            1,
+            -2.42861286636753e-16
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "kind": "axle",
+          "role": "socket",
+          "diameter": 0.6,
+          "length": 0.19057499896735053
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "box",
+          "center": [
+            0,
+            0,
+            -2.42861286636753e-16
+          ],
+          "size": [
+            3.7977061343193053,
+            3.7977061343193053,
+            0.16770599909126846
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -2.157787576317787,
+          -2.157787576317787,
+          -0.09528749948367551
+        ],
+        "max": [
+          2.157787576317787,
+          2.157787576317787,
+          0.09528749948367503
+        ]
+      }
+    },
     "87082": {
       "name": "Technic Pin Long with Pin Hole",
       "family": "pins",
@@ -12617,6 +14540,62 @@
           1.0819999694824218,
           1.0819999694824218,
           0.5000000000000001
+        ]
+      }
+    },
+    "99008": {
+      "name": "Technic Axle 4 with Middle Cylindrical Stop",
+      "family": "axles",
+      "modelPart": "99008",
+      "modelFile": "parts/99008.dat",
+      "connectors": [
+        {
+          "local": [
+            0,
+            -1.1102230246251565e-16,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "kind": "axle",
+          "role": "shaft",
+          "diameter": 0.6000000000000004,
+          "length": 3.713
+        }
+      ],
+      "colliders": [
+        {
+          "shape": "cylinder",
+          "center": [
+            0,
+            -1.1102230246251565e-16,
+            0
+          ],
+          "radius": 0.24600000000000008,
+          "halfHeight": 1.8565,
+          "rotation": [
+            0,
+            0,
+            -0.7071067811865475,
+            0.7071067811865475
+          ]
+        }
+      ],
+      "gear": false,
+      "gearColliders": [],
+      "bounds": {
+        "min": [
+          -1.975,
+          -0.3000000000000003,
+          -0.3000000000000001
+        ],
+        "max": [
+          1.975,
+          0.3000000000000001,
+          0.3000000000000001
         ]
       }
     },
@@ -13452,6 +15431,166 @@
       "geometry": "catalog/geometry/62821-72.json",
       "render": "catalog/renders/62821.png",
       "color": 72
+    },
+    "39793-71": {
+      "geometry": "catalog/geometry/39793-71.json",
+      "render": "catalog/renders/39793.png",
+      "color": 71
+    },
+    "62462-71": {
+      "geometry": "catalog/geometry/62462-71.json",
+      "render": "catalog/renders/62462.png",
+      "color": 71
+    },
+    "48496-71": {
+      "geometry": "catalog/geometry/48496-71.json",
+      "render": "catalog/renders/48496.png",
+      "color": 71
+    },
+    "32557-71": {
+      "geometry": "catalog/geometry/32557-71.json",
+      "render": "catalog/renders/32557.png",
+      "color": 71
+    },
+    "44809-71": {
+      "geometry": "catalog/geometry/44809-71.json",
+      "render": "catalog/renders/44809.png",
+      "color": 71
+    },
+    "32039-71": {
+      "geometry": "catalog/geometry/32039-71.json",
+      "render": "catalog/renders/32039.png",
+      "color": 71
+    },
+    "32138-71": {
+      "geometry": "catalog/geometry/32138-71.json",
+      "render": "catalog/renders/32138.png",
+      "color": 71
+    },
+    "32002-71": {
+      "geometry": "catalog/geometry/32002-71.json",
+      "render": "catalog/renders/32002.png",
+      "color": 71
+    },
+    "2736-71": {
+      "geometry": "catalog/geometry/2736-71.json",
+      "render": "catalog/renders/2736.png",
+      "color": 71
+    },
+    "6628-71": {
+      "geometry": "catalog/geometry/6628-71.json",
+      "render": "catalog/renders/6628.png",
+      "color": 71
+    },
+    "41669-71": {
+      "geometry": "catalog/geometry/41669-71.json",
+      "render": "catalog/renders/41669.png",
+      "color": 71
+    },
+    "42610-71": {
+      "geometry": "catalog/geometry/42610-71.json",
+      "render": "catalog/renders/42610.png",
+      "color": 71
+    },
+    "56904-71": {
+      "geometry": "catalog/geometry/56904-71.json",
+      "render": "catalog/renders/56904.png",
+      "color": 71
+    },
+    "50951-71": {
+      "geometry": "catalog/geometry/50951-71.json",
+      "render": "catalog/renders/50951.png",
+      "color": 71
+    },
+    "85543-71": {
+      "geometry": "catalog/geometry/85543-71.json",
+      "render": "catalog/renders/85543.png",
+      "color": 71
+    },
+    "85544-71": {
+      "geometry": "catalog/geometry/85544-71.json",
+      "render": "catalog/renders/85544.png",
+      "color": 71
+    },
+    "85546-71": {
+      "geometry": "catalog/geometry/85546-71.json",
+      "render": "catalog/renders/85546.png",
+      "color": 71
+    },
+    "4274-71": {
+      "geometry": "catalog/geometry/4274-71.json",
+      "render": "catalog/renders/4274.png",
+      "color": 71
+    },
+    "99008-71": {
+      "geometry": "catalog/geometry/99008-71.json",
+      "render": "catalog/renders/99008.png",
+      "color": 71
+    },
+    "32250-71": {
+      "geometry": "catalog/geometry/32250-71.json",
+      "render": "catalog/renders/32250.png",
+      "color": 71
+    },
+    "39793-0": {
+      "geometry": "catalog/geometry/39793-0.json",
+      "render": "catalog/renders/39793.png",
+      "color": 0
+    },
+    "48496-0": {
+      "geometry": "catalog/geometry/48496-0.json",
+      "render": "catalog/renders/48496.png",
+      "color": 0
+    },
+    "32002-78": {
+      "geometry": "catalog/geometry/32002-78.json",
+      "render": "catalog/renders/32002.png",
+      "color": 78
+    },
+    "6628-0": {
+      "geometry": "catalog/geometry/6628-0.json",
+      "render": "catalog/renders/6628.png",
+      "color": 0
+    },
+    "50951-0": {
+      "geometry": "catalog/geometry/50951-0.json",
+      "render": "catalog/renders/50951.png",
+      "color": 0
+    },
+    "85543-15": {
+      "geometry": "catalog/geometry/85543-15.json",
+      "render": "catalog/renders/85543.png",
+      "color": 15
+    },
+    "85545-1": {
+      "geometry": "catalog/geometry/85545-1.json",
+      "render": "catalog/renders/85545.png",
+      "color": 1
+    },
+    "85546-14": {
+      "geometry": "catalog/geometry/85546-14.json",
+      "render": "catalog/renders/85546.png",
+      "color": 14
+    },
+    "4274-1": {
+      "geometry": "catalog/geometry/4274-1.json",
+      "render": "catalog/renders/4274.png",
+      "color": 1
+    },
+    "32138-0": {
+      "geometry": "catalog/geometry/32138-0.json",
+      "render": "catalog/renders/32138.png",
+      "color": 0
+    },
+    "85544-4": {
+      "geometry": "catalog/geometry/85544-4.json",
+      "render": "catalog/renders/85544.png",
+      "color": 4
+    },
+    "32002-19": {
+      "geometry": "catalog/geometry/32002-19.json",
+      "render": "catalog/renders/32002.png",
+      "color": 19
     }
   }
 }

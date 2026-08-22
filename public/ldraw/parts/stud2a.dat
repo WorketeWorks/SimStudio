@@ -1,0 +1,11 @@
+0 Stud Open without Base Edges
+0 Name: stud2a.dat
+0 Author: James Jessiman
+0 !LICENSE Licensed under CC BY 4.0 : see CAreadme.txt
+0 BFC CERTIFY CCW
+1 16 0 -4 0 4 0 0 0 1 0 0 0 4 4-4edge.dat
+1 16 0 -4 0 6 0 0 0 1 0 0 0 6 4-4edge.dat
+0 BFC INVERTNEXT
+1 16 0 -4 0 4 0 0 0 4 0 0 0 4 4-4cyli.dat
+1 16 0 -4 0 6 0 0 0 4 0 0 0 6 4-4cyli.dat
+1 16 0 -4 0 2 0 0 0 1 0 0 0 2 4-4ring2.dat

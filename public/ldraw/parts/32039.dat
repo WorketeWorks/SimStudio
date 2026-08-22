@@ -1,0 +1,30 @@
+0 Technic Connector (Axle/Bush) Type 1
+0 Name: 32039.dat
+0 Author: Guy Vivan [guyvivan]
+0 !LDRAW_ORG Part UPDATE 2024-08
+0 !LICENSE Licensed under CC BY 2.0 and CC BY 4.0 : see CAreadme.txt
+
+0 BFC CERTIFY CCW
+
+0 !HISTORY 2006-09-16 [guyvivan] CA-Rewrite
+0 !HISTORY 2011-12-29 [PTadmin] Official Update 2011-02
+0 !HISTORY 2021-03-15 [Philo] Subparted for variant
+0 !HISTORY 2024-09-30 [OrionP] Official Update 2024-08
+
+
+1 16 0 0 0 1 0 0 0 1 0 0 0 1 s\32039s01.dat
+
+2 24 7 -3.4443 -11.6849 7 0 -11
+2 24 -7 -3.4443 -11.6849 -7 0 -11
+2 24 6 -2 -13.3978 -6 -2 -13.3978
+2 24 6.0001 0 -12.9998 6 -1.3514 -13.2687
+2 24 -6.0001 0 -12.9998 -6 -1.3514 -13.2687
+2 24 7 -2 -11.3977 6 -2 -13.3977
+2 24 -7 -2 -11.3977 -6 -2 -13.3977
+1 16 0 -2 -10.94885 7 0 0 0 1 0 0 0 0.44885 rect3.dat
+4 16 -7 -2 -11.3977 -6 -2 -13.3978 6 -2 -13.3978 7 -2 -11.3977
+2 24 6 2 -13.3978 -6 2 -13.3978
+2 24 7 2 -11.3977 6 2 -13.3977
+2 24 -7 2 -11.3977 -6 2 -13.3977
+1 16 0 2 -10.94885 -7 0 0 0 -1 0 0 0 0.44885 rect3.dat
+4 16 6 2 -13.3978 -6 2 -13.3978 -7 2 -11.3977 7 2 -11.3977

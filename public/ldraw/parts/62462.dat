@@ -1,0 +1,53 @@
+0 Technic Pin Joiner Round with Slot
+0 Name: 62462.dat
+0 Author: Philippe Hurbain [Philo]
+0 !LDRAW_ORG Part UPDATE 2024-11
+0 !LICENSE Licensed under CC BY 4.0 : see CAreadme.txt
+
+0 BFC CERTIFY CCW
+
+0 !HISTORY 2009-09-03 [PTadmin] Official Update 2009-02
+0 !HISTORY 2021-02-14 [Philo] Increased outer diameter to 10LDU
+0 !HISTORY 2024-12-30 [OrionP] Official Update 2024-11
+
+
+1 16 2 0 0 0 1 0 0 0 -6 6 0 0 4-4edge.dat
+1 16 20 0 0 0 -18 0 10 0 0 0 0 10 4-4cyli.dat
+0 BFC INVERTNEXT
+1 16 18 0 0 0 -16 0 6 0 0 0 0 6 4-4cyli.dat
+1 16 20 0 0 0 -1 0 1 0 0 0 0 1 peghole.dat
+1 16 20 0 0 0 -1 0 2 0 0 0 0 2 4-4ring4.dat
+1 16 20 0 0 0 -1 0 10 0 0 0 0 10 4-4edge.dat
+1 16 2 0 0 0 1 0 0 0 1 1 0 0 2-4ring6.dat
+0 BFC INVERTNEXT
+1 16 -2 0 0 0 4 0 0 0 7 -7 0 0 2-4cylo.dat
+1 16 2 0 0 0 1 0 0 0 -6 6 0 0 2-4ndis.dat
+1 16 2 0 0 0 -1 0 -10 0 0 0 0 10 1-8edge.dat
+1 16 2 0 0 0 1 0 -10 0 0 0 0 10 1-8chrd.dat
+4 16 2 -7.071 7.071 2 0 7 2 0 6 2 -6 6
+4 16 2 -10 0 2 -7.071 7.071 2 -6 6 2 -6 0
+1 16 2 0 0 0 -1 0 -10 0 0 0 0 -10 1-8edge.dat
+1 16 2 0 0 0 1 0 -10 0 0 0 0 -10 1-8chrd.dat
+4 16 2 0 -6 2 0 -7 2 -7.071 -7.071 2 -6 -6
+4 16 2 -6 -6 2 -7.071 -7.071 2 -10 0 2 -6 0
+1 16 -2 0 0 0 -1 0 0 0 -6 6 0 0 4-4edge.dat
+1 16 -20 0 0 0 18 0 10 0 0 0 0 10 4-4cyli.dat
+0 BFC INVERTNEXT
+1 16 -18 0 0 0 16 0 6 0 0 0 0 6 4-4cyli.dat
+1 16 -20 0 0 0 1 0 1 0 0 0 0 1 peghole.dat
+1 16 -20 0 0 0 1 0 2 0 0 0 0 2 4-4ring4.dat
+1 16 -20 0 0 0 1 0 10 0 0 0 0 10 4-4edge.dat
+1 16 -2 0 0 0 -1 0 0 0 1 1 0 0 2-4ring6.dat
+1 16 -2 0 0 0 -1 0 0 0 -6 6 0 0 2-4ndis.dat
+1 16 -2 0 0 0 1 0 -10 0 0 0 0 10 1-8edge.dat
+1 16 -2 0 0 0 -1 0 -10 0 0 0 0 10 1-8chrd.dat
+4 16 -2 0 6 -2 0 7 -2 -7.071 7.071 -2 -6 6
+4 16 -2 -6 6 -2 -7.071 7.071 -2 -10 0 -2 -6 0
+1 16 -2 0 0 0 1 0 -10 0 0 0 0 -10 1-8edge.dat
+1 16 -2 0 0 0 -1 0 -10 0 0 0 0 -10 1-8chrd.dat
+4 16 -2 -7.071 -7.071 -2 0 -7 -2 0 -6 -2 -6 -6
+4 16 -2 -10 0 -2 -7.071 -7.071 -2 -6 -6 -2 -6 0
+1 16 0 -3.5355 -7.0355 -2 0 0 0 0 -3.5355 0 -1 -0.0355 rect3.dat
+1 16 2 0 0 0 -4 0 10 0 0 0 0 -10 3-8cyli.dat
+1 16 0 -3.5355 7.0355 2 0 0 0 0 -3.5355 0 1 0.0355 rect3.dat
+1 16 2 0 0 0 -4 0 10 0 0 0 0 10 3-8cyli.dat
